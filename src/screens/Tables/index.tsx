@@ -20,7 +20,7 @@ import RowEditor from "../../components/RowEditor";
 import ApprovalCard from "../../components/ApprovalCard";
 import { useToast } from "../../components/Toast";
 import { tableKey, tableLabel } from "../../lib/tableRef";
-import { downloadCsv, downloadJson } from "../../lib/export";
+import { downloadCsv, downloadJson, stamp } from "../../lib/export";
 import {
   buildCountQuery,
   buildDelete,
@@ -275,14 +275,20 @@ export default function TableData({
         <button
           className="btn small"
           disabled={!rows}
-          onClick={() => result && downloadCsv(table.name, result.columns, result.rows)}
+          title="Exports the current page"
+          onClick={() =>
+            result && downloadCsv(`${table.name}-page${page + 1}-${stamp()}`, result.columns, result.rows)
+          }
         >
           Export CSV
         </button>
         <button
           className="btn small"
           disabled={!rows}
-          onClick={() => result && downloadJson(table.name, result.columns, result.rows)}
+          title="Exports the current page"
+          onClick={() =>
+            result && downloadJson(`${table.name}-page${page + 1}-${stamp()}`, result.columns, result.rows)
+          }
         >
           Export JSON
         </button>

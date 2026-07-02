@@ -73,7 +73,8 @@ export function AgentFeedProvider({ children }: { children: ReactNode }) {
       const item: AgentActivity = { ...a, id: idRef.current++, ts: new Date().toLocaleTimeString() };
       setFeed((f) => [item, ...f].slice(0, CAP));
       if (item.result) setLatest(item);
-      setUnseen((n) => n + 1);
+      // One agent operation emits a call AND a result — count it once, on completion.
+      if (item.kind === "result") setUnseen((n) => n + 1);
     };
     const p1 = listen<Record<string, unknown>>("agent.tool_call", (e) =>
       push({ kind: "call", tool: String(e.payload.tool ?? "?"), detail: String(e.payload.sql ?? e.payload.connection ?? "") }),

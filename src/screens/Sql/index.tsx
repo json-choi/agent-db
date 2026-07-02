@@ -3,7 +3,7 @@
 // switches to script mode: an up-front confirm panel (list + one checkbox + Execute),
 // then per-statement results stacked below. ⌘↩ runs the current draft. The draft lives
 // in App so it survives switching tabs.
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   ConnectionProfile,
   Engine,
@@ -12,7 +12,7 @@ import type {
   ScriptOutcome,
 } from "../../ipc/types";
 import { errMessage } from "../../ipc/types";
-import { cancelQuery, previewSql, runScript } from "../../ipc/commands";
+import { cancelQuery, classifySql, previewSql, runScript } from "../../ipc/commands";
 import type { PreviewReport } from "../../ipc/types";
 import { splitStatements } from "../../lib/sqlStatements";
 import ApprovalCard from "../../components/ApprovalCard";
@@ -59,10 +59,12 @@ export default function Sql({
   );
   const isScript = targetStatements.length > 1;
 
-  // Single-statement flow.
+  // Single-statement flow. runSeq feeds the gate keys so re-running the identical SQL
+  // remounts a fresh card (otherwise key={sql} keeps the old decided/cancelled state).
   const [prepared, setPrepared] = useState<string | null>(null);
   const [run, setRun] = useState<Run | null>(null);
   const [limit, setLimit] = useState(STEP);
+  const [runSeq, setRunSeq] = useState(0);
 
   // Script flow.
   const [armed, setArmed] = useState<string | null>(null);
@@ -79,6 +81,7 @@ export default function Sql({
     const sql = selectedSql?.trim() || draft;
     if (!sql.trim()) return;
     setTarget(sql);
+    setRunSeq((s) => s + 1);
     if (splitStatements(sql).length > 1) {
       setArmed(sql);
       setScriptOut(null);
@@ -92,12 +95,26 @@ export default function Sql({
     if (!draft.trim() || draftIsScript) return;
     setPlanErr(null);
     try {
+      // Reads only: preview_sql on a write does an execute+rollback (locks, triggers) —
+      // that impact preview belongs to the Run approval card, not a casual Explain.
+      const cls = await classifySql(connection.id, draft);
+      if (cls.kind !== "read") {
+        setPlan(null);
+        setPlanErr("Explain is for read statements — Run shows a write's impact preview instead.");
+        return;
+      }
       setPlan(await previewSql(connection.id, draft));
     } catch (e) {
       setPlanErr(errMessage(e));
       setPlan(null);
     }
   }
+
+  // A plan describes the draft it was generated from — invalidate it on edit.
+  useEffect(() => {
+    setPlan(null);
+    setPlanErr(null);
+  }, [draft]);
 
   return (
     <div className="screen sqlconsole">
@@ -111,7 +128,7 @@ export default function Sql({
         <button
           className="btn"
           disabled={!draft.trim() || draftIsScript}
-          title={draftIsScript ? "Explain works on a single statement" : "Show the query plan (read-only)"}
+          title={draftIsScript ? "Explain works on a single statement" : "Show the query plan (reads only)"}
           onClick={explain}
         >
           Explain
@@ -142,7 +159,7 @@ export default function Sql({
       {/* Single statement — unchanged ApprovalCard flow. */}
       {!isScript && prepared && (
         <ApprovalCard
-          key={prepared}
+          key={`${runSeq}:${prepared}`}
           connectionId={connection.id}
           engine={connection.engine}
           sql={prepared}
@@ -166,13 +183,21 @@ export default function Sql({
       {/* Script — confirm panel first, then stacked per-statement results. */}
       {isScript && armed && !scriptOut && (
         <ScriptApproval
-          key={armed}
+          key={`${runSeq}:${armed}`}
           connection={connection}
           safety={safety}
           statements={targetStatements}
           sql={armed}
           onExecuted={(o) => setScriptOut({ outcome: o, at: new Date().toLocaleTimeString() })}
-          onCancel={() => setArmed(null)}
+          onCancel={() => {
+            // Dismissing the gate returns the console to a neutral state — leaving
+            // `target` as a script would keep any earlier single-statement result
+            // hidden behind the isScript branch forever.
+            setArmed(null);
+            setTarget(null);
+            setPrepared(null);
+            setRun(null);
+          }}
         />
       )}
       {isScript && scriptOut && <ScriptResults outcome={scriptOut.outcome} at={scriptOut.at} />}

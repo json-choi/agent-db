@@ -12,12 +12,15 @@ export default function Settings({
   onClose,
   refreshSafety,
   initialSection,
+  onOpenAgent,
 }: {
   connection: ConnectionProfile | null;
   onClose: () => void;
   // Re-loads the App's per-connection safety so Safety edits apply without reselecting.
   refreshSafety: () => void;
   initialSection?: Section;
+  // Jump from the MCP section to the app-level Agent tab (closes Settings).
+  onOpenAgent: () => void;
 }) {
   const [section, setSection] = useState<Section>(
     initialSection ?? (connection ? "safety" : "mcp"),
@@ -55,7 +58,7 @@ export default function Settings({
       </aside>
 
       <div className="settings-body">
-        {section === "mcp" && <Mcp />}
+        {section === "mcp" && <Mcp onOpenAgent={onOpenAgent} />}
         {section === "safety" &&
           (connection ? (
             <Safety connectionId={connection.id} />

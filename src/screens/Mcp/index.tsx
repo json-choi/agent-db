@@ -22,7 +22,7 @@ interface Result {
   msg: string;
 }
 
-export default function Mcp() {
+export default function Mcp({ onOpenAgent }: { onOpenAgent?: () => void }) {
   const toast = useToast();
   const [status, setStatus] = useState<McpStatus | null>(null);
   const [runtime, setRuntime] = useState<McpRuntimeStatus | null>(null);
@@ -197,7 +197,14 @@ export default function Mcp() {
         </details>
       )}
 
-      <p className="muted">Live agent activity has moved to the Agent tab.</p>
+      <p className="muted">
+        Live agent activity has moved to the Agent tab.{" "}
+        {onOpenAgent && (
+          <button className="btn small" onClick={onOpenAgent}>
+            Open Agent tab
+          </button>
+        )}
+      </p>
     </div>
   );
 }

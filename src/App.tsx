@@ -174,6 +174,11 @@ function Shell() {
           initialSection={settingsSection}
           refreshSafety={refreshSafety}
           onClose={() => setSettingsOpen(false)}
+          onOpenAgent={() => {
+            refreshSafety();
+            setSettingsOpen(false);
+            setTab("agent");
+          }}
         />
       );
     }

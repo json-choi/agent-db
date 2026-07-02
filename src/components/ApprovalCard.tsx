@@ -209,10 +209,11 @@ export default function ApprovalCard({
       ))}
 
       {error && <div className="error">{error}</div>}
+      {/* Additive, not a terminal branch — the action buttons below stay reachable so a
+          cancelled query can simply be run again. */}
+      {cancelled && <div className="muted">Query cancelled.</div>}
 
-      {cancelled ? (
-        <div className="muted">Query cancelled.</div>
-      ) : decided === "approved" ? (
+      {decided === "approved" ? (
         <div className="muted">Executed.</div>
       ) : decided === "rejected" ? (
         <div className="muted">Rejected.</div>
@@ -223,7 +224,7 @@ export default function ApprovalCard({
             Cancel
           </button>
         </div>
-      ) : canAutoRun ? (
+      ) : canAutoRun && !cancelled ? (
         <div className="muted">Read-only — auto-running…</div>
       ) : (
         <div className="approval-actions">

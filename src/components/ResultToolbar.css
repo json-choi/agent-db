@@ -1,5 +1,6 @@
 .result-tools {
   display: inline-flex;
   gap: 6px;
-  margin-left: auto;
+  margin-left: 8px;
+  vertical-align: middle;
 }
