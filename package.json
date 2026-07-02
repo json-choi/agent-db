@@ -1,0 +1,37 @@
+{
+  "name": "agent-db",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "packageManager": "pnpm@10.26.1",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "build:bridge": "cargo build --release -p agent-db-mcp-stdio && mkdir -p src-tauri/binaries && cp target/release/agent-db-mcp-stdio \"src-tauri/binaries/agent-db-mcp-stdio-$(rustc -vV | sed -n 's/^host: //p')\"",
+    "sign:dev": "bash src-tauri/sign-dev.sh",
+    "dev:app": "cargo build --manifest-path src-tauri/Cargo.toml && pnpm sign:dev && ./target/debug/agent-db",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@codemirror/lang-sql": "^6.8.0",
+    "@codemirror/state": "^6.5.2",
+    "@codemirror/view": "^6.36.4",
+    "@tauri-apps/api": "^2.5.0",
+    "@uiw/react-codemirror": "^4.23.10",
+    "codemirror": "^6.0.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.5.0",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.7.3",
+    "vite": "^5.4.14"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  }
+}

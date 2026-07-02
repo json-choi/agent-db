@@ -1,0 +1,92 @@
+/* Collapsible "Tables (N)" / "Views (N)" section headers in the sidebar. */
+.db-section {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  margin-top: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+.db-section:hover {
+  color: var(--text);
+}
+
+/* Per-row "DDL" button — hidden until row hover to keep the tree quiet. */
+.ddl-btn {
+  margin-left: auto;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+}
+.db-table:hover .ddl-btn {
+  opacity: 1;
+}
+.ddl-btn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+/* Environment chip on the connection row (staging/prod only; prod = danger). */
+.env-chip {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--risk-medium);
+  color: var(--risk-medium);
+}
+.env-chip.env-prod {
+  border-color: var(--danger);
+  color: var(--accent-text);
+  background: var(--danger);
+}
+
+/* DDL modal. */
+.ddl-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+.ddl-modal {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  width: min(720px, 90vw);
+  max-height: 80vh;
+  overflow: auto;
+  padding: 16px;
+}
+.ddl-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.ddl-title {
+  font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+}
+.ddl-actions {
+  display: flex;
+  gap: 8px;
+}

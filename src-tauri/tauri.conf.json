@@ -1,0 +1,40 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "agent-db",
+  "version": "0.1.0",
+  "identifier": "capital.launcher.agentdb",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "pnpm build:bridge && pnpm dev",
+    "beforeBuildCommand": "pnpm build:bridge && pnpm build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "agent-db",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 560,
+        "backgroundColor": "#1d1d1f",
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["dmg", "app"],
+    "externalBin": ["binaries/agent-db-mcp-stdio"],
+    "icon": ["icons/icon.png"],
+    "category": "DeveloperTool",
+    "macOS": {
+      "entitlements": "entitlements.plist",
+      "minimumSystemVersion": "12.0"
+    }
+  }
+}

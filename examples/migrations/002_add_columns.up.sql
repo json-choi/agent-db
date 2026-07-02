@@ -1,0 +1,2 @@
+ALTER TABLE books ADD COLUMN isbn TEXT;
+ALTER TABLE books ADD COLUMN published_year INTEGER;

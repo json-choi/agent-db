@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Required for the WKWebView JS engine under hardened runtime; without it a
+         notarized build crashes on launch (clean in dev builds). -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <!-- No App Sandbox: agent-db must fork/exec the user-installed `codex` binary at
+         an arbitrary PATH, which the sandbox forbids. This is a fixed constraint. -->
+</dict>
+</plist>

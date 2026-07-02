@@ -1,0 +1,249 @@
+/* Data grid visuals — owns the grid's look (extends styles.css .grid rules WITHOUT
+   editing that file; table.grid outranks .grid so these win regardless of load order)
+   plus the Data-tab layout: sortable header, filter row, sticky header + rownum column,
+   zebra striping, hover, selected-row tint, toolbar, and the right-side panel. Colors
+   come from the existing token set (var(--panel)/(--panel-2)/(--accent)/…). */
+
+/* border-collapse:separate + border-spacing:0 stops sticky-header borders from
+   vanishing in WebKit; cells keep single borders via bottom+right only. */
+table.grid {
+  border-collapse: separate;
+  border-spacing: 0;
+  background: var(--panel);
+}
+table.grid th,
+table.grid td {
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+}
+table.grid thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  height: 30px;
+  background: var(--panel-2);
+}
+table.grid thead tr.filter-row th {
+  top: 30px;
+  height: auto;
+  padding: 3px 5px;
+}
+/* Top-left corner + sticky rownum column sit above the rest. */
+table.grid thead th.rownum {
+  left: 0;
+  z-index: 3;
+}
+table.grid tbody td.rownum {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--panel-2);
+}
+
+/* Zebra / hover / selected — later rule wins at equal specificity, so order matters. */
+table.grid tbody td {
+  background: var(--panel);
+}
+table.grid tbody tr:nth-child(even) td {
+  background: var(--panel-2);
+}
+table.grid tbody tr:hover td {
+  background: var(--panel-2);
+}
+table.grid tbody tr.selected td {
+  background: var(--panel-2);
+}
+@supports (background: color-mix(in srgb, red, blue)) {
+  table.grid tbody tr:hover td {
+    background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+  }
+  table.grid tbody tr.selected td {
+    background: color-mix(in srgb, var(--accent) 18%, var(--panel));
+  }
+}
+
+/* Always-visible scrollbars: custom WebKit styling opts out of macOS auto-hiding
+   overlay bars, so a wide result is visibly scrollable without touching it first. */
+.grid-scroll::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+.grid-scroll::-webkit-scrollbar-thumb {
+  background: var(--muted);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+.grid-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--text);
+  background-clip: padding-box;
+}
+.grid-scroll::-webkit-scrollbar-track,
+.grid-scroll::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Column resize handle — straddles the header cell's right edge. thead th is sticky
+   (positioned), so the absolute handle anchors to its own column header. */
+.col-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 7px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 4;
+}
+.col-resizer:hover,
+.col-resizer:active {
+  background: var(--accent);
+  opacity: 0.55;
+}
+/* Fixed layout (after a resize): col widths govern; cells clip with ellipsis. */
+table.grid.fixed th,
+table.grid.fixed td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: none;
+}
+
+table.grid th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+table.grid th.sortable:hover {
+  color: var(--accent);
+}
+.sort-arrow {
+  color: var(--accent);
+  font-size: 10px;
+}
+table.grid td.clickable {
+  cursor: pointer;
+}
+.filter-input {
+  width: 100%;
+  min-width: 70px;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 400;
+  padding: 2px 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--text);
+}
+
+/* Data-tab body: grid on the left, contextual panel (viewer/editor/approval) on right. */
+.table-data-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  gap: 10px;
+}
+.table-data-body .grid-scroll {
+  flex: 1;
+  min-width: 0;
+}
+.grid-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.grid-toolbar .tb-sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--border);
+  margin: 0 4px;
+}
+
+.grid-panel {
+  width: 340px;
+  flex-shrink: 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 10px;
+}
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.panel-head-actions {
+  display: flex;
+  gap: 6px;
+}
+.cell-body {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  max-height: 60vh;
+  overflow: auto;
+}
+.cell-body.json {
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+}
+
+/* Row editor */
+.row-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.row-field > label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  margin-bottom: 3px;
+}
+.row-field .type {
+  font-size: 11px;
+}
+.pk-badge {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  padding: 0 3px;
+}
+.row-field-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.row-field-input input[type="text"],
+.row-field-input input[type="number"] {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  padding: 4px 7px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+}
+.null-toggle {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.row-editor-actions {
+  display: flex;
+  gap: 8px;
+}

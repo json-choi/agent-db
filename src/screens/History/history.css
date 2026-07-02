@@ -1,0 +1,84 @@
+.history {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  overflow: auto;
+}
+.history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.history-title {
+  font-weight: 600;
+}
+.history-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.history-table th {
+  text-align: left;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  font-weight: 600;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.history-table th.num,
+.history-table td.num {
+  text-align: right;
+}
+.history-row td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.history-row {
+  cursor: pointer;
+}
+.history-row:hover {
+  background: var(--panel-2);
+}
+.history-table td.nowrap {
+  white-space: nowrap;
+}
+.history-sql {
+  width: 100%;
+  max-width: 0; /* let the cell shrink so ellipsis kicks in */
+}
+.history-sql code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+}
+.history-note {
+  font-size: 12px;
+}
+
+/* Origin + status badges (reuse the shared .badge base from styles.css). */
+.badge.origin {
+  color: var(--muted);
+}
+.badge.origin-agent {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.badge.origin-migration {
+  color: var(--risk-medium);
+  border-color: var(--risk-medium);
+}
+.badge.status-ok {
+  color: var(--risk-low);
+  border-color: var(--risk-low);
+}
+.badge.status-error,
+.badge.status-blocked {
+  color: var(--danger);
+  border-color: var(--danger);
+}
