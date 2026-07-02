@@ -14,10 +14,8 @@ import {
 } from "../../ipc/commands";
 import type { PlatformInfo } from "../../ipc/types";
 import { errMessage } from "../../ipc/types";
-import AgentResultView from "../../components/AgentResultView";
 import ConfirmButton from "../../components/ConfirmButton";
 import { useToast } from "../../components/Toast";
-import { useAgentFeed } from "../../lib/agentFeed";
 
 interface Result {
   ok: boolean;
@@ -26,7 +24,6 @@ interface Result {
 
 export default function Mcp() {
   const toast = useToast();
-  const { unseen, markSeen } = useAgentFeed();
   const [status, setStatus] = useState<McpStatus | null>(null);
   const [runtime, setRuntime] = useState<McpRuntimeStatus | null>(null);
   const [statusErr, setStatusErr] = useState<string | null>(null);
@@ -55,12 +52,6 @@ export default function Mcp() {
     iv = setInterval(poll, 2000);
     return () => clearInterval(iv);
   }, []);
-
-  // Clear the badge count while this screen is viewed (mount + each new event). Keyed on
-  // `unseen` (not feed.length, which pins at the 200-event cap and would then stop firing).
-  useEffect(() => {
-    if (unseen > 0) markSeen();
-  }, [unseen, markSeen]);
 
   async function connect(id: string) {
     setConnecting(id);
@@ -206,7 +197,7 @@ export default function Mcp() {
         </details>
       )}
 
-      <AgentResultView />
+      <p className="muted">Live agent activity has moved to the Agent tab.</p>
     </div>
   );
 }

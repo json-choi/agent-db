@@ -80,8 +80,15 @@ export function runSql(
   id: string,
   sql: string,
   approved: boolean,
+  queryId?: string,
 ): Promise<ExecOutcome> {
-  return invoke("run_sql", { id, sql, approved });
+  return invoke("run_sql", { id, sql, approved, queryId: queryId ?? null });
+}
+
+// Cancel an in-flight run_sql/run_script by its query id. Returns true if a running
+// query was found and signalled.
+export function cancelQuery(queryId: string): Promise<boolean> {
+  return invoke("cancel_query", { queryId });
 }
 
 // Run a multi-statement script. All-reads run sequentially on the read-only pool;

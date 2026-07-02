@@ -35,7 +35,7 @@ export default function SqlViewer({
   value: string;
   editable?: boolean;
   onChange?: (v: string) => void;
-  onRun?: () => void;
+  onRun?: (selectedSql?: string) => void;
   catalog?: Catalog;
   minHeight?: string;
 }) {
@@ -59,7 +59,16 @@ export default function SqlViewer({
     if (onRun) {
       ext.push(
         keymap.of([
-          { key: "Mod-Enter", run: () => (onRun(), true) },
+          {
+            key: "Mod-Enter",
+            run: (view) => {
+              // Run just the selection when there is one; otherwise the whole draft.
+              const sel = view.state.selection.main;
+              const picked = sel.empty ? undefined : view.state.sliceDoc(sel.from, sel.to);
+              onRun(picked);
+              return true;
+            },
+          },
         ]),
       );
     }

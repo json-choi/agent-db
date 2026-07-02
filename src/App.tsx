@@ -11,16 +11,17 @@ import Audit from "./screens/Audit";
 import Migrations from "./screens/Migrations";
 import Onboarding from "./screens/Onboarding";
 import Settings from "./screens/Settings";
-import AgentBadge from "./components/AgentBadge";
 import AgentResultView from "./components/AgentResultView";
-import { ToastProvider } from "./components/Toast";
+import { ToastProvider, useToast } from "./components/Toast";
 import { AgentFeedProvider, useAgentFeed } from "./lib/agentFeed";
 
-// Tabs are data views only. Migrations lives in the sidebar; Settings behind ⚙.
-type Tab = "data" | "sql" | "history" | "audit";
+// App-level tabs. Agent is a live feed/result surface, connection-independent; the rest
+// are per-connection data views. Migrations lives in the sidebar; Settings behind ⚙.
+type Tab = "data" | "sql" | "agent" | "history" | "audit";
 const TABS: { id: Tab; label: string }[] = [
   { id: "data", label: "Data" },
   { id: "sql", label: "SQL" },
+  { id: "agent", label: "Agent" },
   { id: "history", label: "History" },
   { id: "audit", label: "Audit" },
 ];
@@ -42,31 +43,9 @@ const SIDEBAR_MIN = 180;
 const SIDEBAR_MAX = 520;
 const SIDEBAR_DEFAULT = 240;
 
-// Top-level Agent surface: the live result grid + feed, full-size in the main area.
-// Esc closes (mirrors the Migrations overlay). Connection-independent.
-function AgentView({ onClose }: { onClose: () => void }) {
-  useEffect(() => {
-    const h = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", h);
-    return () => window.removeEventListener("keydown", h);
-  }, [onClose]);
-  return (
-    <div className="screen agent-view">
-      <div className="mig-top">
-        <strong>Agent activity</strong>
-        <button className="btn small" onClick={onClose} title="Close (Esc)">
-          Close
-        </button>
-      </div>
-      <AgentResultView />
-    </div>
-  );
-}
-
 function Shell() {
   const { unseen, latest, markSeen } = useAgentFeed();
+  const toast = useToast();
   const [conns, setConns] = useState<ConnectionProfile[]>([]);
   // Resizable sidebar: drag the divider, double-click resets; width persists.
   const [sidebarW, setSidebarW] = useState(() => {
@@ -98,7 +77,6 @@ function Shell() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<"mcp" | "safety" | undefined>(undefined);
   const [migrationsOpen, setMigrationsOpen] = useState(false);
-  const [agentViewOpen, setAgentViewOpen] = useState(false);
 
   const selected = conns.find((c) => c.id === selectedId) ?? null;
 
@@ -119,12 +97,12 @@ function Shell() {
     void refresh();
   }, []);
 
-  // Auto-surface a NEW agent result the moment it arrives, so the user sees it without
-  // digging. Skip whatever exists at mount (baseline) so it doesn't pop open on load, and
-  // guard on result id so closing the view doesn't re-open it for the same result — only
-  // the next, differently-ided result opens it again.
+  // Nudge (not hijack) when a new result lands while the user is off the Agent tab. Skip
+  // the mount baseline so it doesn't fire on load; guard on result id so it fires once per
+  // result; throttle to one toast per 30s so a burst of agent queries yields a single nudge.
   const seenResultId = useRef<number | null>(null);
   const surfaceInit = useRef(true);
+  const lastToastAt = useRef(0);
   useEffect(() => {
     if (surfaceInit.current) {
       surfaceInit.current = false;
@@ -133,17 +111,18 @@ function Shell() {
     }
     if (latest && latest.id !== seenResultId.current) {
       seenResultId.current = latest.id;
-      setAgentViewOpen(true);
-      setSettingsOpen(false);
-      setMigrationsOpen(false);
-      setEditing(null);
+      const now = Date.now();
+      if (tab !== "agent" && now - lastToastAt.current > 30000) {
+        lastToastAt.current = now;
+        toast("Agent ran a query — open the Agent tab");
+      }
     }
-  }, [latest]);
+  }, [latest, tab, toast]);
 
-  // Clear the badge count while the agent view is open (on open, and as new events land).
+  // Clear the unseen count when the Agent tab is shown (on switch, and as new events land).
   useEffect(() => {
-    if (agentViewOpen && unseen > 0) markSeen();
-  }, [agentViewOpen, unseen, markSeen]);
+    if (tab === "agent" && unseen > 0) markSeen();
+  }, [tab, unseen, markSeen]);
 
   // Per-connection safety drives the Data/SQL views (max rows, auto-run reads).
   // safetyReqId guards against out-of-order resolution: getSafety runs on a pooled
@@ -184,25 +163,10 @@ function Shell() {
     setSettingsSection("mcp");
     setSettingsOpen(true);
     setMigrationsOpen(false);
-    setAgentViewOpen(false);
-    setEditing(null);
-  }
-
-  function openAgentView() {
-    setAgentViewOpen(true);
-    setSettingsOpen(false);
-    setMigrationsOpen(false);
     setEditing(null);
   }
 
   function renderMain() {
-    if (agentViewOpen) {
-      return (
-        <div className="main-view">
-          <AgentView onClose={() => setAgentViewOpen(false)} />
-        </div>
-      );
-    }
     if (settingsOpen) {
       return (
         <Settings
@@ -263,12 +227,6 @@ function Shell() {
         />
       );
     }
-    if (!selected) {
-      return (
-        <div className="placeholder muted">Select a connection from the sidebar.</div>
-      );
-    }
-
     const safetyFallback = safetyError ? (
       <div className="error">
         Failed to load safety settings: {safetyError}{" "}
@@ -280,50 +238,62 @@ function Shell() {
       <div className="muted">Loading…</div>
     );
 
+    // Data/SQL/History/Audit need a connection; Agent is connection-independent and always
+    // renders its live feed. With no connection selected, the tab bar still shows so Agent
+    // stays reachable — the data tabs fall back to a "pick a connection" placeholder.
+    const needsConn = (
+      <div className="placeholder muted">Select a connection from the sidebar.</div>
+    );
+
     return (
       <>
-        <header className="main-head">
-          <div>
-            <strong>{selected.name || "(unnamed)"}</strong>
-            <span className="muted">
-              {" "}
-              {selected.engine} · {selected.database}
-              {safety && (safety.allowWrites ? " · writes allowed" : " · read-only")}
-            </span>
-          </div>
-          <button className="btn small" onClick={() => setEditing(selected)}>
-            Edit
-          </button>
-        </header>
+        {selected && (
+          <header className="main-head">
+            <div>
+              <strong>{selected.name || "(unnamed)"}</strong>
+              <span className="muted">
+                {" "}
+                {selected.engine} · {selected.database}
+                {safety && (safety.allowWrites ? " · writes allowed" : " · read-only")}
+              </span>
+            </div>
+            <button className="btn small" onClick={() => setEditing(selected)}>
+              Edit
+            </button>
+          </header>
+        )}
 
         <nav className="tabs">
           {TABS.map((t) => (
             <button
               key={t.id}
               className={t.id === tab ? "tab active" : "tab"}
-              onClick={() => {
-                setTab(t.id);
-                setAgentViewOpen(false);
-              }}
+              onClick={() => setTab(t.id)}
             >
               {t.label}
+              {t.id === "agent" && unseen > 0 && <span className="tab-dot">{unseen}</span>}
             </button>
           ))}
         </nav>
 
         <section className="tab-body">
+          {tab === "agent" && <AgentResultView onOpenMcpSettings={openMcpSettings} />}
           {tab === "data" &&
-            (!safety ? (
+            (!selected ? (
+              needsConn
+            ) : !safety ? (
               safetyFallback
             ) : selectedTable ? (
               <TableData connection={selected} table={selectedTable} safety={safety} />
             ) : (
               <div className="placeholder muted">
-                Select a table from the sidebar to view its rows.
+                Select a table from the sidebar, or open the SQL tab to run a query.
               </div>
             ))}
           {tab === "sql" &&
-            (safety ? (
+            (!selected ? (
+              needsConn
+            ) : safety ? (
               <Sql
                 connection={selected}
                 safety={safety}
@@ -333,8 +303,10 @@ function Shell() {
             ) : (
               safetyFallback
             ))}
-          {tab === "history" && <History connection={selected} onLoadSql={loadSql} />}
-          {tab === "audit" && <Audit connectionId={selected.id} />}
+          {tab === "history" &&
+            (selected ? <History connection={selected} onLoadSql={loadSql} /> : needsConn)}
+          {tab === "audit" &&
+            (selected ? <Audit connectionId={selected.id} /> : needsConn)}
         </section>
       </>
     );
@@ -342,7 +314,6 @@ function Shell() {
 
   return (
     <div className="app" style={{ gridTemplateColumns: `${sidebarW}px 5px 1fr` }}>
-      <AgentBadge count={unseen} onClick={openAgentView} />
       <DatabaseExplorer
         connections={conns}
         selectedId={selectedId}
@@ -354,7 +325,6 @@ function Shell() {
           setEditing(null);
           setSettingsOpen(false);
           setMigrationsOpen(false);
-          setAgentViewOpen(false);
           setTab("data");
         }}
         onOpenTable={(conn, t) => {
@@ -363,7 +333,6 @@ function Shell() {
           setEditing(null);
           setSettingsOpen(false);
           setMigrationsOpen(false);
-          setAgentViewOpen(false);
           setTab("data");
         }}
         onOpenMigrations={(conn) => {
@@ -372,19 +341,16 @@ function Shell() {
           setEditing(null);
           setSettingsOpen(false);
           setMigrationsOpen(true);
-          setAgentViewOpen(false);
         }}
         onNew={() => {
           setEditing("new");
           setSettingsOpen(false);
           setMigrationsOpen(false);
-          setAgentViewOpen(false);
         }}
         onOpenSettings={() => {
           setSettingsSection(undefined);
           setSettingsOpen(true);
           setMigrationsOpen(false);
-          setAgentViewOpen(false);
         }}
       />
       <div

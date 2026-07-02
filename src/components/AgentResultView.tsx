@@ -1,11 +1,13 @@
-// The live agent result grid + activity feed, extracted from the Mcp screen so it can
-// render both there and in the top-level Agent surface. Auto-shows the newest result as
-// it streams in; clicking a feed row overrides the shown result until the next arrives.
+// The live agent result grid + activity feed, rendered in the app-level Agent tab.
+// Auto-shows the newest result as it streams in; clicking a feed row overrides the shown
+// result until the next arrives.
 import { useEffect, useState, type KeyboardEvent } from "react";
 import DataGrid from "./DataGrid";
+import ResultToolbar from "./ResultToolbar";
+import { stamp } from "../lib/export";
 import { useAgentFeed, type AgentActivity } from "../lib/agentFeed";
 
-export default function AgentResultView() {
+export default function AgentResultView({ onOpenMcpSettings }: { onOpenMcpSettings?: () => void }) {
   const { feed, latest } = useAgentFeed();
   const [selected, setSelected] = useState<AgentActivity | null>(latest);
 
@@ -25,6 +27,11 @@ export default function AgentResultView() {
               {selected.connection ? `${selected.connection} · ` : ""}
               {selected.result.rowCount} rows{selected.result.truncated ? " (truncated)" : ""} · {selected.ts}
             </span>
+            <ResultToolbar
+              columns={selected.result.columns}
+              rows={selected.result.rows}
+              filenameBase={`agent-${stamp()}`}
+            />
           </div>
           <DataGrid result={selected.result} />
         </div>
@@ -37,7 +44,17 @@ export default function AgentResultView() {
 
       <h3>Activity</h3>
       {feed.length === 0 ? (
-        <div className="muted">No agent calls yet.</div>
+        <div className="muted">
+          No agent calls yet. Connect an AI agent over MCP to see its queries here live.
+          {onOpenMcpSettings && (
+            <>
+              {" "}
+              <button className="btn small" onClick={onOpenMcpSettings}>
+                MCP settings
+              </button>
+            </>
+          )}
+        </div>
       ) : (
         <ul className="mcp-feed">
           {feed.map((a) => (

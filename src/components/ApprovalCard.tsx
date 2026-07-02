@@ -5,8 +5,9 @@
 //     and Approve is disabled unless the connection allows writes.
 // Nothing here is trusted for safety — the Rust core re-enforces every gate (L2).
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
+  cancelQuery,
   classifySql,
   previewSql,
   runSql,
@@ -54,6 +55,12 @@ export default function ApprovalCard({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [decided, setDecided] = useState<null | "approved" | "rejected">(null);
+  const [cancelled, setCancelled] = useState(false);
+  // The in-flight query id, so Cancel can signal it. Held in a ref (not state) since
+  // execute() reads it synchronously and it never needs to re-render. `cancelledRef`
+  // mirrors the flag so execute()'s catch sees it without a stale closure.
+  const queryId = useRef<string | null>(null);
+  const cancelledRef = useRef(false);
 
   // L1 + L3 whenever the statement changes.
   useEffect(() => {
@@ -62,6 +69,7 @@ export default function ApprovalCard({
     setPreview(null);
     setError(null);
     setDecided(null);
+    setCancelled(false);
     if (!sql.trim()) return;
     (async () => {
       try {
@@ -88,16 +96,30 @@ export default function ApprovalCard({
   const canAutoRun = isRead && safety.autoRunReads && !!cls;
 
   async function execute(approved: boolean) {
+    const id = crypto.randomUUID();
+    queryId.current = id;
+    cancelledRef.current = false;
     setBusy(true);
     setError(null);
+    setCancelled(false);
     try {
-      const outcome = await runSql(connectionId, sql, approved);
+      const outcome = await runSql(connectionId, sql, approved, id);
       setDecided("approved");
       onExecuted(outcome);
     } catch (e) {
-      setError(errMessage(e));
+      // A cancelled query fails on the backend — show it as a benign note, not an error.
+      if (cancelledRef.current) setCancelled(true);
+      else setError(errMessage(e));
     } finally {
+      queryId.current = null;
       setBusy(false);
+    }
+  }
+
+  function cancel() {
+    if (queryId.current) {
+      cancelledRef.current = true;
+      void cancelQuery(queryId.current);
     }
   }
 
@@ -188,10 +210,19 @@ export default function ApprovalCard({
 
       {error && <div className="error">{error}</div>}
 
-      {decided === "approved" ? (
+      {cancelled ? (
+        <div className="muted">Query cancelled.</div>
+      ) : decided === "approved" ? (
         <div className="muted">Executed.</div>
       ) : decided === "rejected" ? (
         <div className="muted">Rejected.</div>
+      ) : busy ? (
+        <div className="approval-actions">
+          <span className="muted">{canAutoRun ? "Read-only — running…" : "Running…"}</span>
+          <button className="btn" onClick={cancel}>
+            Cancel
+          </button>
+        </div>
       ) : canAutoRun ? (
         <div className="muted">Read-only — auto-running…</div>
       ) : (

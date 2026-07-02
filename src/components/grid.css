@@ -63,6 +63,12 @@ table.grid tbody tr.selected td {
   }
 }
 
+/* Selected cell (click to select, ⌘C to copy). Inset box-shadow draws an accent
+   outline without shifting layout or fighting the cell's own borders. */
+table.grid tbody td.cell-sel {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
 /* Always-visible scrollbars: custom WebKit styling opts out of macOS auto-hiding
    overlay bars, so a wide result is visibly scrollable without touching it first. */
 .grid-scroll::-webkit-scrollbar {

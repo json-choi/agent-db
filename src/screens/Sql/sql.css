@@ -46,6 +46,32 @@
   margin-right: auto;
 }
 
+/* EXPLAIN plan card (read-only preview above the results). */
+.explain-plan {
+  margin: 10px 0;
+  padding: 10px 12px;
+}
+.explain-plan summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.explain-plan .plan-close {
+  margin-left: auto;
+}
+.explain-plan pre {
+  margin: 8px 0 0;
+  padding: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  overflow-x: auto;
+  white-space: pre;
+}
+
 /* Stacked per-statement results. */
 .script-results .stmt-result {
   margin-top: 14px;

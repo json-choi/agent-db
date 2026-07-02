@@ -3,7 +3,7 @@
 // switches to script mode: an up-front confirm panel (list + one checkbox + Execute),
 // then per-statement results stacked below. ⌘↩ runs the current draft. The draft lives
 // in App so it survives switching tabs.
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type {
   ConnectionProfile,
   Engine,
@@ -12,11 +12,14 @@ import type {
   ScriptOutcome,
 } from "../../ipc/types";
 import { errMessage } from "../../ipc/types";
-import { runScript } from "../../ipc/commands";
+import { cancelQuery, previewSql, runScript } from "../../ipc/commands";
+import type { PreviewReport } from "../../ipc/types";
 import { splitStatements } from "../../lib/sqlStatements";
 import ApprovalCard from "../../components/ApprovalCard";
 import SqlViewer from "../../components/SqlViewer";
 import DataGrid from "../../components/DataGrid";
+import ResultToolbar from "../../components/ResultToolbar";
+import { stamp } from "../../lib/export";
 import "./sql.css";
 
 const STEP = 200;
@@ -44,8 +47,17 @@ export default function Sql({
   draft: string;
   setDraft: (s: string) => void;
 }) {
-  const statements = useMemo(() => splitStatements(draft), [draft]);
-  const isScript = statements.length > 1;
+  const draftStatements = useMemo(() => splitStatements(draft), [draft]);
+  const draftIsScript = draftStatements.length > 1;
+
+  // The armed target drives which gate renders. ⌘↩ with a selection runs just the
+  // selection, so the single/script decision is made from the target, not the draft.
+  const [target, setTarget] = useState<string | null>(null);
+  const targetStatements = useMemo(
+    () => (target ? splitStatements(target) : []),
+    [target],
+  );
+  const isScript = targetStatements.length > 1;
 
   // Single-statement flow.
   const [prepared, setPrepared] = useState<string | null>(null);
@@ -56,16 +68,34 @@ export default function Sql({
   const [armed, setArmed] = useState<string | null>(null);
   const [scriptOut, setScriptOut] = useState<{ outcome: ScriptOutcome; at: string } | null>(null);
 
+  // EXPLAIN plan (read-only preview) shown above the results, independent of execution.
+  const [plan, setPlan] = useState<PreviewReport | null>(null);
+  const [planErr, setPlanErr] = useState<string | null>(null);
+
   // ⌘↩ and the Run button both just ARM the run — the gate (ApprovalCard for a single
-  // statement, the confirm panel for a script) is never bypassed.
-  function armRun() {
-    if (!draft.trim()) return;
-    if (isScript) {
-      setArmed(draft);
+  // statement, the confirm panel for a script) is never bypassed. A ⌘↩ selection runs
+  // alone; the Run button always runs the whole draft.
+  function armRun(selectedSql?: string) {
+    const sql = selectedSql?.trim() || draft;
+    if (!sql.trim()) return;
+    setTarget(sql);
+    if (splitStatements(sql).length > 1) {
+      setArmed(sql);
       setScriptOut(null);
     } else {
-      setPrepared(draft);
+      setPrepared(sql);
       setRun(null);
+    }
+  }
+
+  async function explain() {
+    if (!draft.trim() || draftIsScript) return;
+    setPlanErr(null);
+    try {
+      setPlan(await previewSql(connection.id, draft));
+    } catch (e) {
+      setPlanErr(errMessage(e));
+      setPlan(null);
     }
   }
 
@@ -75,12 +105,39 @@ export default function Sql({
         <SqlViewer value={draft} editable onChange={setDraft} onRun={armRun} minHeight="140px" />
       </div>
       <div className="form-actions sql-actions">
-        <button className="btn primary" disabled={!draft.trim()} onClick={armRun}>
+        <button className="btn primary" disabled={!draft.trim()} onClick={() => armRun()}>
           Run
         </button>
-        {isScript && <span className="badge script-count">{statements.length} statements</span>}
-        <span className="muted run-hint">⌘↩ to run</span>
+        <button
+          className="btn"
+          disabled={!draft.trim() || draftIsScript}
+          title={draftIsScript ? "Explain works on a single statement" : "Show the query plan (read-only)"}
+          onClick={explain}
+        >
+          Explain
+        </button>
+        {draftIsScript && (
+          <span className="badge script-count">{draftStatements.length} statements</span>
+        )}
+        <span className="muted run-hint">⌘↩ to run (selection runs alone)</span>
       </div>
+
+      {planErr && <div className="error">{planErr}</div>}
+      {plan && (
+        <details open className="card explain-plan">
+          <summary>
+            Query plan
+            <button className="btn small plan-close" onClick={() => setPlan(null)} title="Close">
+              ×
+            </button>
+          </summary>
+          {plan.plan ? (
+            <pre>{plan.plan}</pre>
+          ) : (
+            <div className="muted">No plan available ({plan.mode}).</div>
+          )}
+        </details>
+      )}
 
       {/* Single statement — unchanged ApprovalCard flow. */}
       {!isScript && prepared && (
@@ -97,7 +154,14 @@ export default function Sql({
           onReject={() => setPrepared(null)}
         />
       )}
-      {!isScript && run && <Outcome run={run} limit={limit} onMore={() => setLimit((l) => l + STEP)} />}
+      {!isScript && run && (
+        <Outcome
+          run={run}
+          limit={limit}
+          maxRows={safety.maxRows}
+          onMore={() => setLimit((l) => l + STEP)}
+        />
+      )}
 
       {/* Script — confirm panel first, then stacked per-statement results. */}
       {isScript && armed && !scriptOut && (
@@ -105,7 +169,7 @@ export default function Sql({
           key={armed}
           connection={connection}
           safety={safety}
-          statements={statements}
+          statements={targetStatements}
           sql={armed}
           onExecuted={(o) => setScriptOut({ outcome: o, at: new Date().toLocaleTimeString() })}
           onCancel={() => setArmed(null)}
@@ -137,16 +201,32 @@ function ScriptApproval({
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [cancelled, setCancelled] = useState(false);
+  const queryId = useRef<string | null>(null);
+  const cancelledRef = useRef(false);
 
   async function execute() {
+    const id = crypto.randomUUID();
+    queryId.current = id;
+    cancelledRef.current = false;
     setBusy(true);
     setError(null);
+    setCancelled(false);
     try {
-      onExecuted(await runScript(connection.id, sql, true));
+      onExecuted(await runScript(connection.id, sql, true, id));
     } catch (e) {
-      setError(errMessage(e));
+      if (cancelledRef.current) setCancelled(true);
+      else setError(errMessage(e));
     } finally {
+      queryId.current = null;
       setBusy(false);
+    }
+  }
+
+  function cancel() {
+    if (queryId.current) {
+      cancelledRef.current = true;
+      void cancelQuery(queryId.current);
     }
   }
 
@@ -175,6 +255,7 @@ function ScriptApproval({
         </div>
       )}
       {error && <div className="error">{error}</div>}
+      {cancelled && <div className="muted">Query cancelled.</div>}
       <div className="approval-actions">
         <label className="script-confirm">
           <input
@@ -187,9 +268,15 @@ function ScriptApproval({
         <button className="btn primary" disabled={busy || !confirmed} onClick={execute}>
           Execute script
         </button>
-        <button className="btn" disabled={busy} onClick={onCancel}>
-          Cancel
-        </button>
+        {busy ? (
+          <button className="btn" onClick={cancel}>
+            Cancel query
+          </button>
+        ) : (
+          <button className="btn" onClick={onCancel}>
+            Cancel
+          </button>
+        )}
       </div>
     </div>
   );
@@ -219,6 +306,12 @@ function ScriptResults({ outcome, at }: { outcome: ScriptOutcome; at: string }) 
               <div className="muted stmt-rowmeta">
                 {s.result.rowCount} rows{s.result.truncated && " (truncated)"} ·{" "}
                 {s.result.durationMs} ms
+                {" · "}
+                <ResultToolbar
+                  columns={s.result.columns}
+                  rows={s.result.rows}
+                  filenameBase={`script-stmt${i + 1}-${stamp()}`}
+                />
               </div>
               <DataGrid result={s.result} />
             </>
@@ -231,7 +324,17 @@ function ScriptResults({ outcome, at }: { outcome: ScriptOutcome; at: string }) 
   );
 }
 
-function Outcome({ run, limit, onMore }: { run: Run; limit: number; onMore: () => void }) {
+function Outcome({
+  run,
+  limit,
+  maxRows,
+  onMore,
+}: {
+  run: Run;
+  limit: number;
+  maxRows: number;
+  onMore: () => void;
+}) {
   const { outcome, sql, at } = run;
   const r = outcome.result;
 
@@ -242,7 +345,15 @@ function Outcome({ run, limit, onMore }: { run: Run; limit: number; onMore: () =
         {r ? (
           <>
             {" · "}
-            {r.rowCount} rows{r.truncated && " (truncated)"} · {r.durationMs} ms · {at}
+            {r.rowCount} rows
+            {r.truncated && ` — capped at ${maxRows} rows — add LIMIT to see more`} ·{" "}
+            {r.durationMs} ms · {at}
+            {" · "}
+            <ResultToolbar
+              columns={r.columns}
+              rows={r.rows}
+              filenameBase={`query-${stamp()}`}
+            />
           </>
         ) : (
           <>

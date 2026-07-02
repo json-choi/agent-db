@@ -23,6 +23,8 @@
   --r-sm: 6px;
   --r-md: 10px;
   --r-full: 999px;
+  /* Content-pane padding, shared by the tab body / settings body / main view / editor. */
+  --pane-pad: 20px;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue",
     Arial, sans-serif;
   font-size: 14px;
@@ -177,22 +179,34 @@ h3 {
   background: transparent;
   color: var(--muted);
   padding: 7px 14px;
-  border-radius: var(--r-sm) var(--r-sm) 0 0;
   cursor: pointer;
   font-size: 13px;
+  /* Reserve the active underline's space so switching tabs doesn't shift the row. */
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.tab:hover {
+  color: var(--text);
 }
 .tab.active {
   color: var(--text);
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-bottom-color: var(--panel);
-  margin-bottom: -1px;
+  border-bottom-color: var(--accent);
+}
+/* Unseen-count pill next to the Agent tab label. */
+.tab-dot {
+  font-size: 10px;
+  font-weight: 600;
+  background: var(--accent);
+  color: var(--accent-text);
+  border-radius: 8px;
+  padding: 0 5px;
+  margin-left: 6px;
 }
 .tab-body {
   flex: 1;
   min-height: 0; /* allow inner panes to scroll within the flex column */
   overflow: auto;
-  padding: 16px;
+  padding: var(--pane-pad);
 }
 /* Screens are full-width by default so results/tables grids use the whole pane.
    Reading-oriented screens cap their own width below. */
@@ -683,7 +697,7 @@ h3 {
 .act-detail { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 12px; }
 
 /* Connection editor pane — was flush against the edges; give it breathing room. */
-.editor-pane { padding: 24px; overflow: auto; height: 100%; }
+.editor-pane { padding: var(--pane-pad); overflow: auto; height: 100%; }
 
 /* Sidebar footer (Settings entry) */
 .sidebar-foot { border-top: 1px solid var(--border); padding: 6px; }
@@ -730,7 +744,7 @@ h3 {
 .snav:hover:not(:disabled) { background: var(--hover); }
 .snav.active { background: var(--accent); color: var(--accent-text); }
 .snav:disabled { opacity: 0.5; cursor: default; }
-.settings-body { overflow: auto; padding: 20px; min-width: 0; }
+.settings-body { overflow: auto; padding: var(--pane-pad); min-width: 0; }
 
 /* Table data pager + wide-cell handling */
 .table-data-head .table-pager {
@@ -801,7 +815,7 @@ h3 {
 .db-nav.active .db-nav-ico { color: rgba(255, 255, 255, 0.85); }
 
 /* Full-area main view (Migrations when opened from the sidebar) */
-.main-view { flex: 1; min-height: 0; overflow: auto; padding: 16px; }
+.main-view { flex: 1; min-height: 0; overflow: auto; padding: var(--pane-pad); }
 
 /* One-click connect platforms */
 .mcp-platforms { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }

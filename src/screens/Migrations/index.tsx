@@ -142,10 +142,10 @@ export default function Migrations({
     const p = listen("migrations.changed", () => {
       window.clearTimeout(t);
       t = window.setTimeout(() => void analyze(dirRef.current), 400);
-    });
+    }).catch((e) => console.error("migrations watch listen failed:", e));
     return () => {
       window.clearTimeout(t);
-      void p.then((u) => u());
+      void p.then((u) => u && u());
     };
   }, [analyze]);
 

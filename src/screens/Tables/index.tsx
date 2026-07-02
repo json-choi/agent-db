@@ -20,14 +20,13 @@ import RowEditor from "../../components/RowEditor";
 import ApprovalCard from "../../components/ApprovalCard";
 import { useToast } from "../../components/Toast";
 import { tableKey, tableLabel } from "../../lib/tableRef";
+import { downloadCsv, downloadJson } from "../../lib/export";
 import {
   buildCountQuery,
   buildDelete,
   buildPageQuery,
   cellToInput,
   pkColumns,
-  toCsv,
-  toJson,
   type GridSort,
 } from "../../lib/sqlBuild";
 
@@ -35,15 +34,6 @@ const PAGE = 100;
 
 type Editor = { mode: "insert" | "edit" | "duplicate"; initial: Record<string, string | null> };
 type CellSel = { value: unknown; column: string };
-
-function download(name: string, text: string, mime: string) {
-  const url = URL.createObjectURL(new Blob([text], { type: mime }));
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = name;
-  a.click();
-  URL.revokeObjectURL(url);
-}
 
 export default function TableData({
   connection,
@@ -285,19 +275,14 @@ export default function TableData({
         <button
           className="btn small"
           disabled={!rows}
-          onClick={() =>
-            result && download(`${table.name}.csv`, toCsv(result.columns, result.rows), "text/csv")
-          }
+          onClick={() => result && downloadCsv(table.name, result.columns, result.rows)}
         >
           Export CSV
         </button>
         <button
           className="btn small"
           disabled={!rows}
-          onClick={() =>
-            result &&
-            download(`${table.name}.json`, toJson(result.columns, result.rows), "application/json")
-          }
+          onClick={() => result && downloadJson(table.name, result.columns, result.rows)}
         >
           Export JSON
         </button>

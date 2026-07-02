@@ -77,7 +77,7 @@ export function AgentFeedProvider({ children }: { children: ReactNode }) {
     };
     const p1 = listen<Record<string, unknown>>("agent.tool_call", (e) =>
       push({ kind: "call", tool: String(e.payload.tool ?? "?"), detail: String(e.payload.sql ?? e.payload.connection ?? "") }),
-    );
+    ).catch((e) => console.error("agent feed listen failed:", e));
     const p2 = listen<Record<string, unknown>>("agent.result", (e) =>
       push({
         kind: "result",
@@ -88,10 +88,11 @@ export function AgentFeedProvider({ children }: { children: ReactNode }) {
         sql: typeof e.payload.sql === "string" ? e.payload.sql : undefined,
         connection: typeof e.payload.connection === "string" ? e.payload.connection : undefined,
       }),
-    );
+    ).catch((e) => console.error("agent feed listen failed:", e));
     return () => {
-      void p1.then((u) => u());
-      void p2.then((u) => u());
+      // .catch above widens these to UnlistenFn | void, so guard before calling.
+      void p1.then((u) => u && u());
+      void p2.then((u) => u && u());
     };
   }, []);
 
