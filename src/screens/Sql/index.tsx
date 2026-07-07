@@ -3,8 +3,9 @@
 // switches to script mode: an up-front confirm panel (list + one checkbox + Execute),
 // then per-statement results stacked below. ⌘↩ runs the current draft. The draft lives
 // in App so it survives switching tabs.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type {
+  Catalog,
   ConnectionProfile,
   Engine,
   ExecOutcome,
@@ -12,11 +13,14 @@ import type {
   ScriptOutcome,
 } from "../../ipc/types";
 import { errMessage } from "../../ipc/types";
-import { cancelQuery, classifySql, previewSql, runScript } from "../../ipc/commands";
+import { cancelQuery, classifySql, getCatalog, previewSql, runScript } from "../../ipc/commands";
 import type { PreviewReport } from "../../ipc/types";
 import { splitStatements } from "../../lib/sqlStatements";
 import ApprovalCard from "../../components/ApprovalCard";
-import SqlViewer from "../../components/SqlViewer";
+import { Icon } from "../../components/Icon";
+// #11: code-split the ~640K CodeMirror stack out of the initial chunk — it's only
+// needed once the SQL tab mounts this editable console.
+const SqlViewer = lazy(() => import("../../components/SqlViewer"));
 import DataGrid from "../../components/DataGrid";
 import ResultToolbar from "../../components/ResultToolbar";
 import { stamp } from "../../lib/export";
@@ -73,6 +77,7 @@ export default function Sql({
   // EXPLAIN plan (read-only preview) shown above the results, independent of execution.
   const [plan, setPlan] = useState<PreviewReport | null>(null);
   const [planErr, setPlanErr] = useState<string | null>(null);
+  const [explaining, setExplaining] = useState(false);
 
   // ⌘↩ and the Run button both just ARM the run — the gate (ApprovalCard for a single
   // statement, the confirm panel for a script) is never bypassed. A ⌘↩ selection runs
@@ -92,8 +97,9 @@ export default function Sql({
   }
 
   async function explain() {
-    if (!draft.trim() || draftIsScript) return;
+    if (!draft.trim() || draftIsScript || explaining) return;
     setPlanErr(null);
+    setExplaining(true);
     try {
       // Reads only: preview_sql on a write does an execute+rollback (locks, triggers) —
       // that impact preview belongs to the Run approval card, not a casual Explain.
@@ -107,6 +113,8 @@ export default function Sql({
     } catch (e) {
       setPlanErr(errMessage(e));
       setPlan(null);
+    } finally {
+      setExplaining(false);
     }
   }
 
@@ -116,10 +124,43 @@ export default function Sql({
     setPlanErr(null);
   }, [draft]);
 
+  // #8: feed schema-aware autocomplete. Same introspected Catalog the sidebar tree uses
+  // (columns per table). Cache by connection id; failure just leaves completion off.
+  const catalogCache = useRef<Record<string, Catalog>>({});
+  const [catalog, setCatalog] = useState<Catalog | undefined>(undefined);
+  useEffect(() => {
+    const id = connection.id;
+    const cached = catalogCache.current[id];
+    if (cached) {
+      setCatalog(cached);
+      return;
+    }
+    setCatalog(undefined);
+    let alive = true;
+    getCatalog(id)
+      .then((c) => {
+        catalogCache.current[id] = c;
+        if (alive) setCatalog(c);
+      })
+      .catch(() => {}); // no catalog → editor still works, just no schema hints
+    return () => {
+      alive = false;
+    };
+  }, [connection.id]);
+
   return (
     <div className="screen sqlconsole">
       <div className="editor-box">
-        <SqlViewer value={draft} editable onChange={setDraft} onRun={armRun} minHeight="140px" />
+        <Suspense fallback={<div className="muted small-pad">Loading editor…</div>}>
+          <SqlViewer
+            value={draft}
+            editable
+            onChange={setDraft}
+            onRun={armRun}
+            catalog={catalog}
+            minHeight="140px"
+          />
+        </Suspense>
       </div>
       <div className="form-actions sql-actions">
         <button className="btn primary" disabled={!draft.trim()} onClick={() => armRun()}>
@@ -127,11 +168,11 @@ export default function Sql({
         </button>
         <button
           className="btn"
-          disabled={!draft.trim() || draftIsScript}
+          disabled={!draft.trim() || draftIsScript || explaining}
           title={draftIsScript ? "Explain works on a single statement" : "Show the query plan (reads only)"}
           onClick={explain}
         >
-          Explain
+          {explaining ? "Planning…" : "Explain"}
         </button>
         {draftIsScript && (
           <span className="badge script-count">{draftStatements.length} statements</span>
@@ -144,8 +185,8 @@ export default function Sql({
         <details open className="card explain-plan">
           <summary>
             Query plan
-            <button className="btn small plan-close" onClick={() => setPlan(null)} title="Close">
-              ×
+            <button className="btn small plan-close" onClick={() => setPlan(null)} title="Close" aria-label="Close">
+              <Icon name="close" />
             </button>
           </summary>
           {plan.plan ? (
@@ -276,7 +317,7 @@ function ScriptApproval({
       {!safety.allowWrites && (
         <div className="note muted">
           Writes are disabled for this connection — a script that modifies data will be
-          blocked. Enable writes in Safety.
+          blocked. Enable writes in Settings ▸ Safety.
         </div>
       )}
       {error && <div className="error">{error}</div>}

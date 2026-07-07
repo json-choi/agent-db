@@ -20,6 +20,7 @@ import type {
 import { errMessage } from "../../ipc/types";
 import { tableKey, tableLabel } from "../../lib/tableRef";
 import ConfirmButton from "../../components/ConfirmButton";
+import { Icon } from "../../components/Icon";
 import SqlViewer from "../../components/SqlViewer";
 import { useToast } from "../../components/Toast";
 import "./connections.css";
@@ -62,6 +63,15 @@ function DdlModal({
   const [text, setText] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const closeRef = useRef<HTMLButtonElement>(null);
+
+  // Focus the Close button on open and restore focus to the trigger on close so
+  // keyboard/SR users aren't left Tabbing behind the modal.
+  useEffect(() => {
+    const trigger = document.activeElement as HTMLElement | null;
+    closeRef.current?.focus();
+    return () => trigger?.focus?.();
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -88,14 +98,19 @@ function DdlModal({
 
   return (
     <div className="ddl-overlay" onClick={onClose}>
-      <div className="ddl-modal" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="ddl-modal"
+        role="dialog"
+        aria-modal="true"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="ddl-head">
           <span className="ddl-title">{tableLabel(conn.engine, table)} — DDL</span>
           <div className="ddl-actions">
             <button className="btn small" onClick={copy} disabled={!text}>
               {copied ? "Copied" : "Copy"}
             </button>
-            <button className="btn small" onClick={onClose}>
+            <button className="btn small" ref={closeRef} onClick={onClose}>
               Close
             </button>
           </div>
@@ -240,7 +255,7 @@ export function DatabaseExplorer({
                     toggleOpen(c.id);
                   }}
                 >
-                  {open.has(c.id) ? "▾" : "▸"}
+                  <Icon name={open.has(c.id) ? "chevronDown" : "chevronRight"} />
                 </span>
                 <span className="db-conn-name">{c.name || "(unnamed)"}</span>
                 {(c.env === "staging" || c.env === "prod") && (
@@ -251,12 +266,13 @@ export function DatabaseExplorer({
                   <button
                     className="db-refresh"
                     title="Refresh schema (re-introspect live)"
+                    aria-label="Refresh schema"
                     onClick={(e) => {
                       e.stopPropagation();
                       void refreshSchema(c.id);
                     }}
                   >
-                    {refreshing === c.id ? "…" : "↻"}
+                    {refreshing === c.id ? "…" : <Icon name="refresh" />}
                   </button>
                 )}
               </div>
@@ -336,7 +352,7 @@ export function DatabaseExplorer({
                       >
                         <span className="db-nav-ico">◱</span> Migrations
                       </div>
-                      {cat && cat.tables.length > 8 && (
+                      {cat && cat.tables.length > 5 && (
                         <input
                           className="table-filter"
                           placeholder="Filter tables…"
@@ -351,7 +367,9 @@ export function DatabaseExplorer({
                         <div className="muted small-pad loading">Loading schema…</div>
                       )}
                       {cat && all.length === 0 && (
-                        <div className="muted small-pad">No tables.</div>
+                        <div className="muted small-pad">
+                          {f ? `No tables match "${f}".` : "No tables."}
+                        </div>
                       )}
                       {tbls.length > 0 && (
                         <>
@@ -369,7 +387,7 @@ export function DatabaseExplorer({
                             }}
                           >
                             <span className="tw">
-                              {tablesOpen ? "▾" : "▸"}
+                              <Icon name={tablesOpen ? "chevronDown" : "chevronRight"} />
                             </span>{" "}
                             Tables ({tbls.length})
                           </div>
@@ -392,7 +410,7 @@ export function DatabaseExplorer({
                             }}
                           >
                             <span className="tw">
-                              {viewsOpen ? "▾" : "▸"}
+                              <Icon name={viewsOpen ? "chevronDown" : "chevronRight"} />
                             </span>{" "}
                             Views ({views.length})
                           </div>
@@ -409,7 +427,7 @@ export function DatabaseExplorer({
 
       <div className="sidebar-foot">
         <button className="foot-btn" onClick={onOpenSettings}>
-          <span className="gear">⚙</span> Settings
+          <span className="gear"><Icon name="gear" /></span> Settings
         </button>
       </div>
 
@@ -435,6 +453,9 @@ export function ConnectionForm({
   const [form, setForm] = useState<ConnectionProfile>(initial ?? blank());
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
+  // Which action is in flight, so only the clicked button shows progress (busy
+  // disables all three).
+  const [running, setRunning] = useState<"save" | "test" | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [msgErr, setMsgErr] = useState(false);
   const isNew = initial === null;
@@ -448,6 +469,7 @@ export function ConnectionForm({
 
   async function save() {
     setBusy(true);
+    setRunning("save");
     setMsg(null);
     try {
       const saved = await upsertConnection(form, password || undefined);
@@ -461,11 +483,13 @@ export function ConnectionForm({
       setMsgErr(true);
     } finally {
       setBusy(false);
+      setRunning(null);
     }
   }
 
   async function test() {
     setBusy(true);
+    setRunning("test");
     setMsg(null);
     try {
       // A literal reachability check — dials the current form values WITHOUT
@@ -478,6 +502,7 @@ export function ConnectionForm({
       setMsgErr(true);
     } finally {
       setBusy(false);
+      setRunning(null);
     }
   }
 
@@ -667,15 +692,15 @@ export function ConnectionForm({
       </label>
 
       <p className="muted">
-        Write access is controlled per-connection in Settings &gt; Safety.
+        Write access is controlled per-connection in Settings ▸ Safety.
       </p>
 
       <div className="form-actions">
         <button className="btn primary" disabled={busy} onClick={save}>
-          Save
+          {running === "save" ? "Saving…" : "Save"}
         </button>
         <button className="btn" disabled={busy} onClick={test}>
-          Test connection
+          {running === "test" ? "Testing…" : "Test connection"}
         </button>
         <button className="btn" disabled={busy} onClick={onCancel}>
           Cancel

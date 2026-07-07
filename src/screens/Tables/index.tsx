@@ -4,7 +4,7 @@
 // same sqlBuild helpers. Row edits (insert/update/delete) are generated as SQL and
 // routed through ApprovalCard, so the full safety pipeline (classify/preview/approve/
 // audit) applies — reads still auto-run and never need approval.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { runSql } from "../../ipc/commands";
 import type {
   CatalogTable,
@@ -15,6 +15,7 @@ import type {
 } from "../../ipc/types";
 import { errMessage } from "../../ipc/types";
 import DataGrid from "../../components/DataGrid";
+import { Icon } from "../../components/Icon";
 import CellViewer from "../../components/CellViewer";
 import RowEditor from "../../components/RowEditor";
 import ApprovalCard from "../../components/ApprovalCard";
@@ -26,6 +27,7 @@ import {
   buildDelete,
   buildPageQuery,
   cellToInput,
+  hasNonScalarPk,
   pkColumns,
   type GridSort,
 } from "../../lib/sqlBuild";
@@ -57,14 +59,25 @@ export default function TableData({
   const [cellSel, setCellSel] = useState<CellSel | null>(null);
   const [editor, setEditor] = useState<Editor | null>(null);
   const [prepared, setPrepared] = useState<string | null>(null);
+  // Readable confirm gate for DELETE: PK pairs of the target row, mirroring how
+  // insert/edit/duplicate pass through RowEditor before arming the ApprovalCard.
+  const [pendingDelete, setPendingDelete] = useState<Record<string, string | null> | null>(null);
+  // Reads run on a POOLED connection, so overlapping loads (fast filter typing, table
+  // switch) can resolve out of order. Each load takes a ticket; only the latest one paints.
+  const reqId = useRef(0);
+  const [structure, setStructure] = useState(false);
 
   const pageSize = Math.min(PAGE, safety.maxRows || PAGE);
   const key = tableKey(table);
-  const hasPk = pkColumns(table).length > 0;
+  // Row editing needs a PK we can match on. No PK, or a PK whose rendered cell value can't
+  // round-trip to a literal (binary/json/array/composite), both disable it — same as noPk.
+  const nonScalarPk = hasNonScalarPk(table);
+  const canEdit = pkColumns(table).length > 0 && !nonScalarPk;
   const activeFilters = Object.values(filters).filter((v) => v.trim()).length;
 
   const load = useCallback(
     async (p: number) => {
+      const my = ++reqId.current;
       setBusy(true);
       setErr(null);
       const pageSql = buildPageQuery(engine, table, {
@@ -79,15 +92,18 @@ export default function TableData({
           runSql(connection.id, pageSql, true),
           runSql(connection.id, countSql, true),
         ]);
+        if (my !== reqId.current) return; // a newer load already superseded us — drop stale rows
         setResult(pageOut.result ?? null);
         setPage(p);
         setSelected(null);
+        setCellSel(null); // the old cell viewer points at rows that just went away
         const n = countOut.result?.rows?.[0]?.[0];
         setTotal(n == null ? null : Number(n));
       } catch (e) {
+        if (my !== reqId.current) return; // stale error from a superseded load
         setErr(errMessage(e));
       } finally {
-        setBusy(false);
+        if (my === reqId.current) setBusy(false);
       }
     },
     [connection.id, engine, table, pageSize, sort, filters],
@@ -95,12 +111,15 @@ export default function TableData({
 
   // Reset view state whenever the selected table changes.
   useEffect(() => {
+    reqId.current++; // invalidate any in-flight load from the previous table
     setSort(null);
     setFilters({});
     setSelected(null);
     setCellSel(null);
     setEditor(null);
     setPrepared(null);
+    setPendingDelete(null);
+    setStructure(false);
   }, [key]);
 
   // Any query-shape change (table / sort / filters, all folded into `load`'s identity)
@@ -142,6 +161,8 @@ export default function TableData({
     setCellSel(null);
   }
 
+  // Open a readable confirm (PK pairs) instead of jumping straight to the ApprovalCard —
+  // Delete sits next to Duplicate, so a mis-click shouldn't be one approval from a wipe.
   function doDelete() {
     if (!selRow || !result) return;
     const pkVals: Record<string, string | null> = {};
@@ -149,10 +170,18 @@ export default function TableData({
       const i = result.columns.indexOf(c.name);
       pkVals[c.name] = i >= 0 ? cellToInput(selRow[i]) : null;
     }
+    setPendingDelete(pkVals);
+    setEditor(null);
+    setCellSel(null);
+    setPrepared(null); // drop any abandoned write card so only the delete confirm is live
+  }
+
+  // Confirmed: build the DELETE and arm the ApprovalCard.
+  function armDelete() {
+    if (!pendingDelete) return;
     try {
-      setPrepared(buildDelete(engine, table, pkVals));
-      setEditor(null);
-      setCellSel(null);
+      setPrepared(buildDelete(engine, table, pendingDelete));
+      setPendingDelete(null);
     } catch (e) {
       setErr(errMessage(e));
     }
@@ -174,14 +203,19 @@ export default function TableData({
   }
 
   function onWritten(o: ExecOutcome) {
-    toast(o.affected != null ? `${o.affected} row(s) written` : "Write committed");
+    // A committed write that matched no rows is not a success — flag it, don't green-light it.
+    if (o.affected === 0) toast("No rows matched — nothing was changed", "error");
+    else toast(o.affected != null ? `${o.affected} row(s) written` : "Write committed");
     setPrepared(null);
     setEditor(null);
+    setPendingDelete(null);
     void load(page);
   }
 
-  const noPkTitle = "Table has no primary key — row editing disabled";
-  const panelOpen = !!prepared || !!editor || !!cellSel;
+  const noEditTitle = nonScalarPk
+    ? "Primary key is a binary/JSON/array/composite type — row editing disabled (value can't be matched safely)"
+    : "Table has no primary key — row editing disabled";
+  const panelOpen = !!prepared || !!editor || !!cellSel || !!pendingDelete;
 
   return (
     <div className="table-data">
@@ -226,41 +260,113 @@ export default function TableData({
           >
             Last »
           </button>
-          <button className="btn small refresh" disabled={busy} onClick={() => void load(page)}>
-            {busy ? "…" : "↻"}
+          <button
+            className="btn small refresh"
+            disabled={busy}
+            aria-label="Refresh"
+            title="Refresh"
+            onClick={() => void load(page)}
+          >
+            {busy ? "…" : <Icon name="refresh" />}
+          </button>
+          <button
+            className="btn small"
+            aria-expanded={structure}
+            title="Show columns, indexes and foreign keys"
+            onClick={() => setStructure((s) => !s)}
+          >
+            Structure
           </button>
         </div>
       </div>
 
+      {/* Introspected metadata already on the prop — no backend call. Collapsed by default. */}
+      {structure && (
+        <div className="table-structure">
+          <table className="struct-table">
+            <thead>
+              <tr>
+                <th>Column</th>
+                <th>Type</th>
+                <th>Nullable</th>
+                <th>PK</th>
+              </tr>
+            </thead>
+            <tbody>
+              {table.columns.map((c) => (
+                <tr key={c.name}>
+                  <td>{c.name}</td>
+                  <td className="muted">{c.dataType}</td>
+                  <td>{c.nullable ? "yes" : "no"}</td>
+                  <td>{c.pk ? "PK" : ""}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="struct-meta">
+            <div>
+              <strong>Indexes</strong>
+              {table.indexes.length ? (
+                <ul>
+                  {table.indexes.map((ix) => (
+                    <li key={ix.name}>
+                      {ix.name}
+                      {ix.unique ? " (unique)" : ""}: {ix.columns.join(", ")}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <span className="muted"> none</span>
+              )}
+            </div>
+            <div>
+              <strong>Foreign keys</strong>
+              {table.foreignKeys.length ? (
+                <ul>
+                  {table.foreignKeys.map((fk) => (
+                    <li key={`${fk.column}-${fk.referencesTable}-${fk.referencesColumn}`}>
+                      {fk.column} → {fk.referencesSchema ? `${fk.referencesSchema}.` : ""}
+                      {fk.referencesTable}.{fk.referencesColumn}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <span className="muted"> none</span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="grid-toolbar">
         <button
           className="btn small"
-          disabled={!hasPk}
-          title={hasPk ? undefined : noPkTitle}
+          disabled={!canEdit}
+          title={canEdit ? undefined : noEditTitle}
           onClick={() => openEdit("insert")}
         >
           + Insert
         </button>
         <button
           className="btn small"
-          disabled={!hasPk || selected == null}
-          title={hasPk ? undefined : noPkTitle}
+          disabled={!canEdit || selected == null}
+          title={canEdit ? undefined : noEditTitle}
           onClick={() => openEdit("edit")}
         >
           Edit
         </button>
         <button
           className="btn small"
-          disabled={!hasPk || selected == null}
-          title={hasPk ? undefined : noPkTitle}
+          disabled={!canEdit || selected == null}
+          title={canEdit ? undefined : noEditTitle}
           onClick={() => openEdit("duplicate")}
         >
           Duplicate
         </button>
         <button
           className="btn small"
-          disabled={!hasPk || selected == null}
-          title={hasPk ? undefined : noPkTitle}
+          disabled={!canEdit || selected == null}
+          title={canEdit ? undefined : noEditTitle}
           onClick={doDelete}
         >
           Delete
@@ -280,7 +386,7 @@ export default function TableData({
             result && downloadCsv(`${table.name}-page${page + 1}-${stamp()}`, result.columns, result.rows)
           }
         >
-          Export CSV
+          Export page (CSV)
         </button>
         <button
           className="btn small"
@@ -290,7 +396,7 @@ export default function TableData({
             result && downloadJson(`${table.name}-page${page + 1}-${stamp()}`, result.columns, result.rows)
           }
         >
-          Export JSON
+          Export page (JSON)
         </button>
         {activeFilters > 0 && (
           <>
@@ -307,22 +413,34 @@ export default function TableData({
 
       {err && <div className="error">{err}</div>}
 
-      <div className="table-data-body">
+      {/* Dim (not blank) the stale grid while paging/sorting/filtering re-queries. */}
+      <div className={busy && result ? "table-data-body busy" : "table-data-body"}>
         {result ? (
-          <DataGrid
-            result={result}
-            startIndex={page * pageSize}
-            sort={sort}
-            onSort={cycleSort}
-            filters={filters}
-            onFilter={(col, value) => setFilters((f) => ({ ...f, [col]: value }))}
-            selectedRow={selected}
-            onSelectRow={setSelected}
-            onCellClick={(value, i, column) => {
-              setSelected(i);
-              setCellSel({ value, column });
-            }}
-          />
+          result.rows.length ? (
+            <DataGrid
+              result={result}
+              startIndex={page * pageSize}
+              sort={sort}
+              onSort={cycleSort}
+              filters={filters}
+              onFilter={(col, value) => setFilters((f) => ({ ...f, [col]: value }))}
+              selectedRow={selected}
+              onSelectRow={setSelected}
+              onCellClick={(value, i, column) => {
+                setSelected(i);
+                setCellSel({ value, column });
+              }}
+            />
+          ) : busy ? (
+            // Reloading (filter cleared / table switched) — the stale zero-row result would
+            // otherwise flash a wrong "Table is empty." against the now-live filter state.
+            <div className="muted loading">Loading rows…</div>
+          ) : (
+            // Loaded but zero rows: distinguish an empty table from a filter that matched nothing.
+            <div className="muted">
+              {activeFilters > 0 ? "No rows match the current filter." : "Table is empty."}
+            </div>
+          )
         ) : (
           !err && <div className={busy ? "muted loading" : "muted"}>{busy ? "Loading rows…" : "No rows."}</div>
         )}
@@ -342,6 +460,35 @@ export default function TableData({
                   setPrepared(null);
                 }}
               />
+            )}
+            {pendingDelete && (
+              <div className="row-editor">
+                <div className="panel-head">
+                  <strong>Delete row?</strong>
+                  <button className="btn small" aria-label="Cancel" onClick={() => setPendingDelete(null)}>
+                    <Icon name="close" />
+                  </button>
+                </div>
+                <div className="row-fields">
+                  {Object.entries(pendingDelete).map(([k, v]) => (
+                    <div className="row-field" key={k}>
+                      <label>
+                        {k}
+                        <span className="pk-badge">PK</span>
+                      </label>
+                      <code>{v == null ? "NULL" : v}</code>
+                    </div>
+                  ))}
+                </div>
+                <div className="row-editor-actions">
+                  <button className="btn primary" onClick={armDelete}>
+                    Review DELETE
+                  </button>
+                  <button className="btn" onClick={() => setPendingDelete(null)}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
             )}
             {prepared && (
               <ApprovalCard

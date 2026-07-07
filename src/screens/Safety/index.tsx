@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { getSafety, setSafety } from "../../ipc/commands";
 import type { SafetySettings } from "../../ipc/types";
 import { errMessage } from "../../ipc/types";
+import { useToast } from "../../components/Toast";
 
 const TOGGLES: { key: keyof SafetySettings; label: string; hint: string }[] = [
   { key: "requireApproval", label: "Require approval", hint: "Gate every statement behind the approval card." },
@@ -19,8 +20,9 @@ const NUMBERS: { key: keyof SafetySettings; label: string; hint: string }[] = [
 
 export default function Safety({ connectionId }: { connectionId: string }) {
   const [settings, setSettings] = useState<SafetySettings | null>(null);
-  const [msg, setMsg] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null); // load-failure only; save feedback goes through toast
   const [busy, setBusy] = useState(false);
+  const toast = useToast();
 
   useEffect(() => {
     setSettings(null);
@@ -41,12 +43,11 @@ export default function Safety({ connectionId }: { connectionId: string }) {
   async function save() {
     if (!settings) return;
     setBusy(true);
-    setMsg(null);
     try {
       await setSafety(connectionId, settings);
-      setMsg("Saved.");
+      toast("Safety settings saved");
     } catch (e) {
-      setMsg(errMessage(e));
+      toast(errMessage(e), "error");
     } finally {
       setBusy(false);
     }
@@ -73,8 +74,18 @@ export default function Safety({ connectionId }: { connectionId: string }) {
           {n.label}
           <input
             type="number"
+            min={n.key === "maxRows" ? 1 : 0}
+            step={1}
             value={settings[n.key] as number}
-            onChange={(e) => set(n.key, Number(e.target.value) as never)}
+            onChange={(e) => {
+              // Clamp to backend-enforced bounds; guard NaN from an empty field.
+              const raw = Math.floor(Number(e.target.value));
+              const v =
+                n.key === "maxRows"
+                  ? Math.min(100000, Math.max(1, raw || 1))
+                  : Math.min(1000000, Math.max(0, raw || 0));
+              set(n.key, v as never);
+            }}
           />
           <small className="muted">{n.hint}</small>
         </label>
@@ -84,7 +95,6 @@ export default function Safety({ connectionId }: { connectionId: string }) {
           Save
         </button>
       </div>
-      {msg && <div className="form-msg">{msg}</div>}
     </div>
   );
 }

@@ -645,6 +645,14 @@ pub async fn set_safety(
     id: Uuid,
     settings: SafetySettings,
 ) -> AppResult<()> {
+    // Clamp the row caps before persisting (defense-in-depth alongside the frontend
+    // clamp). max_rows is u64 so a negative UI value already wraps astronomically
+    // large; exec_preview_row_limit is i64 and a negative wraps to an infinite read
+    // cap once cast to usize downstream. Bound both to sane ranges. Mirrors the
+    // .min(...) the MCP read path applies.
+    let mut settings = settings;
+    settings.max_rows = settings.max_rows.clamp(1, 100_000);
+    settings.exec_preview_row_limit = settings.exec_preview_row_limit.clamp(0, 1_000_000);
     state.store.set_safety(id, &settings).await
 }
 

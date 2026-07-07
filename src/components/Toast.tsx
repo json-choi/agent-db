@@ -22,18 +22,27 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const idRef = useRef(0);
 
+  const dismiss = useCallback((id: number) => setToasts((t) => t.filter((x) => x.id !== id)), []);
+
   const toast = useCallback<ToastFn>((msg, variant = "success") => {
     const id = idRef.current++;
-    setToasts((t) => [...t, { id, msg, variant }]);
-    window.setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 3000);
-  }, []);
+    // cap the stack so a burst can't overflow off-screen
+    setToasts((t) => [...t, { id, msg, variant }].slice(-4));
+    window.setTimeout(() => dismiss(id), 3000);
+  }, [dismiss]);
 
   return (
     <Ctx.Provider value={toast}>
       {children}
-      <div className="toast-wrap">
+      {/* live region so screen readers announce toasts */}
+      <div className="toast-wrap" role="region" aria-label="Notifications">
         {toasts.map((t) => (
-          <div key={t.id} className={`toast ${t.variant}`}>
+          <div
+            key={t.id}
+            className={`toast ${t.variant}`}
+            role={t.variant === "error" ? "alert" : "status"}
+            onClick={() => dismiss(t.id)}
+          >
             {t.msg}
           </div>
         ))}

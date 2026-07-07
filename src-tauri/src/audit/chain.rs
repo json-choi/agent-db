@@ -31,24 +31,29 @@ pub struct AuditFields<'a> {
     pub error: Option<&'a str>,
 }
 
-/// Deterministic, unambiguous serialization of the audited fields. Uses a unit
-/// separator (0x1F) between fields so field boundaries can't be forged by
-/// crafting values that contain the delimiter.
+/// Deterministic, unambiguous serialization of the audited fields. Each field is
+/// length-prefixed (`<byte-len>:<field>`), so no arrangement of bytes WITHIN a
+/// field can spill across a boundary: shifting a delimiter between two adjacent
+/// attacker-controlled fields (sql/prompt/error) changes their byte lengths and
+/// thus the serialization, so distinct rows can never hash the same.
 fn canonical(f: &AuditFields) -> String {
-    const US: char = '\u{1f}';
-    format!(
-        "{cid}{US}{ts}{US}{eng}{US}{prompt}{US}{sql}{US}{kind}{US}{action}{US}{by}{US}{est}{US}{err}",
-        cid = f.connection_id,
-        ts = f.ts.to_rfc3339(),
-        eng = crate::store::engine_str(f.engine),
-        prompt = f.agent_prompt.unwrap_or(""),
-        sql = f.sql,
-        kind = crate::store::kind_str(f.kind),
-        action = f.action,
-        by = f.approved_by.unwrap_or(""),
-        est = f.affected_estimate.map(|n| n.to_string()).unwrap_or_default(),
-        err = f.error.unwrap_or(""),
-    )
+    let mut out = String::new();
+    let mut field = |s: &str| {
+        out.push_str(&s.len().to_string());
+        out.push(':');
+        out.push_str(s);
+    };
+    field(&f.connection_id.to_string());
+    field(&f.ts.to_rfc3339());
+    field(crate::store::engine_str(f.engine));
+    field(f.agent_prompt.unwrap_or(""));
+    field(f.sql);
+    field(crate::store::kind_str(f.kind));
+    field(f.action);
+    field(f.approved_by.unwrap_or(""));
+    field(&f.affected_estimate.map(|n| n.to_string()).unwrap_or_default());
+    field(f.error.unwrap_or(""));
+    out
 }
 
 /// `hex(SHA256(prev_hash ‖ canonical(fields)))`. The genesis link uses an empty
@@ -98,5 +103,19 @@ mod tests {
         let mut edited = sample();
         edited.action = "reject";
         assert_ne!(a, compute_hash(None, &edited));
+    }
+
+    #[test]
+    fn adjacent_field_boundary_cannot_be_forged() {
+        // Two DISTINCT rows that a raw-delimiter join would map to the same bytes:
+        // shifting one char across the prompt|sql boundary. Length-prefixing must
+        // keep their hashes distinct.
+        let mut x = sample();
+        x.agent_prompt = Some("ab");
+        x.sql = "cd";
+        let mut y = sample();
+        y.agent_prompt = Some("a");
+        y.sql = "bcd";
+        assert_ne!(compute_hash(None, &x), compute_hash(None, &y));
     }
 }

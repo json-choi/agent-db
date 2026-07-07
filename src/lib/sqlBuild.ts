@@ -63,6 +63,15 @@ export function pkColumns(table: CatalogTable): CatalogColumn[] {
   return table.columns.filter((c) => c.pk);
 }
 
+// Non-scalar PK types: the grid reads the PK cell as a backend-rendered hex/JSON string
+// and sqlValue emits it as a plain quoted literal, which never matches the real bytes/value
+// → a WHERE that silently deletes/updates nothing. We block row editing on such PKs rather
+// than attempt per-engine binary/composite literal encoding.
+const NON_SCALAR_PK_RE = /\b(?:bytea|(?:tiny|medium|long)?blob|(?:var)?binary|json|jsonb|array|composite|record)\b|\[\]/i;
+export function hasNonScalarPk(table: CatalogTable): boolean {
+  return pkColumns(table).some((c) => NON_SCALAR_PK_RE.test(c.dataType));
+}
+
 // One column's filter → a boolean SQL fragment, or null for "no filter":
 //   "null" / "not null"  → IS [NOT] NULL
 //   "=abc"               → col = <typed literal>            (exact)
@@ -94,9 +103,19 @@ export function buildWhere(
   return parts.join(" AND ");
 }
 
+// PK columns as trailing ASC tiebreakers, minus any already named as the sort col, so
+// duplicate sort values order deterministically and LIMIT/OFFSET paging can't repeat/skip.
+function pkTiebreakers(engine: Engine, table: CatalogTable, exclude?: string): string[] {
+  return pkColumns(table)
+    .filter((c) => c.name !== exclude)
+    .map((c) => quoteIdent(engine, c.name));
+}
+
 export function buildOrderBy(engine: Engine, table: CatalogTable, sort: GridSort | null): string {
   if (sort) {
-    return `ORDER BY ${quoteIdent(engine, sort.col)} ${sort.dir === "desc" ? "DESC" : "ASC"}`;
+    const dir = sort.dir === "desc" ? "DESC" : "ASC";
+    const keys = [`${quoteIdent(engine, sort.col)} ${dir}`, ...pkTiebreakers(engine, table, sort.col)];
+    return `ORDER BY ${keys.join(", ")}`;
   }
   // Stable default so LIMIT/OFFSET paging can't repeat or skip rows: primary key,
   // falling back to the first column.
@@ -226,7 +245,19 @@ export function __selfTest(): void {
   a(sqlValue("postgres", "interval", "5") === "'5'", "interval quoted not bare");
   a(sqlValue("postgres", "text", "") === "''", "empty text stays ''");
   a(buildOrderBy("postgres", t, null) === 'ORDER BY "id"', "default order by pk");
-  a(buildOrderBy("postgres", t, { col: "name", dir: "desc" }) === 'ORDER BY "name" DESC', "sort desc");
+  a(
+    buildOrderBy("postgres", t, { col: "name", dir: "desc" }) === 'ORDER BY "name" DESC, "id"',
+    "sort desc + pk tiebreak",
+  );
+  a(
+    buildOrderBy("postgres", t, { col: "id", dir: "asc" }) === 'ORDER BY "id" ASC',
+    "sort on pk drops dup tiebreak",
+  );
+  a(hasNonScalarPk(t) === false, "scalar pk allowed");
+  a(hasNonScalarPk({ ...t, columns: [{ name: "id", dataType: "bytea", nullable: false, pk: true }] }), "bytea pk blocked");
+  a(hasNonScalarPk({ ...t, columns: [{ name: "id", dataType: "jsonb", nullable: false, pk: true }] }), "jsonb pk blocked");
+  a(hasNonScalarPk({ ...t, columns: [{ name: "id", dataType: "longblob", nullable: false, pk: true }] }), "longblob pk blocked");
+  a(hasNonScalarPk({ ...t, columns: [{ name: "id", dataType: "varchar(36)", nullable: false, pk: true }] }) === false, "varchar pk allowed");
   const noPk: CatalogTable = { ...t, columns: [{ name: "x", dataType: "text", nullable: true, pk: false }] };
   a(buildOrderBy("mysql", noPk, null) === "ORDER BY `x`", "fallback to first col");
   a(buildWhere("postgres", t.columns, { name: "=bob" }) === `"name" = 'bob'`, "exact filter");

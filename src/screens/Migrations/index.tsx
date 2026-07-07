@@ -14,6 +14,7 @@ import {
 } from "../../ipc/commands";
 import type { ConnectionProfile, MigrationReport, MigrationView } from "../../ipc/types";
 import { errMessage } from "../../ipc/types";
+import { Icon } from "../../components/Icon";
 import "./migrations.css";
 
 const keyFor = (id: string) => `agentdb.migrationsDir.${id}`;
@@ -247,8 +248,8 @@ export default function Migrations({
       {watchErr && (
         <div className="mig-warn-banner">
           <span>live re-analyze unavailable: {watchErr}</span>
-          <button onClick={() => setWatchErr(null)} title="Dismiss">
-            ×
+          <button onClick={() => setWatchErr(null)} title="Dismiss" aria-label="Close">
+            <Icon name="close" />
           </button>
         </div>
       )}
@@ -325,7 +326,7 @@ export default function Migrations({
               return (
                 <li key={id} className="mig-item">
                   <button className="mig-head" onClick={() => setOpen((o) => ({ ...o, [id]: !o[id] }))}>
-                    <span className="tw">{isOpen ? "▾" : "▸"}</span>
+                    <span className="tw"><Icon name={isOpen ? "chevronDown" : "chevronRight"} /></span>
                     <span className="mig-ver">{m.version}</span>
                     <span className="mig-name">{m.name}</span>
                     <span className="mig-badges">

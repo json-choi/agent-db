@@ -14,15 +14,18 @@ import { listen } from "@tauri-apps/api/event";
 import type { QueryResult } from "../ipc/types";
 
 const CAP = 200; // ponytail: capped in-memory ring; add persistence only if history matters
+const KEEP_ROWS = 25; // retain full rows only for the newest N results; older keep metadata only
 
 export interface AgentActivity {
   id: number;
-  ts: string;
+  ts: string; // short display string (toLocaleTimeString)
+  iso: string; // full timestamp, for a hover tooltip — display string alone is ambiguous across midnight
   kind: "call" | "result";
   tool: string;
   detail: string;
   error?: boolean;
   result?: QueryResult;
+  rowsDropped?: boolean; // rows evicted to bound memory; metadata (columns/rowCount) kept
   sql?: string;
   connection?: string; // source connection name, for the result provenance header
 }
@@ -69,9 +72,20 @@ export function AgentFeedProvider({ children }: { children: ReactNode }) {
   const idRef = useRef(0);
 
   useEffect(() => {
-    const push = (a: Omit<AgentActivity, "id" | "ts">) => {
-      const item: AgentActivity = { ...a, id: idRef.current++, ts: new Date().toLocaleTimeString() };
-      setFeed((f) => [item, ...f].slice(0, CAP));
+    const push = (a: Omit<AgentActivity, "id" | "ts" | "iso">) => {
+      const now = new Date();
+      const item: AgentActivity = { ...a, id: idRef.current++, ts: now.toLocaleTimeString(), iso: now.toISOString() };
+      setFeed((f) => {
+        // Bound memory: past the newest KEEP_ROWS results, drop rows but keep columns/rowCount
+        // so the row stays clickable and shows a "re-run to view" note instead of an empty grid.
+        // New objects (never mutate — items are shared with the selected-result state).
+        let kept = 0;
+        return [item, ...f].slice(0, CAP).map((a) => {
+          if (!a.result || a.rowsDropped) return a;
+          if (++kept <= KEEP_ROWS) return a;
+          return { ...a, rowsDropped: true, result: { ...a.result, rows: [] } };
+        });
+      });
       if (item.result) setLatest(item);
       // One agent operation emits a call AND a result — count it once, on completion.
       if (item.kind === "result") setUnseen((n) => n + 1);

@@ -1,10 +1,12 @@
 // Query-history browser. Lists past statements for the selected connection (newest
 // first); clicking a row pushes its SQL back into the editor via onLoadSql (App
 // switches to the SQL tab and sets the draft).
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { listHistory } from "../../ipc/commands";
 import type { ConnectionProfile, HistoryEntry } from "../../ipc/types";
 import { errMessage } from "../../ipc/types";
+import { useToast } from "../../components/Toast";
+import { relTime, fullTime } from "../../lib/relTime";
 import "./history.css";
 
 const CAP = 200;
@@ -29,6 +31,10 @@ export default function History({
   const [rows, setRows] = useState<HistoryEntry[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [text, setText] = useState("");
+  const [statusF, setStatusF] = useState("");
+  const [originF, setOriginF] = useState("");
+  const toast = useToast();
 
   function refresh() {
     setLoading(true);
@@ -44,7 +50,29 @@ export default function History({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connection.id]);
 
-  const shown = rows.slice(0, CAP);
+  // Distinct values for the filter selects (from the loaded rows only).
+  const statuses = useMemo(
+    () => [...new Set(rows.map((h) => h.status))].sort(),
+    [rows],
+  );
+  const origins = useMemo(
+    () => [...new Set(rows.map((h) => h.origin))].sort(),
+    [rows],
+  );
+
+  // Client-side filter over the already-loaded firehose; no backend round-trip.
+  const filtered = rows.filter(
+    (h) =>
+      (!text || h.sql.toLowerCase().includes(text.toLowerCase())) &&
+      (!statusF || h.status === statusF) &&
+      (!originF || h.origin === originF),
+  );
+  const shown = filtered.slice(0, CAP);
+
+  function load(sql: string) {
+    onLoadSql(sql);
+    toast("Loaded into editor");
+  }
 
   return (
     <div className="screen history">
@@ -54,6 +82,34 @@ export default function History({
           {loading ? "…" : "Refresh"}
         </button>
       </div>
+
+      {rows.length > 0 && (
+        <div className="history-filters">
+          <input
+            className="history-filter-text"
+            type="search"
+            placeholder="Filter SQL…"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+          />
+          <select value={statusF} onChange={(e) => setStatusF(e.target.value)}>
+            <option value="">All statuses</option>
+            {statuses.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+          <select value={originF} onChange={(e) => setOriginF(e.target.value)}>
+            <option value="">All origins</option>
+            {origins.map((o) => (
+              <option key={o} value={o}>
+                {o}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
       {err && <div className="error">{err}</div>}
       {!err && rows.length === 0 && (
@@ -80,11 +136,19 @@ export default function History({
               <tr
                 key={h.id}
                 className="history-row"
-                onClick={() => onLoadSql(h.sql)}
+                role="button"
+                tabIndex={0}
+                onClick={() => load(h.sql)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    load(h.sql);
+                  }
+                }}
                 title="Load this statement into the SQL editor"
               >
-                <td className="nowrap muted">
-                  {new Date(h.executedAt).toLocaleString()}
+                <td className="nowrap muted" title={fullTime(h.executedAt)}>
+                  {relTime(h.executedAt)}
                 </td>
                 <td>
                   <span className={`badge origin origin-${h.origin}`}>
@@ -110,9 +174,13 @@ export default function History({
         </table>
       )}
 
-      {rows.length > CAP && (
+      {rows.length > 0 && filtered.length === 0 && (
+        <div className="muted empty">No queries match the filter.</div>
+      )}
+
+      {filtered.length > CAP && (
         <div className="muted history-note">
-          Showing latest {CAP} of {rows.length}.
+          Showing latest {CAP} of {filtered.length} matching.
         </div>
       )}
     </div>

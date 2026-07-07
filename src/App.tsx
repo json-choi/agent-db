@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { getSafety, listConnections } from "./ipc/commands";
+import { getSafety, listConnections, setSafety as ipcSetSafety } from "./ipc/commands";
 import type { CatalogTable, ConnectionProfile, SafetySettings } from "./ipc/types";
 import { errMessage } from "./ipc/types";
 import { tableKey } from "./lib/tableRef";
@@ -18,12 +18,14 @@ import { AgentFeedProvider, useAgentFeed } from "./lib/agentFeed";
 // App-level tabs. Agent is a live feed/result surface, connection-independent; the rest
 // are per-connection data views. Migrations lives in the sidebar; Settings behind ⚙.
 type Tab = "data" | "sql" | "agent" | "history" | "audit";
+// Agent is last: it's connection-independent, so it sits apart from the per-connection
+// data tabs (the .agent-tab class pushes it right with a divider via shared CSS).
 const TABS: { id: Tab; label: string }[] = [
   { id: "data", label: "Data" },
   { id: "sql", label: "SQL" },
-  { id: "agent", label: "Agent" },
   { id: "history", label: "History" },
   { id: "audit", label: "Audit" },
+  { id: "agent", label: "Agent" },
 ];
 
 // `null` = not editing; "new" = blank form; a profile = edit that profile.
@@ -103,6 +105,8 @@ function Shell() {
   const seenResultId = useRef<number | null>(null);
   const surfaceInit = useRef(true);
   const lastToastAt = useRef(0);
+  // Tab button refs so ArrowLeft/Right moves DOM focus with the selection (roving tabindex).
+  const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   useEffect(() => {
     if (surfaceInit.current) {
       surfaceInit.current = false;
@@ -153,6 +157,27 @@ function Shell() {
   const refreshSafety = () => {
     if (selectedId) loadSafety(selectedId);
   };
+
+  // #10: quick read↔write toggle from the main head — the most-flipped setting, otherwise
+  // buried in Settings ▸ Safety. Persists via the IPC set_safety (not the local setter) so
+  // the backend gate actually changes, then refreshes. Enabling writes (the risky direction)
+  // confirms first. `togglingWrites` reflects the pending state so the control isn't double-hit.
+  const [togglingWrites, setTogglingWrites] = useState(false);
+  async function toggleWrites() {
+    if (!selectedId || !safety || togglingWrites) return;
+    const enabling = !safety.allowWrites;
+    if (enabling && !window.confirm(`Allow writes on "${selected?.name || "this connection"}"?`))
+      return;
+    setTogglingWrites(true);
+    try {
+      await ipcSetSafety(selectedId, { ...safety, allowWrites: enabling });
+      refreshSafety();
+    } catch (e) {
+      toast(errMessage(e), "error");
+    } finally {
+      setTogglingWrites(false);
+    }
+  }
 
   function loadSql(sql: string) {
     setSqlDraft(sql);
@@ -259,8 +284,23 @@ function Shell() {
               <span className="muted">
                 {" "}
                 {selected.engine} · {selected.database}
-                {safety && (safety.allowWrites ? " · writes allowed" : " · read-only")}
               </span>
+              {safety && (
+                <button
+                  className={
+                    "write-toggle" + (safety.allowWrites ? " writes" : " readonly")
+                  }
+                  disabled={togglingWrites}
+                  onClick={() => void toggleWrites()}
+                  title={
+                    safety.allowWrites
+                      ? "Writes allowed — click to switch to read-only"
+                      : "Read-only — click to allow writes"
+                  }
+                >
+                  {togglingWrites ? "…" : safety.allowWrites ? "writes allowed" : "read-only"}
+                </button>
+              )}
             </div>
             <button className="btn small" onClick={() => setEditing(selected)}>
               Edit
@@ -268,20 +308,42 @@ function Shell() {
           </header>
         )}
 
-        <nav className="tabs">
+        <nav className="tabs" role="tablist">
           {TABS.map((t) => (
             <button
               key={t.id}
-              className={t.id === tab ? "tab active" : "tab"}
+              ref={(el) => {
+                tabRefs.current[t.id] = el;
+              }}
+              role="tab"
+              aria-selected={t.id === tab}
+              // Roving tabindex: only the active tab is in the Tab order; arrows move within.
+              tabIndex={t.id === tab ? 0 : -1}
+              className={
+                (t.id === tab ? "tab active" : "tab") +
+                (t.id === "agent" ? " agent-tab" : "")
+              }
               onClick={() => setTab(t.id)}
+              // Arrow keys move focus+selection across TABS, wrapping — mirrors the sidebar tree.
+              onKeyDown={(e) => {
+                if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+                e.preventDefault();
+                const i = TABS.findIndex((x) => x.id === tab);
+                const d = e.key === "ArrowRight" ? 1 : -1;
+                const next = TABS[(i + d + TABS.length) % TABS.length].id;
+                setTab(next);
+                tabRefs.current[next]?.focus();
+              }}
             >
               {t.label}
-              {t.id === "agent" && unseen > 0 && <span className="tab-dot">{unseen}</span>}
+              {t.id === "agent" && unseen > 0 && (
+                <span className="tab-dot">{unseen > 9 ? "9+" : unseen}</span>
+              )}
             </button>
           ))}
         </nav>
 
-        <section className="tab-body">
+        <section className="tab-body" role="tabpanel">
           {tab === "agent" && <AgentResultView onOpenMcpSettings={openMcpSettings} />}
           {tab === "data" &&
             (!selected ? (

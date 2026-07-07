@@ -5,27 +5,39 @@ import { useEffect, useState, type KeyboardEvent } from "react";
 import DataGrid from "./DataGrid";
 import ResultToolbar from "./ResultToolbar";
 import { stamp } from "../lib/export";
+import { fullTime } from "../lib/relTime";
 import { useAgentFeed, type AgentActivity } from "../lib/agentFeed";
 
 export default function AgentResultView({ onOpenMcpSettings }: { onOpenMcpSettings?: () => void }) {
   const { feed, latest } = useAgentFeed();
   const [selected, setSelected] = useState<AgentActivity | null>(latest);
 
+  // Only auto-follow the stream while the user is already on the newest result; if they
+  // clicked back to an older one, don't yank it out from under them mid-read.
+  const following = !selected || selected.id === latest?.id;
   useEffect(() => {
-    if (latest) setSelected(latest);
-  }, [latest]);
+    if (latest && following) setSelected(latest);
+  }, [latest, following]);
 
   return (
     <>
       {/* Live result the agent just queried — visible right here in the app. */}
       <h3>Agent result</h3>
-      {selected?.result ? (
+      {!following && latest && (
+        <button className="btn small" onClick={() => setSelected(latest)}>
+          Jump to latest
+        </button>
+      )}
+      {selected?.rowsDropped ? (
+        <div className="muted">result no longer cached — re-run to view</div>
+      ) : selected?.result ? (
         <div className="mcp-result">
           <div className="mcp-result-head">
             {selected.sql ? <code className="mcp-result-sql">{selected.sql}</code> : <span className="muted">{selected.tool}</span>}
             <span className="muted">
               {selected.connection ? `${selected.connection} · ` : ""}
-              {selected.result.rowCount} rows{selected.result.truncated ? " (truncated)" : ""} · {selected.ts}
+              {selected.result.rowCount} rows{selected.result.truncated ? " (truncated)" : ""} ·{" "}
+              <span title={fullTime(selected.iso)}>{selected.ts}</span>
             </span>
             <ResultToolbar
               columns={selected.result.columns}
@@ -79,10 +91,10 @@ export default function AgentResultView({ onOpenMcpSettings }: { onOpenMcpSettin
                 : {})}
               onClick={() => a.result && setSelected(a)}
             >
-              <span className="act-ts">{a.ts}</span>
+              <span className="act-ts" title={fullTime(a.iso)}>{a.ts}</span>
               <span className="act-tool">{a.tool}</span>
               <span className="act-kind">{a.kind === "call" ? "→" : "✓"}</span>
-              <span className="act-detail">{a.detail}</span>
+              <span className="act-detail" title={a.detail}>{a.detail}</span>
             </li>
           ))}
         </ul>

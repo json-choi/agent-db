@@ -33,6 +33,7 @@ fn fail_safe(note: impl Into<String>) -> Classification {
         no_where: false,
         tables: Vec::new(),
         notes: vec![note.into()],
+        rollback_safe: false,
     }
 }
 
@@ -70,6 +71,7 @@ pub fn classify(sql: &str, engine: Engine) -> AppResult<Classification> {
                 "{} statements found — only single statements are allowed",
                 statements.len()
             )],
+            rollback_safe: false,
         });
     }
 
@@ -101,6 +103,7 @@ pub fn classify(sql: &str, engine: Engine) -> AppResult<Classification> {
         no_where,
         tables,
         notes,
+        rollback_safe: matches!(kind, QueryKind::Write),
     })
 }
 

@@ -3,6 +3,7 @@
 // and hands the SQL up via onSubmit — the parent routes it through ApprovalCard so the
 // safety pipeline (classify/preview/approve/audit) applies. Never executes directly.
 import { useState } from "react";
+import { Icon } from "./Icon";
 import type { CatalogTable, Engine } from "../ipc/types";
 import { buildInsert, buildUpdate, isNumericType, pkColumns } from "../lib/sqlBuild";
 import "./grid.css";
@@ -71,8 +72,8 @@ export default function RowEditor({
     >
       <div className="panel-head">
         <strong>{title}</strong>
-        <button className="btn small" onClick={onCancel}>
-          ✕
+        <button className="btn small" onClick={onCancel} aria-label="Close">
+          <Icon name="close" />
         </button>
       </div>
       <div className="row-fields">

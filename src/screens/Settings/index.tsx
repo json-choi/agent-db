@@ -1,6 +1,6 @@
 // Settings menu — houses everything that isn't a data view: the MCP server config and
 // per-connection safety. Moved out of the top tab bar so tabs stay data-focused.
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ConnectionProfile } from "../../ipc/types";
 import Mcp from "../Mcp";
 import Safety from "../Safety";
@@ -31,6 +31,22 @@ export default function Settings({
     refreshSafety();
     onClose();
   }
+
+  // Esc closes the overlay, matching Migrations/RowEditor. Ref keeps the handler
+  // pinned to the latest close() (refreshSafety side-effect) without re-binding.
+  const closeRef = useRef(close);
+  closeRef.current = close;
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      // Don't hijack Escape while a field has focus — close() reloads Safety and would
+      // discard unsaved edits. Let the input's own Escape (blur/revert) win instead.
+      if ((e.target as HTMLElement)?.closest("input, textarea, select")) return;
+      closeRef.current();
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, []);
 
   return (
     <div className="settings">

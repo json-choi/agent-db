@@ -1,23 +1,37 @@
 // Append-only, hash-chained audit log viewer. Shows each transition and its chain
-// link (prevHash → hash) so tampering is visible.
+// link (prevHash → hash); the chain is verified server-side (real SHA-256 recompute).
 import { useEffect, useState } from "react";
-import { listAudit } from "../../ipc/commands";
+import { listAudit, auditVerify } from "../../ipc/commands";
 import type { AuditEntry } from "../../ipc/types";
 import { errMessage } from "../../ipc/types";
+import { Icon } from "../../components/Icon";
+import { relTime, fullTime } from "../../lib/relTime";
 
 function short(h: string | null): string {
   if (!h) return "∅";
   return h.length > 12 ? `${h.slice(0, 12)}…` : h;
 }
 
+type ChainVerdict = { ok: boolean; firstBadIndex: number | null };
+
 export default function Audit({ connectionId }: { connectionId: string }) {
   const [entries, setEntries] = useState<AuditEntry[]>([]);
+  const [verdict, setVerdict] = useState<ChainVerdict | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   function refresh() {
-    listAudit(connectionId)
-      .then(setEntries)
-      .catch((e) => setMsg(errMessage(e)));
+    setLoading(true);
+    // Fetch the log and its verification together so the verdict matches the rows shown.
+    // Verification runs on the backend (rowid order + hash recompute) — a client link-only
+    // check would mis-order same-timestamp rows and miss in-place field edits.
+    Promise.all([listAudit(connectionId), auditVerify(connectionId)])
+      .then(([es, v]) => {
+        setEntries(es);
+        setVerdict(v);
+      })
+      .catch((e) => setMsg(errMessage(e)))
+      .finally(() => setLoading(false));
   }
 
   useEffect(() => {
@@ -25,6 +39,15 @@ export default function Audit({ connectionId }: { connectionId: string }) {
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connectionId]);
+
+  // firstBadIndex is an insertion-order (oldest-first) position; entries are newest-first.
+  const tamperedId =
+    verdict && !verdict.ok && verdict.firstBadIndex != null
+      ? entries[entries.length - 1 - verdict.firstBadIndex]?.id ?? null
+      : null;
+  const tamperedTs = tamperedId
+    ? entries.find((e) => e.id === tamperedId)?.ts
+    : null;
 
   return (
     <div className="screen audit">
@@ -34,22 +57,47 @@ export default function Audit({ connectionId }: { connectionId: string }) {
         </button>
       </div>
       {msg && <div className="error">{msg}</div>}
-      {entries.length === 0 && !msg && (
+      {loading && <div className="muted loading">Loading…</div>}
+      {!loading && entries.length === 0 && !msg && (
         <div className="muted empty">No audit records yet.</div>
       )}
+      {entries.length > 0 &&
+        verdict &&
+        (verdict.ok ? (
+          <div className="chain-verdict ok">
+            <Icon name="check" /> Chain verified · {entries.length} entries
+          </div>
+        ) : (
+          <div className="chain-verdict bad">
+            <Icon name="alert" /> Chain broken
+            {tamperedTs ? ` at ${relTime(tamperedTs)}` : ""}
+          </div>
+        ))}
       <ul className="audit-list">
         {entries.map((e) => (
-          <li key={e.id} className="audit-row">
+          <li
+            key={e.id}
+            className={`audit-row${e.id === tamperedId ? " tampered" : ""}`}
+          >
             <div className="audit-top">
               <span className={`badge action action-${e.action}`}>
                 {e.action}
               </span>
               <span className="badge kind">{e.kind}</span>
-              <span className="muted">{new Date(e.ts).toLocaleString()}</span>
+              <span className="muted" title={fullTime(e.ts)}>
+                {relTime(e.ts)}
+              </span>
               {e.approvedBy && (
                 <span className="muted">by {e.approvedBy}</span>
               )}
             </div>
+            {e.agentPrompt && (
+              <div className="audit-prompt muted" title={e.agentPrompt}>
+                “{e.agentPrompt.length > 120
+                  ? `${e.agentPrompt.slice(0, 120)}…`
+                  : e.agentPrompt}”
+              </div>
+            )}
             <code className="audit-sql">{e.sql}</code>
             {e.error && <div className="error">{e.error}</div>}
             <div className="audit-chain muted">

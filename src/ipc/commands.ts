@@ -121,6 +121,13 @@ export function listAudit(id: string): Promise<AuditEntry[]> {
   return invoke("list_audit", { id });
 }
 
+// Backend hash-chain verification (rowid order + real SHA-256 recompute). Authoritative —
+// a client-side link-only check can't detect an in-place field edit. firstBadIndex is the
+// insertion-order (oldest-first) position of the first tampered row, or null when ok.
+export function auditVerify(id: string): Promise<{ ok: boolean; firstBadIndex: number | null }> {
+  return invoke("audit_verify", { connectionId: id });
+}
+
 export function listHistory(id: string): Promise<HistoryEntry[]> {
   return invoke("list_history", { id });
 }

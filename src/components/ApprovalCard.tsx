@@ -21,6 +21,7 @@ import type {
   SafetySettings,
 } from "../ipc/types";
 import { errMessage } from "../ipc/types";
+import { Icon } from "./Icon";
 import SqlViewer from "./SqlViewer";
 
 const ENGINE_LABEL: Record<Engine, string> = {
@@ -61,6 +62,8 @@ export default function ApprovalCard({
   // mirrors the flag so execute()'s catch sees it without a stale closure.
   const queryId = useRef<string | null>(null);
   const cancelledRef = useRef(false);
+  // Elapsed seconds while a query runs, so a slow query reads differently from a hung one.
+  const [elapsed, setElapsed] = useState(0);
 
   // L1 + L3 whenever the statement changes.
   useEffect(() => {
@@ -123,6 +126,16 @@ export default function ApprovalCard({
     }
   }
 
+  // Tick the elapsed counter while busy; reset+clear when done or unmounted.
+  useEffect(() => {
+    if (!busy) {
+      setElapsed(0);
+      return;
+    }
+    const t = setInterval(() => setElapsed((s) => s + 1), 1000);
+    return () => clearInterval(t);
+  }, [busy]);
+
   // Auto-run reads (per settings) exactly once, after classification lands.
   useEffect(() => {
     if (canAutoRun && decided === null && !busy) {
@@ -178,6 +191,16 @@ export default function ApprovalCard({
         <span className="label">Impact preview</span>
         {!preview ? (
           <span className="muted"> estimating…</span>
+        ) : isWrite && !writesBlocked && previewN === null ? (
+          // A runnable write with NO row estimate (skipped over threshold, or an EXPLAIN
+          // that yielded no count) means approving a destructive statement blind — surface
+          // it. Not for writes-disabled (can't run) or reads (a null estimate is benign).
+          <span className="impact-warn">
+            {" "}
+            <Icon name="alert" /> Impact could not be estimated — affected row
+            count unknown
+            {preview.note && <em className="muted"> — {preview.note}</em>}
+          </span>
         ) : (
           <span>
             {" "}
@@ -216,10 +239,19 @@ export default function ApprovalCard({
       {decided === "approved" ? (
         <div className="muted">Executed.</div>
       ) : decided === "rejected" ? (
-        <div className="muted">Rejected.</div>
+        // Not a dead-end: keep the statement visible above and let the user undo the
+        // rejection to approve it, rather than forcing a re-issue.
+        <div className="approval-actions">
+          <span className="muted">Rejected.</span>
+          <button className="btn" onClick={() => setDecided(null)}>
+            Reconsider
+          </button>
+        </div>
       ) : busy ? (
         <div className="approval-actions">
-          <span className="muted">{canAutoRun ? "Read-only — running…" : "Running…"}</span>
+          <span className="muted">
+            {canAutoRun ? "Read-only — running…" : "Running…"} {elapsed}s
+          </span>
           <button className="btn" onClick={cancel}>
             Cancel
           </button>

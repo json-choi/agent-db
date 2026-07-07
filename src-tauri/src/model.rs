@@ -106,6 +106,13 @@ pub struct Classification {
     pub no_where: bool,
     pub tables: Vec<String>,
     pub notes: Vec<String>,
+    /// True ONLY for exactly one cleanly-parsed top-level INSERT/UPDATE/DELETE —
+    /// i.e. a statement the L3 execute+ROLLBACK preview can undo. DDL/utility
+    /// statements implicit-commit (RENAME/OPTIMIZE/LOAD DATA…), so ROLLBACK is a
+    /// no-op and the preview would take permanent effect BEFORE L4 approval.
+    /// Fail-safe/parse-error/multi-statement writes are false. Gates l3_preview.
+    #[serde(default)]
+    pub rollback_safe: bool,
 }
 
 /// How an impact preview was produced (L3).

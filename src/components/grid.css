@@ -41,6 +41,13 @@ table.grid tbody td.rownum {
   background: var(--panel-2);
 }
 
+/* Offscreen body rows skip layout/paint — big win on large result sets, no windowing.
+   contain-intrinsic-size reserves each row's height so the scrollbar stays stable. */
+table.grid tbody tr {
+  content-visibility: auto;
+  contain-intrinsic-size: 0 27px;
+}
+
 /* Zebra / hover / selected — later rule wins at equal specificity, so order matters. */
 table.grid tbody td {
   background: var(--panel);

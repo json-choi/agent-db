@@ -60,6 +60,24 @@ pub async fn preview(
             let (estimated_rows, plan) = explain(pool, sql).await;
             let side_effect = side_effect_note(sql);
 
+            // Only a plain INSERT/UPDATE/DELETE rolls back cleanly. DDL/utility
+            // (RENAME/OPTIMIZE/LOAD DATA…), multi-statement, and fail-safe/parse-error
+            // writes implicit-commit or can't be trusted — running exec_rollback on them
+            // would take PERMANENT effect before L4 approval. Estimate-only for those.
+            if !classification.rollback_safe {
+                return Ok(PreviewReport {
+                    mode: PreviewMode::Skipped,
+                    estimated_rows,
+                    exact_rows: None,
+                    plan,
+                    note: Some(
+                        "impact preview skipped — statement is not a plain \
+                         INSERT/UPDATE/DELETE (would not roll back safely)"
+                            .into(),
+                    ),
+                });
+            }
+
             // Gate: over the threshold → estimate only, don't lock rows.
             if let Some(est) = estimated_rows {
                 if est > settings.exec_preview_row_limit {
@@ -253,5 +271,26 @@ mod tests {
     fn returning_is_flagged() {
         assert!(side_effect_note("delete from t where id=1 returning *").is_some());
         assert!(side_effect_note("delete from t where id=1").is_none());
+    }
+
+    // The execute+ROLLBACK branch runs ONLY for a rollback_safe write. A DDL and a
+    // fail-safe/parse-error write both classify Write but rollback_safe=false, so L3
+    // must estimate-only (Skipped), never ExecRollback (which would commit before L4).
+    #[test]
+    fn non_rollback_safe_write_is_skipped_not_execrollback() {
+        use crate::model::Engine;
+        use crate::safety::classify;
+
+        for sql in ["RENAME TABLE a TO b", "OPTIMIZE TABLE t", "this is not sql"] {
+            let c = classify(sql, Engine::Mysql).unwrap();
+            assert_eq!(c.kind, QueryKind::Write, "{sql} classifies as write");
+            assert!(!c.rollback_safe, "{sql} must not be rollback-safe");
+            // rollback_safe=false is exactly the guard that forces Skipped in preview().
+        }
+
+        // A plain UPDATE is the only shape that reaches the ExecRollback path.
+        let ok = classify("UPDATE t SET x=1 WHERE id=1", Engine::Mysql).unwrap();
+        assert_eq!(ok.kind, QueryKind::Write);
+        assert!(ok.rollback_safe);
     }
 }

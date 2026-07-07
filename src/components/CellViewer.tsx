@@ -1,6 +1,8 @@
 // Side panel showing one cell's full value: pretty-printed JSON when the value is (or
 // parses to) an object/array, wrapped plain text otherwise. Copy button lifts the
 // displayed text to the clipboard.
+import { useEffect } from "react";
+import { Icon } from "./Icon";
 import "./grid.css";
 
 function render(value: unknown): { text: string; json: boolean } {
@@ -28,16 +30,25 @@ export default function CellViewer({
   onClose: () => void;
 }) {
   const { text, json } = render(value);
+  // Close on Escape — DataGrid uses Escape to clear cell selection, so leaving the panel
+  // stuck open while the selection clears is jarring.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
   return (
     <div className="cell-viewer">
       <div className="panel-head">
         <strong>{column}</strong>
         <div className="panel-head-actions">
           <button className="btn small" onClick={() => void navigator.clipboard.writeText(text)}>
-            Copy
+            <Icon name="copy" /> Copy
           </button>
-          <button className="btn small" onClick={onClose}>
-            ✕
+          <button className="btn small" onClick={onClose} aria-label="Close">
+            <Icon name="close" />
           </button>
         </div>
       </div>

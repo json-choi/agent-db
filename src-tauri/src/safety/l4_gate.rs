@@ -87,6 +87,7 @@ mod tests {
             no_where: false,
             tables: vec!["orders".into()],
             notes: vec![],
+            rollback_safe: matches!(kind, QueryKind::Write),
         }
     }
 

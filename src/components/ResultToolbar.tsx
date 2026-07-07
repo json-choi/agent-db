@@ -8,10 +8,14 @@ export default function ResultToolbar({
   columns,
   rows,
   filenameBase,
+  scopeLabel,
 }: {
   columns: string[];
   rows: unknown[][];
   filenameBase: string;
+  // Optional on-surface scope for page-limited exports (e.g. "page"). Default keeps
+  // the bare "CSV"/"JSON" labels so existing callers (Sql, Agent) are unchanged.
+  scopeLabel?: string;
 }) {
   const toast = useToast();
   return (
@@ -33,14 +37,14 @@ export default function ResultToolbar({
         title="Download as CSV (opens in Excel)"
         onClick={() => downloadCsv(filenameBase, columns, rows)}
       >
-        CSV
+        {scopeLabel ? `Export ${scopeLabel} (CSV)` : "CSV"}
       </button>
       <button
         className="btn small"
         title="Download as JSON"
         onClick={() => downloadJson(filenameBase, columns, rows)}
       >
-        JSON
+        {scopeLabel ? `Export ${scopeLabel} (JSON)` : "JSON"}
       </button>
     </span>
   );
