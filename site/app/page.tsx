@@ -68,6 +68,8 @@ const jsonLd = {
   name: "dopedb",
   applicationCategory: "DeveloperApplication",
   operatingSystem: "macOS",
+  description:
+    "dopedb is a local-first AI database client for coding agents. Agents draft SQL while credentials, write approvals, rollback previews, and audit logs stay in a native macOS app.",
   url: siteUrl,
   downloadUrl: releasesUrl,
   codeRepository: repoUrl,
@@ -110,10 +112,16 @@ export default function Home() {
             <Sparkles size={15} />
             Open-source local AI database client
           </p>
-          <h1>dopedb</h1>
+          <h1>
+            dopedb
+            <span className="hero-title-tag">
+              The AI database client for coding agents
+            </span>
+          </h1>
           <p className="hero-text">
-            Talk to your database through an AI agent. Keep credentials, write approvals,
-            rollback previews, and audit logs inside a native macOS app.
+            dopedb is a local-first AI database client: talk to your database through an
+            AI agent while credentials, write approvals, rollback previews, and audit logs
+            stay inside a native macOS app.
           </p>
           <div className="hero-actions" aria-label="Primary actions">
             <a className="button primary" href={releasesUrl}>

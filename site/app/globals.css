@@ -176,6 +176,15 @@ h1 {
   font-weight: 860;
 }
 
+.hero-title-tag {
+  display: block;
+  margin-top: 20px;
+  font-size: clamp(20px, 2.6vw, 34px);
+  line-height: 1.15;
+  font-weight: 720;
+  color: var(--ink-soft);
+}
+
 h2 {
   max-width: 820px;
   font-size: clamp(34px, 5vw, 70px);
