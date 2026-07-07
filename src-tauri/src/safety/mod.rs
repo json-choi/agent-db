@@ -1,4 +1,4 @@
-//! The 4-layer safety engine (ARCHITECTURE §4).
+//! The 4-layer safety engine.
 //!
 //! Governing principle: **L1 is a UX pre-filter; L2 (the database's own
 //! read-only session) is the authoritative security boundary.** A parser cannot

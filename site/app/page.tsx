@@ -17,6 +17,7 @@ import {
 
 const repoUrl = "https://github.com/json-choi/dopedb";
 const releasesUrl = `${repoUrl}/releases/latest`;
+const siteUrl = "https://dopedb.dev";
 
 const principles = [
   {
@@ -45,25 +46,47 @@ const workflow = [
 
 const docs = [
   {
-    title: "Architecture",
-    href: `${repoUrl}/blob/main/ARCHITECTURE.md`,
-    body: "Native app, agent bridge, safety layers, and audit pipeline.",
+    title: "Project guide",
+    href: `${repoUrl}/blob/main/docs/PROJECT.md`,
+    body: "Architecture, release flow, safety model, and maintainer notes.",
   },
   {
-    title: "Build from source",
-    href: `${repoUrl}/blob/main/BUILD.md`,
-    body: "Tauri, Vite, Rust core, and MCP bridge packaging notes.",
+    title: "English README",
+    href: `${repoUrl}/blob/main/README.en.md`,
+    body: "Install, develop, release, and update details in English.",
   },
   {
-    title: "Roadmap",
-    href: `${repoUrl}/blob/main/ROADMAP.md`,
-    body: "Prototype, MVP, and v1 milestones for the open-source project.",
+    title: "Releases",
+    href: releasesUrl,
+    body: "Latest macOS downloads and updater metadata.",
   },
 ];
+
+const jsonLd = {
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  name: "dopedb",
+  applicationCategory: "DeveloperApplication",
+  operatingSystem: "macOS",
+  url: siteUrl,
+  downloadUrl: releasesUrl,
+  codeRepository: repoUrl,
+  image: `${siteUrl}/dopedb-dashboard.png`,
+  license: `${repoUrl}/blob/main/LICENSE`,
+  offers: {
+    "@type": "Offer",
+    price: "0",
+    priceCurrency: "USD",
+  },
+};
 
 export default function Home() {
   return (
     <main>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+      />
       <header className="topbar">
         <a className="brand" href="#top" aria-label="dopedb home">
           <span className="brand-mark" aria-hidden="true">
@@ -218,7 +241,7 @@ dopedb safety:
             <Download size={18} />
             Latest release
           </a>
-          <a className="button secondary" href={`${repoUrl}/blob/main/BUILD.md`}>
+          <a className="button secondary" href={`${repoUrl}/blob/main/docs/PROJECT.md#development`}>
             <TerminalSquare size={18} />
             Build from source
           </a>

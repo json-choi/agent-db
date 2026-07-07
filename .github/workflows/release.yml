@@ -14,24 +14,27 @@ jobs:
   publish-tauri:
     permissions:
       contents: write
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest
+          - platform: macos-15
             target: aarch64-apple-darwin
             args: --target aarch64-apple-darwin
-          - platform: macos-latest
+          - platform: macos-15
             target: x86_64-apple-darwin
             args: --target x86_64-apple-darwin
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Setup pnpm
         run: |

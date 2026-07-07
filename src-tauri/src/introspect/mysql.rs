@@ -1,5 +1,5 @@
 //! MySQL/MariaDB introspection via `information_schema`. On PlanetScale/Vitess
-//! FK metadata is unreliable (sharded), so `skip_fk` drops it (ARCHITECTURE §5.2).
+//! FK metadata is unreliable (sharded), so `skip_fk` drops it.
 
 use std::collections::HashMap;
 

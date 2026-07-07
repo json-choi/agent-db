@@ -1,4 +1,4 @@
-//! L4 — human approval gate (ARCHITECTURE §4.5).
+//! L4 — human approval gate.
 //!
 //! Produces a [`GateDecision`] the command layer enforces:
 //! - read-only SELECT + `auto_run_reads` → [`GateDecision::AutoRun`];

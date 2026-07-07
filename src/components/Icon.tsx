@@ -3,9 +3,9 @@
 // sort carets are the exception: small filled triangles (fill=currentColor, no stroke).
 // Icons are decorative (aria-hidden) — the enclosing button carries the aria-label.
 // Sized in `em` and colored via currentColor, so each icon inherits the text it sits in.
-import type { SVGProps } from "react";
+import type { ReactNode, SVGProps } from "react";
 
-const glyphs: Record<string, JSX.Element> = {
+const glyphs = {
   close: <path d="M18 6 6 18M6 6l12 12" />,
   refresh: <path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6" />,
   gear: (
@@ -55,7 +55,7 @@ const glyphs: Record<string, JSX.Element> = {
   check: <path d="M20 6 9 17l-5-5" />,
   play: <path d="M5 3l14 9-14 9V3z" />,
   download: <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />,
-};
+} satisfies Record<string, ReactNode>;
 
 export type IconName = keyof typeof glyphs;
 

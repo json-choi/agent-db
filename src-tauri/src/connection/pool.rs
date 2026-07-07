@@ -1,7 +1,7 @@
 //! Live connection pools. Each [`LiveConnection`] holds TWO pools: a normal
 //! read/write pool and a SEPARATE read-only pool. The read-only pool is the first
 //! line of L2 enforcement at the connection level — but the authoritative boundary
-//! remains the per-request read-only transaction the executor opens (ARCHITECTURE §4.3):
+//! remains the per-request read-only transaction the executor opens:
 //!   - Postgres: `after_connect` sets `default_transaction_read_only = on`.
 //!   - MySQL:    `after_connect` sets `SESSION transaction_read_only = 1`.
 //!   - SQLite:   a second handle opened `read_only(true)` (file-level, unforgeable).
@@ -170,7 +170,7 @@ pub async fn connect(profile: &ConnectionProfile, secret: &str) -> AppResult<Liv
                 .connect_with(rw_opts)
                 .await?;
 
-            // Unforgeable file-level read-only handle (ARCHITECTURE §4.3).
+            // Unforgeable file-level read-only handle.
             let ro_opts = SqliteConnectOptions::new().filename(path).read_only(true);
             let ro = SqlitePoolOptions::new()
                 .max_connections(MAX_CONNS)

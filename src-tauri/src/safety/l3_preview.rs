@@ -1,4 +1,4 @@
-//! L3 — dry-run / impact preview (ARCHITECTURE §4.4).
+//! L3 — dry-run / impact preview.
 //!
 //! - **Reads:** `EXPLAIN` only, never executed. Parse the row estimate + plan.
 //! - **Writes:** first take the `EXPLAIN` estimate; if it exceeds

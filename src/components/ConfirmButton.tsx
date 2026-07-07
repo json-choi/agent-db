@@ -16,7 +16,7 @@ export default function ConfirmButton({
   confirmLabel?: string;
 }) {
   const [armed, setArmed] = useState(false);
-  const timer = useRef<number>();
+  const timer = useRef<number | undefined>(undefined);
 
   useEffect(() => () => window.clearTimeout(timer.current), []);
 

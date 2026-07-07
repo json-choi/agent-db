@@ -1,4 +1,4 @@
-//! DDL for the local app.db (see ARCHITECTURE §5.3). Idempotent
+//! DDL for the local app.db. Idempotent
 //! `CREATE TABLE IF NOT EXISTS` so `Store::open` can run it on every start.
 //! Secrets never live here — connections hold only a `secret_ref` (Keychain id).
 

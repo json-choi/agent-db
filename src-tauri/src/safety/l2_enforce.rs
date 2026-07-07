@@ -5,7 +5,7 @@
 //! it (writable CTE, side-effecting function, dialect quirk). When the DB rejects
 //! a write, we surface a typed [`AppError::Blocked`] — never a generic DB error.
 //!
-//! Per engine (ARCHITECTURE §4.3):
+//! Per engine:
 //! - **PostgreSQL:** `BEGIN; SET TRANSACTION READ ONLY; SET LOCAL statement_timeout`
 //!   → a write raises SQLSTATE `25006`.
 //! - **MySQL:** `SET SESSION max_execution_time; START TRANSACTION READ ONLY`

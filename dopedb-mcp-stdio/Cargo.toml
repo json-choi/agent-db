@@ -1,8 +1,9 @@
 [package]
 name = "dopedb-mcp-stdio"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "stdio<->TCP bridge so stdio-only MCP clients (Claude Desktop) reach the running dopedb app"
+license = "MIT"
 
 [[bin]]
 name = "dopedb-mcp-stdio"
@@ -11,4 +12,4 @@ path = "src/main.rs"
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "net"] }
 serde_json = "1"
-dirs = "5"
+dirs = "6"

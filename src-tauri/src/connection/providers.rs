@@ -1,5 +1,4 @@
-//! Per-provider connection-string normalization and the gotchas from
-//! ARCHITECTURE §5.2. We do NOT bundle any external CA files — a custom CA can be
+//! Per-provider connection-string normalization. We do NOT bundle any external CA files — a custom CA can be
 //! supplied per connection via `extra_params["sslrootcert"]` (documented, not shipped).
 
 use std::time::Duration;
@@ -41,7 +40,7 @@ pub fn detect(p: &ConnectionProfile) -> Provider {
 }
 
 /// PlanetScale/Vitess is sharded — its FK metadata in `information_schema` is
-/// unreliable, so introspection skips it (ARCHITECTURE §5.2, §7.7).
+/// unreliable, so introspection skips it.
 pub fn skip_fk_metadata(p: &ConnectionProfile) -> bool {
     matches!(detect(p), Provider::PlanetScaleMysql)
 }
