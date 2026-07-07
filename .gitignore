@@ -9,3 +9,5 @@ src-tauri/target
 *.db
 src-tauri/binaries/
 src-tauri/gen/
+.vercel
+.env*.local

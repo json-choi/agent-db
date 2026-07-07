@@ -1,0 +1,16 @@
+.git
+.github
+.vercel
+.env.local
+.env*.local
+node_modules
+site/node_modules
+dist
+site/.next
+target
+src-tauri/target
+dopedb-mcp-stdio/target
+src-tauri/binaries
+src-tauri/gen
+*.db
+.DS_Store
