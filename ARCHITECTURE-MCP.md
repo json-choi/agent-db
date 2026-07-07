@@ -1,4 +1,4 @@
-# agent-db — MCP Pivot Architecture (ARCHITECTURE-MCP.md)
+# dopedb — MCP Pivot Architecture (ARCHITECTURE-MCP.md)
 
 > Status: authoritative pivot design. Date: 2026-07-01. Author: lead architect.
 > Supersedes ARCHITECTURE.md §1, §3 (agent bridge), and the "Ask panel" UI. §4 (safety L1–L4), §5 (data/connectivity), §6 (stack, minus the CLI/subprocess rows), and §7 remain in force and are **reused wholesale** behind the MCP tools.
@@ -8,7 +8,7 @@
 
 ## 1. Product concept
 
-agent-db stops being a chat client and becomes a **local MCP server with a live visualizer**. The conversation moves out to whatever platform the user already pays for — Claude Desktop, Claude Code, ChatGPT/Codex, Cursor, Windsurf, VS Code Copilot — and that external agent drives the database by calling agent-db's MCP tools (list schemas, browse rows, run read queries, explain, and propose gated writes). The **desktop app owns everything that must not leave the machine**: the connection pools, the Keychain-held credentials, the L1–L4 safety pipeline, and the hash-chained audit log. Its window becomes a real-time control surface — an activity feed of incoming tool calls, the schema/tables/rows the agent is touching, query results as they stream, and the approval card a human must click before any write executes. The agent proposes from outside; agent-db decides, executes, and shows, from inside. No LLM is ever billed by agent-db, and no write ever happens without an in-app human click.
+dopedb stops being a chat client and becomes a **local MCP server with a live visualizer**. The conversation moves out to whatever platform the user already pays for — Claude Desktop, Claude Code, ChatGPT/Codex, Cursor, Windsurf, VS Code Copilot — and that external agent drives the database by calling dopedb's MCP tools (list schemas, browse rows, run read queries, explain, and propose gated writes). The **desktop app owns everything that must not leave the machine**: the connection pools, the Keychain-held credentials, the L1–L4 safety pipeline, and the hash-chained audit log. Its window becomes a real-time control surface — an activity feed of incoming tool calls, the schema/tables/rows the agent is touching, query results as they stream, and the approval card a human must click before any write executes. The agent proposes from outside; dopedb decides, executes, and shows, from inside. No LLM is ever billed by dopedb, and no write ever happens without an in-app human click.
 
 ---
 
@@ -26,14 +26,14 @@ Why not stdio as the primary: a stdio MCP server is *spawned by the client as a 
 
 | Platform | Direct localhost HTTP? | Config the app generates |
 |---|---|---|
-| **Cursor** | ✅ works today | `~/.cursor/mcp.json` → `mcpServers.agentdb.url` + `headers.Authorization` |
-| **VS Code (Copilot)** | ✅ works today | `.vscode/mcp.json` → `servers.agentdb` with **`"type":"http"` (required)** or it execs the URL as stdio |
+| **Cursor** | ✅ works today | `~/.cursor/mcp.json` → `mcpServers.dopedb.url` + `headers.Authorization` |
+| **VS Code (Copilot)** | ✅ works today | `.vscode/mcp.json` → `servers.dopedb` with **`"type":"http"` (required)** or it execs the URL as stdio |
 | **Windsurf (Cascade)** | ✅ works today | `~/.codeium/windsurf/mcp_config.json` → `serverUrl` (note: **not** `url`) |
-| **Claude Code** (`claude mcp`) | ✅ works today | `claude mcp add --transport http agentdb http://127.0.0.1:7686/mcp` |
-| **Codex CLI** (`codex mcp`) | ⚠️ works but flaky (openai/codex #11284, #15609) | `~/.codex/config.toml` `[mcp_servers.agentdb]` `url=` + `bearer_token_env_var=`; **keep bridge fallback** |
+| **Claude Code** (`claude mcp`) | ✅ works today | `claude mcp add --transport http dopedb http://127.0.0.1:7686/mcp` |
+| **Codex CLI** (`codex mcp`) | ⚠️ works but flaky (openai/codex #11284, #15609) | `~/.codex/config.toml` `[mcp_servers.dopedb]` `url=` + `bearer_token_env_var=`; **keep bridge fallback** |
 | **Claude Desktop** | ❌ **cannot** — remote connectors are cloud-brokered from Anthropic's infra, so `127.0.0.1` is unreachable and would force a public endpoint + OAuth 2.1 | **stdio bridge only** in `claude_desktop_config.json` |
 
-**Claude Desktop is the decisive constraint.** It is the highest-value platform and it cannot dial localhost. Its only local path is stdio: the client spawns our bridge binary, the bridge reads the running app's port+token from `~/Library/Application Support/agent-db/mcp.json`, connects to `127.0.0.1:7686`, and pumps bytes. **The GUI must be running or the bridge dead-ends** — surfaced as an onboarding requirement. Bridge config must use an **absolute path** to the binary (GUI-spawned children get a minimal PATH; `npx`/short commands break).
+**Claude Desktop is the decisive constraint.** It is the highest-value platform and it cannot dial localhost. Its only local path is stdio: the client spawns our bridge binary, the bridge reads the running app's port+token from `~/Library/Application Support/dopedb/mcp.json`, connects to `127.0.0.1:7686`, and pumps bytes. **The GUI must be running or the bridge dead-ends** — surfaced as an onboarding requirement. Bridge config must use an **absolute path** to the binary (GUI-spawned children get a minimal PATH; `npx`/short commands break).
 
 **Bridge implementation (decisive, ~30 lines, zero MCP logic):** the app *also* exposes the same `DbTools` over a line-framed local TCP listener; stdio MCP framing equals that stream framing, so the bridge binary is a byte pump — `tokio::io::copy_bidirectional(stdin/stdout ↔ TcpStream)`. We do **not** reimplement MCP in the bridge, and we do **not** depend on Node/`mcp-remote`.
 
@@ -49,7 +49,7 @@ Why not stdio as the primary: a stdio MCP server is *spawned by the client as a 
         │  └─ stdio → bridge binary → 127.0.0.1 TCP           (*Claude Desktop only)
         ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  agent-db  (Tauri v2 Rust core, one tokio runtime)                           │
+│  dopedb  (Tauri v2 Rust core, one tokio runtime)                           │
 │                                                                              │
 │  ┌────────────────────────────────────────────────────────────────────┐     │
 │  │  mcp module  (NEW)                                                   │     │
@@ -184,7 +184,7 @@ The DB session (L2) and the human gate (L4) remain the authoritative boundaries;
 - **(b) Reactive data views (KEPT, now MCP-driven):** the existing schema tree + TanStack row grid + Results view, driven by `agent.tool_call`/`agent.result` over the existing `ipc::Channel<T>`. When the agent reads `users`, the app highlights that table and streams results into Results live. Zero new view code.
 - **(c) Approval surface (KEPT `ApprovalCard.tsx`, now agent-triggered):** SQL + plain-English restatement + risk badge + preview-N, raised by `run_write`, with Approve/Reject wired to `resolve_approval`. Reject → tool returns `denied`.
 - **(d) MCP status / onboarding panel (new):** `Server: ON · 127.0.0.1:7686 · 1 client`, kill switch, token (reveal/copy/rotate), and **per-platform copy-paste snippets** with the real port/token filled in (including the Claude Desktop stdio-bridge block with the absolute binary path).
-- **(e) KEPT for direct human use:** the Data / SQL / Results / Audit / Safety tabs and the connection manager — unchanged. agent-db is still a usable manual DB client with the agent switched off.
+- **(e) KEPT for direct human use:** the Data / SQL / Results / Audit / Safety tabs and the connection manager — unchanged. dopedb is still a usable manual DB client with the agent switched off.
 
 ---
 
@@ -206,8 +206,8 @@ The DB session (L2) and the human gate (L4) remain the authoritative boundaries;
 - `src-tauri/src/mcp/` — `mod.rs` (`serve_mcp(app, state, port)`: `StreamableHttpService` + axum `/mcp` + the line-framed TCP listener for the bridge; origin/token middleware; graceful shutdown via `CancellationToken`), `tools.rs` (`DbTools{app,state}` + `#[tool]` handlers calling the kept modules), `approval.rs` (`Decision`, timeout), `events.rs` (event constants + emit helpers), `redact.rs` (moved from agent).
 - `state.rs`: `app: OnceCell<AppHandle>` (set in `setup`), `pending: DashMap<Uuid, oneshot::Sender<Decision>>`; drop `agent`.
 - `lib.rs setup`: `state.app.set(handle)`, then `tauri::async_runtime::spawn(serve_mcp(...))` on the existing tokio runtime (no second runtime). Add `resolve_approval`, `mcp_status`, `rotate_token`, `set_server_running` to `generate_handler!`.
-- `store`: persist `mcp_port` (default 7686, ephemeral `:0` fallback on `EADDRINUSE`, read back + persist) and `mcp_token`; write `~/Library/Application Support/agent-db/mcp.json` for the bridge/UI snippets. Extend `audit_log`/`query_history` with `origin='mcp'` + client id.
-- New bridge binary crate `agent-db-mcp-stdio` (~30 lines, `copy_bidirectional`).
+- `store`: persist `mcp_port` (default 7686, ephemeral `:0` fallback on `EADDRINUSE`, read back + persist) and `mcp_token`; write `~/Library/Application Support/dopedb/mcp.json` for the bridge/UI snippets. Extend `audit_log`/`query_history` with `origin='mcp'` + client id.
+- New bridge binary crate `dopedb-mcp-stdio` (~30 lines, `copy_bidirectional`).
 - Frontend: `src/screens/Activity/` (feed), `src/screens/McpStatus/` (status + onboarding snippets), event listeners wiring `agent.*` into the existing grid/results/approval components.
 - `Cargo.toml`: `rmcp` (pinned 1.8.x, `transport-streamable-http-server`), `axum`, `tokio-util`, `dashmap`, `schemars`.
 

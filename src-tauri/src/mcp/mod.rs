@@ -43,10 +43,10 @@ pub const MCP_BRIDGE_PORT: u16 = 7687;
 /// the Claude Desktop config snippet — GUI-spawned children get a minimal PATH, so the
 /// config must reference it by absolute path.
 pub fn bridge_binary_path() -> String {
-    let name = "agent-db-mcp-stdio";
+    let name = "dopedb-mcp-stdio";
     let exe = std::env::current_exe().ok();
     // 1) Packaged .app: the `externalBin` sidecar is copied next to the app binary
-    //    (Contents/MacOS/agent-db-mcp-stdio). Dev: the same sibling under target/debug
+    //    (Contents/MacOS/dopedb-mcp-stdio). Dev: the same sibling under target/debug
     //    (built by the `build:bridge` step). Prefer an existing file.
     if let Some(sib) = exe.as_ref().and_then(|p| p.parent()).map(|d| d.join(name)) {
         if sib.is_file() {
@@ -62,7 +62,7 @@ pub fn bridge_binary_path() -> String {
 pub fn mcp_json_path() -> PathBuf {
     dirs::data_dir()
         .unwrap_or_default()
-        .join("agent-db")
+        .join("dopedb")
         .join("mcp.json")
 }
 

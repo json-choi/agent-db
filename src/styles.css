@@ -812,6 +812,78 @@ h3 {
 .snav:disabled { opacity: 0.5; cursor: default; }
 .settings-body { overflow: auto; padding: var(--pane-pad); min-width: 0; }
 
+/* App updater */
+.updates {
+  max-width: 760px;
+}
+.updates-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+.updates-head p {
+  margin-top: 4px;
+}
+.update-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.update-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 28px;
+}
+.update-state {
+  color: var(--muted);
+}
+.update-available,
+.update-ready {
+  color: var(--risk-low);
+}
+.update-error {
+  color: var(--risk-high);
+}
+.update-progress {
+  display: grid;
+  gap: 6px;
+  margin: 4px 0;
+}
+.bar {
+  width: 100%;
+  height: 8px;
+  overflow: hidden;
+  border-radius: var(--r-full);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+}
+.bar span {
+  display: block;
+  height: 100%;
+  min-width: 12px;
+  border-radius: var(--r-full);
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+.release-notes {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.release-notes summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+.release-notes pre {
+  white-space: pre-wrap;
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--text);
+}
+
 /* Table data pager + wide-cell handling */
 .table-data-head .table-pager {
   margin-left: auto;

@@ -713,7 +713,7 @@ pub fn connect_platform(state: State<'_, AppState>, platform: String) -> AppResu
     .map_err(AppError::Config)
 }
 
-/// One-click disconnect: remove the agentdb entry from the platform's MCP config.
+/// One-click disconnect: remove the dopedb entry from the platform's MCP config.
 #[tauri::command]
 pub fn disconnect_platform(platform: String) -> AppResult<String> {
     crate::mcp::connect::disconnect(&platform).map_err(AppError::Config)
@@ -928,7 +928,7 @@ mod script_tests {
 
     async fn sqlite(tag: &str) -> SqlitePool {
         let path =
-            std::env::temp_dir().join(format!("agentdb-script-{tag}-{}.db", std::process::id()));
+            std::env::temp_dir().join(format!("dopedb-script-{tag}-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let opts = SqliteConnectOptions::new().filename(&path).create_if_missing(true);
         SqlitePoolOptions::new().max_connections(1).connect_with(opts).await.unwrap()

@@ -13,7 +13,7 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 
 /// Keychain service name (bundle id). Must match the signed bundle identifier.
-const SERVICE: &str = "capital.launcher.agent-db";
+const SERVICE: &str = "capital.launcher.dopedb";
 
 fn entry(connection_id: &Uuid) -> AppResult<Entry> {
     Ok(Entry::new(SERVICE, &connection_id.to_string())?)
@@ -71,12 +71,12 @@ fn should_fallback(e: &keyring::Error) -> bool {
 // build so the Keychain works and this whole section is dead.
 // ---------------------------------------------------------------------------
 
-const OBFUSCATION_KEY: &[u8] = b"agent-db-dev-only-not-secure-v1";
+const OBFUSCATION_KEY: &[u8] = b"dopedb-dev-only-not-secure-v1";
 
 fn fallback_dir() -> AppResult<std::path::PathBuf> {
     let dir = dirs::data_dir()
         .ok_or_else(|| AppError::Config("no data dir".into()))?
-        .join("agent-db")
+        .join("dopedb")
         .join("dev-secrets");
     std::fs::create_dir_all(&dir)?;
     Ok(dir)

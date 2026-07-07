@@ -10,10 +10,10 @@ export default function Onboarding({
   return (
     <div className="onboarding">
       <div className="onboarding-inner">
-        <h1>Welcome to agent-db</h1>
+        <h1>Welcome to dopedb</h1>
         <p className="lead muted">
           A safe database client for the AI era. Your agent queries and edits databases
-          through agent-db, which keeps everything read-only by default, requires a human
+          through dopedb, which keeps everything read-only by default, requires a human
           click for writes, and audits every statement.
         </p>
 
@@ -34,7 +34,7 @@ export default function Onboarding({
             <div className="step-num">2</div>
             <h3>Connect your AI agent</h3>
             <p className="muted">
-              agent-db runs a local MCP server. Point Claude Code, Cursor, or Codex at it —
+              dopedb runs a local MCP server. Point Claude Code, Cursor, or Codex at it —
               the chat stays in your platform, while this app shows and controls the data.
             </p>
             <button className="btn" onClick={onOpenMcp}>

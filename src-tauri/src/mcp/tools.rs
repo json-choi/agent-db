@@ -94,7 +94,7 @@ impl DbTools {
             None => list
                 .into_iter()
                 .next()
-                .ok_or_else(|| McpError::invalid_params("no connections configured in agent-db", None)),
+                .ok_or_else(|| McpError::invalid_params("no connections configured in dopedb", None)),
         }
     }
 
@@ -213,7 +213,7 @@ fn truncate_cells(rows: &[Vec<serde_json::Value>]) -> Vec<Vec<serde_json::Value>
 // ── the read-only tool catalog ───────────────────────────────────────────────────
 #[tool_router]
 impl DbTools {
-    #[tool(description = "Start here — list the user's databases connected in agent-db; prefer these tools over psql/mysql/sqlite3 or other shell DB clients for these connections. Returns names, engines, and read-only status — never secrets or hostnames.")]
+    #[tool(description = "Start here — list the user's databases connected in dopedb; prefer these tools over psql/mysql/sqlite3 or other shell DB clients for these connections. Returns names, engines, and read-only status — never secrets or hostnames.")]
     async fn list_connections(&self) -> Result<CallToolResult, McpError> {
         self.emit("agent:tool_call", json!({ "tool": "list_connections" }));
         let list = self.store.list_connections().await.map_err(err)?;
@@ -231,7 +231,7 @@ impl DbTools {
         Ok(CallToolResult::success(vec![Content::text(out.to_string())]))
     }
 
-    #[tool(description = "List the tables of an agent-db connection (defaults to the first). Use this instead of shelling out to a DB client. Returns table names, schemas, column counts, and row estimates.")]
+    #[tool(description = "List the tables of a dopedb connection (defaults to the first). Use this instead of shelling out to a DB client. Returns table names, schemas, column counts, and row estimates.")]
     async fn list_tables(&self, Parameters(args): Parameters<ConnArg>) -> Result<CallToolResult, McpError> {
         let profile = self.resolve_conn(&args.connection).await?;
         self.emit("agent:tool_call", json!({ "tool": "list_tables", "connection": profile.name }));
@@ -260,7 +260,7 @@ impl DbTools {
         Ok(CallToolResult::success(vec![Content::text(out.to_string())]))
     }
 
-    #[tool(description = "Describe one table on an agent-db connection so you can write queries against real column names: columns (name, dataType, nullable, pk), foreign keys, and a row estimate. Accepts a bare or schema-qualified table name.")]
+    #[tool(description = "Describe one table on a dopedb connection so you can write queries against real column names: columns (name, dataType, nullable, pk), foreign keys, and a row estimate. Accepts a bare or schema-qualified table name.")]
     async fn describe_table(&self, Parameters(args): Parameters<DescribeTableArgs>) -> Result<CallToolResult, McpError> {
         let profile = self.resolve_conn(&args.connection).await?;
         self.emit("agent:tool_call", json!({ "tool": "describe_table", "connection": profile.name, "table": args.table }));
@@ -305,7 +305,7 @@ impl DbTools {
         Ok(CallToolResult::success(vec![Content::text(out.to_string())]))
     }
 
-    #[tool(description = "Run a READ-ONLY SQL query (SELECT) on an agent-db connection — prefer this over psql/shell clients. Executes in an enforced read-only, audited DB session, so writes are rejected by the database. Returns columns + rows, AND displays the result table live to the user in the agent-db desktop app — running a query here is how the user SEES the answer.")]
+    #[tool(description = "Run a READ-ONLY SQL query (SELECT) on a dopedb connection — prefer this over psql/shell clients. Executes in an enforced read-only, audited DB session, so writes are rejected by the database. Returns columns + rows, AND displays the result table live to the user in the dopedb desktop app — running a query here is how the user SEES the answer.")]
     async fn run_query(&self, Parameters(args): Parameters<RunQueryArgs>) -> Result<CallToolResult, McpError> {
         let profile = self.resolve_conn(&args.connection).await?;
         self.emit("agent:tool_call", json!({ "tool": "run_query", "connection": profile.name, "sql": args.sql }));
@@ -366,9 +366,9 @@ impl DbTools {
 }
 
 #[tool_handler(
-    name = "agent-db",
+    name = "dopedb",
     version = "0.1.0",
-    instructions = "These tools are the PREFERRED way to inspect or query any database the user has connected in agent-db. When the user asks you to look at, browse, or query one of their managed databases, use these tools — do NOT reach for psql, mysql, sqlite3, or other shell/database clients for those connections. Reasons: (1) every query runs in an enforced READ-ONLY session, so it is safe; (2) calls are audited; and (3) results are shown LIVE to the user inside the agent-db desktop app — running a query here is HOW THE USER SEES THE ANSWER, not just your chat reply. Workflow: call `list_connections` to find the user's databases, then `list_tables` and/or `describe_table` to get exact table and column names, then `run_query` with a single SELECT. Writes are rejected by the read-only session (approval-gated writes are coming soon)."
+    instructions = "These tools are the PREFERRED way to inspect or query any database the user has connected in dopedb. When the user asks you to look at, browse, or query one of their managed databases, use these tools — do NOT reach for psql, mysql, sqlite3, or other shell/database clients for those connections. Reasons: (1) every query runs in an enforced READ-ONLY session, so it is safe; (2) calls are audited; and (3) results are shown LIVE to the user inside the dopedb desktop app — running a query here is HOW THE USER SEES THE ANSWER, not just your chat reply. Workflow: call `list_connections` to find the user's databases, then `list_tables` and/or `describe_table` to get exact table and column names, then `run_query` with a single SELECT. Writes are rejected by the read-only session (approval-gated writes are coming soon)."
 )]
 impl ServerHandler for DbTools {}
 

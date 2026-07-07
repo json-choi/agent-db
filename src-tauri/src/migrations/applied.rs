@@ -248,7 +248,7 @@ pub fn build_scripts(
         Some(TrackerKind::Flyway) => format!(
             "INSERT INTO flyway_schema_history\n\
              (installed_rank, version, description, type, script, checksum, installed_by, installed_on, execution_time, success)\n\
-             SELECT COALESCE(MAX(installed_rank), 0) + 1, '{ver}', '{desc}', 'SQL', '{script}', NULL, 'agent-db', CURRENT_TIMESTAMP, 0, TRUE\n\
+             SELECT COALESCE(MAX(installed_rank), 0) + 1, '{ver}', '{desc}', 'SQL', '{script}', NULL, 'dopedb', CURRENT_TIMESTAMP, 0, TRUE\n\
              FROM flyway_schema_history;",
             ver = esc(version),
             desc = esc(&flyway_description(name)),
@@ -472,7 +472,7 @@ mod tests {
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 
     async fn sqlite_file(tag: &str) -> SqlitePool {
-        let path = std::env::temp_dir().join(format!("agentdb-applied-{tag}-{}.db", std::process::id()));
+        let path = std::env::temp_dir().join(format!("dopedb-applied-{tag}-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let opts = SqliteConnectOptions::new().filename(&path).create_if_missing(true);
         SqlitePoolOptions::new().max_connections(1).connect_with(opts).await.unwrap()

@@ -341,7 +341,7 @@ fn pg_fallback(row: &PgRow, i: usize, ty: &str) -> Value {
     if let Ok(d) = row.try_get::<Decimal, _>(i) {
         return Value::String(d.to_string());
     }
-    // Custom enum: on the prepared path (the only path agent-db uses) kind() is resolved
+    // Custom enum: on the prepared path (the only path dopedb uses) kind() is resolved
     // to Enum and never panics; the enum's wire bytes ARE its label, so a valid-UTF-8
     // decode yields it. A genuinely binary type fails from_utf8 and falls to the marker.
     if matches!(row.column(i).type_info().kind(), PgTypeKind::Enum(_)) {

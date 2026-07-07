@@ -1,4 +1,4 @@
-//! agent-db — Rust core entrypoint. Wires modules, state, and the Tauri command
+//! dopedb — Rust core entrypoint. Wires modules, state, and the Tauri command
 //! surface. Agents drive the DB through the local MCP server (see the `mcp` module).
 
 mod audit;
@@ -31,6 +31,8 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state)
         .setup(|app| {
             // Start the local MCP server (Streamable HTTP on 127.0.0.1:7686). It shares

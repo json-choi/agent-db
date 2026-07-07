@@ -1,5 +1,5 @@
 //! The local application store: a WAL SQLite DB at
-//! `dirs::data_dir()/agent-db/app.db` holding connections, safety settings,
+//! `dirs::data_dir()/dopedb/app.db` holding connections, safety settings,
 //! query history, the audit log, snippets, and the schema cache.
 //!
 //! Secrets are NEVER stored here — connections carry only a `secret_ref` that
@@ -41,7 +41,7 @@ impl Store {
     pub async fn open() -> AppResult<Store> {
         let dir = dirs::data_dir()
             .ok_or_else(|| AppError::Config("no OS data dir (dirs::data_dir)".into()))?
-            .join("agent-db");
+            .join("dopedb");
         std::fs::create_dir_all(&dir)?;
         let path = dir.join("app.db");
 

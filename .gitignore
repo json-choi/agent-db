@@ -1,6 +1,9 @@
 /dist
 /node_modules
 /target
+/site/.next
+/site/node_modules
+/site/.vercel
 src-tauri/target
 .DS_Store
 *.db

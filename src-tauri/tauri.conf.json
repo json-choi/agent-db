@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "agent-db",
+  "productName": "dopedb",
   "version": "0.1.0",
-  "identifier": "capital.launcher.agentdb",
+  "identifier": "capital.launcher.dopedb",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "agent-db",
+        "title": "dopedb",
         "width": 1200,
         "height": 800,
         "minWidth": 900,
@@ -28,13 +28,22 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": ["dmg", "app"],
-    "externalBin": ["binaries/agent-db-mcp-stdio"],
+    "externalBin": ["binaries/dopedb-mcp-stdio"],
     "icon": ["icons/icon.png"],
     "category": "DeveloperTool",
     "macOS": {
       "entitlements": "entitlements.plist",
       "minimumSystemVersion": "12.0"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDcxRjEwRTY0ODhDODRDNzEKUldSeFRNaUlaQTd4Y1N5Ly8wZ3hNRWZnT2I0RGRBQXBwZzN6NC82NVFMWTlvUkNXWHViMUw1QXQK",
+      "endpoints": [
+        "https://github.com/json-choi/dopedb/releases/latest/download/latest.json"
+      ]
     }
   }
 }

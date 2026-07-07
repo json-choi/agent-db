@@ -167,7 +167,7 @@ export function connectPlatform(platform: string): Promise<string> {
   return invoke("connect_platform", { platform });
 }
 
-// One-click disconnect: remove the agentdb entry from a platform's MCP config.
+// One-click disconnect: remove the dopedb entry from a platform's MCP config.
 export function disconnectPlatform(platform: string): Promise<string> {
   return invoke("disconnect_platform", { platform });
 }

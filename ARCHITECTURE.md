@@ -1,4 +1,4 @@
-# agent-db — Architecture
+# dopedb — Architecture
 
 > Status: authoritative design doc (ARCHITECTURE.md). Date: 2026-07-01. Author: lead architect.
 > Scope: MVP. Confirmed decisions from the project brief are treated as fixed and designed around, not re-argued.
@@ -7,7 +7,7 @@
 
 ## 1. Product summary & core concept
 
-agent-db is a macOS-first, genuinely native desktop database client whose differentiator is that it drives an AI agent to operate databases in natural language **without ever billing its own LLM API** — it shells out to the CLI the user already subscribes to (Anthropic's Claude Code or OpenAI's codex, authed via their own OAuth subscription) as a non-interactive backend subprocess. The agent is a reasoning brain that *proposes* SQL grounded in live schema; agent-db owns the connection, credentials, and a non-negotiable safety pipeline (read-only by default, human approval gate, full audit log, and writes wrapped in a transaction with EXPLAIN/rollback impact preview). The agent never touches the database directly — every statement it emits re-enters agent-db's own safety gate as untrusted input.
+dopedb is a macOS-first, genuinely native desktop database client whose differentiator is that it drives an AI agent to operate databases in natural language **without ever billing its own LLM API** — it shells out to the CLI the user already subscribes to (Anthropic's Claude Code or OpenAI's codex, authed via their own OAuth subscription) as a non-interactive backend subprocess. The agent is a reasoning brain that *proposes* SQL grounded in live schema; dopedb owns the connection, credentials, and a non-negotiable safety pipeline (read-only by default, human approval gate, full audit log, and writes wrapped in a transaction with EXPLAIN/rollback impact preview). The agent never touches the database directly — every statement it emits re-enters dopedb's own safety gate as untrusted input.
 
 ---
 
@@ -64,7 +64,7 @@ Flow of one NL request: Frontend → `ask_agent(conn_id, prompt)` command → Ag
 | Alternative | **codex** (`codex exec --json`) — first-class, behind the same trait; cleaner event JSONL + native `--output-schema`. User picks whichever they subscribe to. |
 | Spawn mechanism | `tokio::process::Command` (**not** a Tauri sidecar/`externalBin` — these are user-installed binaries). |
 | SQL generation transport | **Shell-out** for the generation turn. |
-| Grounding transport | **MCP stdio server** exposed *by agent-db*, read-only introspection tools only. |
+| Grounding transport | **MCP stdio server** exposed *by dopedb*, read-only introspection tools only. |
 | What the agent produces | A JSON object `{sql, rationale, is_write}`. Nothing is executed agent-side. |
 
 ### 3.2 Normalized abstraction
@@ -95,10 +95,10 @@ struct Final { sql: String, rationale: String, is_write: bool }  // is_write is 
 
 Two channels, both read-only:
 
-1. **In-prompt context (default, always):** agent-db's own introspection (§5.4) serialized to a compact DDL/JSON summary — tables → columns/types/PK/FK + row-count estimates. **Relevance-filtered**, not a full dump (large schemas blow context). Cached in `schema_cache`. Passed on **stdin**, never argv (avoids process-list leakage).
-2. **Live MCP tools (opt-in, for iterative grounding):** agent-db runs as an MCP stdio server exposing **read-only tools only** — `list_schemas`, `get_object_details`, `sample_rows`, `explain_query`. Tool shape mirrors crystaldba/postgres-mcp so agent mental models transfer. Attached via `codex mcp add` / `claude --mcp-config`.
+1. **In-prompt context (default, always):** dopedb's own introspection (§5.4) serialized to a compact DDL/JSON summary — tables → columns/types/PK/FK + row-count estimates. **Relevance-filtered**, not a full dump (large schemas blow context). Cached in `schema_cache`. Passed on **stdin**, never argv (avoids process-list leakage).
+2. **Live MCP tools (opt-in, for iterative grounding):** dopedb runs as an MCP stdio server exposing **read-only tools only** — `list_schemas`, `get_object_details`, `sample_rows`, `explain_query`. Tool shape mirrors crystaldba/postgres-mcp so agent mental models transfer. Attached via `codex mcp add` / `claude --mcp-config`.
 
-**Hard rule: no `execute_sql` write tool over MCP.** The agent only *proposes*; execution stays in agent-db's UI behind the approval gate. A fully DB-connected MCP write tool would bypass the entire safety model — it does not exist in agent-db.
+**Hard rule: no `execute_sql` write tool over MCP.** The agent only *proposes*; execution stays in dopedb's UI behind the approval gate. A fully DB-connected MCP write tool would bypass the entire safety model — it does not exist in dopedb.
 
 > **Known bug guard (codex #15451):** `--json`/`--output-schema` are silently ignored when MCP tools are attached. Therefore the **strict-schema SQL-generation turn runs WITHOUT MCP tools**; MCP grounding, when enabled, is a *separate* preceding exploration turn. Never combine `--output-schema` with attached MCP tools.
 
@@ -157,7 +157,7 @@ Every attempt → append-only `audit_log`: ts, conn id, engine, raw NL prompt, g
 
 ### 5.1 Driver layer
 
-**`sqlx` 0.8.6** (pin; 0.9 emerging) — one async API for Pg/MySQL/SQLite via features. Engine-specific `PgPool`/`MySqlPool`/`SqlitePool` for user DBs (proper EXPLAIN/introspection); `AnyPool` only for agent-db's own local store.
+**`sqlx` 0.8.6** (pin; 0.9 emerging) — one async API for Pg/MySQL/SQLite via features. Engine-specific `PgPool`/`MySqlPool`/`SqlitePool` for user DBs (proper EXPLAIN/introspection); `AnyPool` only for dopedb's own local store.
 
 - Features: `runtime-tokio`, `tls-rustls-ring`, `postgres`, `mysql`, `sqlite` (bundled), `chrono`/`uuid`/`json`.
 - **TLS pick: `tls-rustls-ring`** (resolving the two reports' conflict — `ring` over `aws-lc-rs`): fewer cross-arch build surprises on universal-binary builds; both avoid OpenSSL linking pain, and we don't need aws-lc-rs FIPS. Revisit only if a provider needs a cipher `ring` lacks.
@@ -180,7 +180,7 @@ Every attempt → append-only `audit_log`: ts, conn id, engine, raw NL prompt, g
 
 ### 5.3 Local SQLite data model
 
-At `~/Library/Application Support/agent-db/app.db` (`app_data_dir`), `SqlitePool`, `journal_mode=WAL`, `foreign_keys=ON`. **Secrets never live here.**
+At `~/Library/Application Support/dopedb/app.db` (`app_data_dir`), `SqlitePool`, `journal_mode=WAL`, `foreign_keys=ON`. **Secrets never live here.**
 
 ```
 connections(id PK, name, engine, host, port, db_name, username, sslmode,
@@ -235,7 +235,7 @@ schema_cache(connection_id FK, introspected_at, catalog_json TEXT)
 
 ## 7. Key risks & open questions (ranked)
 
-1. **ToS / subscription-as-backend (highest).** OpenAI (Apr 2026) steers programmatic Codex toward API-key billing and enforces token-credit limits on a **5-hour rolling window**; Anthropic similar. Driving a subscription OAuth session as a server backend risks limit exhaustion or ToS friction. **Mitigation:** frame agent-db as orchestrating *the user's own interactively-authed CLI* — one turn per explicit user action, never batch automation; surface `429`/rate-limit errors verbatim; offer an **optional API-key path** per backend. *Open: exact per-plan rate-limit surfacing in `exec --json` errors.*
+1. **ToS / subscription-as-backend (highest).** OpenAI (Apr 2026) steers programmatic Codex toward API-key billing and enforces token-credit limits on a **5-hour rolling window**; Anthropic similar. Driving a subscription OAuth session as a server backend risks limit exhaustion or ToS friction. **Mitigation:** frame dopedb as orchestrating *the user's own interactively-authed CLI* — one turn per explicit user action, never batch automation; surface `429`/rate-limit errors verbatim; offer an **optional API-key path** per backend. *Open: exact per-plan rate-limit surfacing in `exec --json` errors.*
 2. **Unstable / undocumented CLI output contract.** JSON shapes are unversioned; codex #15451 (schema silently dropped under MCP), Claude fence-wrapping. **Mitigation:** detect version at startup, feature-flag by version, tolerant last-message parser, snapshot tests pinned per version, run the strict-schema turn without MCP. *Open: whether `--output-schema` strictness holds across future codex releases.*
 3. **L1 read-only-bypass false-negatives.** Writable CTEs / side-effecting functions can parse as reads. **Mitigation:** L2 (read-only txn/role) is authoritative and closes this; libpg_query for PG narrows L1; CTE recursion + ambiguity-as-write. Residual: MySQL/SQLite rely more on L2 + sqlparser.
 4. **Auth/session inheritance & headless hangs.** Child depends on `~/.codex`/`~/.claude` OAuth + Keychain; token refresh or re-login prompt can hang a TTY-less child. **Mitigation:** startup preflight auth check, inherited env + explicit `HOME`, hard timeouts + process-group kill, detect auth-error strings → prompt re-login.

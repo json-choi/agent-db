@@ -1,4 +1,4 @@
-//! agent-db stdio ↔ TCP bridge.
+//! dopedb stdio ↔ TCP bridge.
 //!
 //! Claude Desktop (and any stdio-only MCP client) can't dial a localhost HTTP server,
 //! so it spawns THIS binary as its MCP "command". The bridge reads the running app's
@@ -6,7 +6,7 @@
 //! authenticates with the token (first line), then pumps bytes both ways. It contains
 //! ZERO MCP logic — all tools/safety live in the app.
 //!
-//! The agent-db app MUST be running; otherwise the TCP connect fails and the bridge
+//! The dopedb app MUST be running; otherwise the TCP connect fails and the bridge
 //! exits with a clear message (which the client surfaces).
 
 use tokio::io::AsyncWriteExt;
@@ -15,12 +15,12 @@ use tokio::io::AsyncWriteExt;
 async fn main() -> std::io::Result<()> {
     let path = dirs::data_dir()
         .ok_or_else(|| std::io::Error::other("no OS data dir"))?
-        .join("agent-db")
+        .join("dopedb")
         .join("mcp.json");
 
     let raw = std::fs::read_to_string(&path).map_err(|e| {
         std::io::Error::other(format!(
-            "agent-db is not set up (missing {}): {e}. Open the agent-db app first.",
+            "dopedb is not set up (missing {}): {e}. Open the dopedb app first.",
             path.display()
         ))
     })?;
@@ -33,7 +33,7 @@ async fn main() -> std::io::Result<()> {
         .await
         .map_err(|e| {
             std::io::Error::other(format!(
-                "cannot reach the agent-db app on 127.0.0.1:{port} ({e}). Is the app running?"
+                "cannot reach the dopedb app on 127.0.0.1:{port} ({e}). Is the app running?"
             ))
         })?;
 

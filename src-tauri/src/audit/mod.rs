@@ -188,7 +188,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn concurrent_records_keep_one_unbroken_chain() {
         let path =
-            std::env::temp_dir().join(format!("agentdb-auditchain-{}.db", std::process::id()));
+            std::env::temp_dir().join(format!("dopedb-auditchain-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let opts = SqliteConnectOptions::new()
             .filename(&path)

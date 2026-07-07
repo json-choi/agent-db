@@ -17,7 +17,7 @@ import { errMessage } from "../../ipc/types";
 import { Icon } from "../../components/Icon";
 import "./migrations.css";
 
-const keyFor = (id: string) => `agentdb.migrationsDir.${id}`;
+const keyFor = (id: string) => `dopedb.migrationsDir.${id}`;
 
 // Stored override remembers which projectDir it was derived from, so editing the
 // connection's projectDir re-triggers detection instead of being short-circuited forever.
@@ -240,7 +240,7 @@ export default function Migrations({
 
       {!connection.projectDir && !report && (
         <p className="muted">
-          Tip: set a <strong>Project folder</strong> on this connection (Edit) and agent-db
+          Tip: set a <strong>Project folder</strong> on this connection (Edit) and dopedb
           will auto-detect its migrations folder.
         </p>
       )}

@@ -93,10 +93,10 @@ export default function Mcp({ onOpenAgent }: { onOpenAgent?: () => void }) {
   const running = !!runtime?.httpRunning;
   const bridge = !!runtime?.bridgeRunning;
   const httpConfig = status
-    ? JSON.stringify({ agentdb: { url: status.url, headers: { Authorization: `Bearer ${status.token}` } } }, null, 2)
+    ? JSON.stringify({ dopedb: { url: status.url, headers: { Authorization: `Bearer ${status.token}` } } }, null, 2)
     : "";
   const desktopConfig = status
-    ? JSON.stringify({ mcpServers: { agentdb: { command: status.bridgePath } } }, null, 2)
+    ? JSON.stringify({ mcpServers: { dopedb: { command: status.bridgePath } } }, null, 2)
     : "";
 
   return (
@@ -148,7 +148,7 @@ export default function Mcp({ onOpenAgent }: { onOpenAgent?: () => void }) {
                 {p.connected && (
                   <ConfirmButton
                     className="btn small danger"
-                    confirmLabel="Remove agentdb?"
+                    confirmLabel="Remove dopedb?"
                     disabled={connecting === p.id}
                     onConfirm={() => void disconnect(p.id)}
                   >

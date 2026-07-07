@@ -877,7 +877,7 @@ mod tests {
 
     #[test]
     fn scans_and_analyzes_a_folder() {
-        let base = std::env::temp_dir().join(format!("agentdb-migtest-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("dopedb-migtest-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         // sqlx / golang-migrate style: <ver>_<name>.up.sql + .down.sql
@@ -906,7 +906,7 @@ mod tests {
         assert_eq!(natural_cmp("001", "002"), std::cmp::Ordering::Less);
         assert_eq!(natural_cmp("20230101120000", "20230101130000"), std::cmp::Ordering::Less);
 
-        let base = std::env::temp_dir().join(format!("agentdb-migsort-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("dopedb-migsort-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         // Flyway V-style: V2 must replay before V10.
@@ -921,7 +921,7 @@ mod tests {
     // ── defect 2: Prisma down.sql not double-ingested + unique folder identity ──
     #[test]
     fn prisma_down_sql_not_double_ingested() {
-        let base = std::env::temp_dir().join(format!("agentdb-migprisma-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("dopedb-migprisma-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let f1 = base.join("20230101_init");
         let f2 = base.join("20230102_more");
@@ -947,7 +947,7 @@ mod tests {
     // ── defect 3: partial-parse resilience ──
     #[test]
     fn partial_parse_applies_valid_statements() {
-        let base = std::env::temp_dir().join(format!("agentdb-migpartial-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("dopedb-migpartial-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         // A DO $$ block sqlparser can't parse, wrapped by two valid CREATE TABLEs.
@@ -1021,7 +1021,7 @@ mod tests {
     // ── flyway sub-versions (V1_1, V1_2) must stay distinct, not collapse to "1" ──
     #[test]
     fn flyway_subversions_stay_distinct() {
-        let base = std::env::temp_dir().join(format!("agentdb-migflyway-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("dopedb-migflyway-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         std::fs::write(base.join("V1__init.sql"), "CREATE TABLE a (id INT);").unwrap();
@@ -1060,7 +1060,7 @@ mod tests {
     // ── defect 4 + 8: drift is schema-qualified and ignores tracking tables ──
     #[test]
     fn drift_is_schema_qualified_and_skips_tracking_tables() {
-        let base = std::env::temp_dir().join(format!("agentdb-migdrift-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("dopedb-migdrift-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         std::fs::write(base.join("001.sql"), "CREATE TABLE users (id INT, name TEXT);").unwrap();

@@ -1,4 +1,4 @@
-# ROADMAP.md — agent-db
+# ROADMAP.md — dopedb
 
 > Companion to ARCHITECTURE.md (2026-07-01). Phased build plan for a small team (2–3 engineers). Sequencing rule enforced throughout: **every safety primitive that gates writes ships before the write path it gates.** Stretch items are marked `⟂ stretch` and can slip without blocking the phase.
 
@@ -21,7 +21,7 @@ L1 parse/classify is a UX pre-filter and ships in Phase 1 alongside L2; it is no
 
 ## Phase 0 — De-risking spike (PROVE the CLI backend)
 
-**Goal:** prove, with the smallest possible code, that a subscribed CLI can be driven non-interactively to return a SQL statement that agent-db then runs **read-only** against a real database. No UI, no Tauri, no persistence. A throwaway Rust binary (`cargo run`). If this doesn't hold, the whole product thesis is wrong — find out in week one.
+**Goal:** prove, with the smallest possible code, that a subscribed CLI can be driven non-interactively to return a SQL statement that dopedb then runs **read-only** against a real database. No UI, no Tauri, no persistence. A throwaway Rust binary (`cargo run`). If this doesn't hold, the whole product thesis is wrong — find out in week one.
 
 **Deliverables**
 - A single Rust bin crate `spike/` that:
@@ -42,7 +42,7 @@ L1 parse/classify is a UX pre-filter and ships in Phase 1 alongside L2; it is no
 5. ✅ Startup preflight (`--version` + trivial auth check) distinguishes "authed & ready" from "needs login" **before** the query turn.
 6. ✅ Measured: median wall-clock for one NL→SQL turn recorded for each CLI (sanity that latency is tolerable, not a target).
 
-**Definition of done:** all six criteria demonstrated on one macOS dev machine, flags + JSON shapes written down, go/no-go decision recorded. `⟂ stretch:` also prove MCP stdio grounding (agent-db exposes one read-only `get_schema` tool) — but note the codex #15451 schema-drop interaction; defer if it costs more than a day.
+**Definition of done:** all six criteria demonstrated on one macOS dev machine, flags + JSON shapes written down, go/no-go decision recorded. `⟂ stretch:` also prove MCP stdio grounding (dopedb exposes one read-only `get_schema` tool) — but note the codex #15451 schema-drop interaction; defer if it costs more than a day.
 
 ---
 
@@ -171,7 +171,7 @@ L1 parse/classify is a UX pre-filter and ships in Phase 1 alongside L2; it is no
 ## Initial repo / module layout
 
 ```
-agent-db/
+dopedb/
 ├─ Cargo.toml                      # workspace
 ├─ ROADMAP.md  ARCHITECTURE.md  README.md
 ├─ spike/                          # Phase 0 throwaway (delete after Phase 1)

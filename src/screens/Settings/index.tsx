@@ -4,8 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import type { ConnectionProfile } from "../../ipc/types";
 import Mcp from "../Mcp";
 import Safety from "../Safety";
+import Updates from "../Updates";
 
-type Section = "mcp" | "safety";
+type Section = "mcp" | "safety" | "updates";
 
 export default function Settings({
   connection,
@@ -71,10 +72,17 @@ export default function Settings({
         >
           Safety{connection ? ` · ${connection.name || "(unnamed)"}` : ""}
         </button>
+        <button
+          className={section === "updates" ? "snav active" : "snav"}
+          onClick={() => setSection("updates")}
+        >
+          Updates
+        </button>
       </aside>
 
       <div className="settings-body">
         {section === "mcp" && <Mcp onOpenAgent={onOpenAgent} />}
+        {section === "updates" && <Updates />}
         {section === "safety" &&
           (connection ? (
             <Safety connectionId={connection.id} />

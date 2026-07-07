@@ -1,5 +1,5 @@
 {
-  "name": "agent-db",
+  "name": "dopedb",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -7,10 +7,14 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "build:bridge": "cargo build --release -p agent-db-mcp-stdio && mkdir -p src-tauri/binaries && cp target/release/agent-db-mcp-stdio \"src-tauri/binaries/agent-db-mcp-stdio-$(rustc -vV | sed -n 's/^host: //p')\"",
+    "build:bridge": "bash scripts/build-bridge.sh",
     "sign:dev": "bash src-tauri/sign-dev.sh",
-    "dev:app": "cargo build --manifest-path src-tauri/Cargo.toml && pnpm sign:dev && ./target/debug/agent-db",
+    "dev:app": "cargo build --manifest-path src-tauri/Cargo.toml && pnpm sign:dev && ./target/debug/dopedb",
     "preview": "vite preview",
+    "site:dev": "pnpm --dir site dev",
+    "site:build": "pnpm --dir site build",
+    "site:preview": "pnpm --dir site start",
+    "site:preview-image": "python3 site/scripts/generate-preview.py",
     "tauri": "tauri"
   },
   "dependencies": {
@@ -18,6 +22,8 @@
     "@codemirror/state": "^6.5.2",
     "@codemirror/view": "^6.36.4",
     "@tauri-apps/api": "^2.5.0",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-updater": "^2.10.1",
     "@uiw/react-codemirror": "^4.23.10",
     "codemirror": "^6.0.1",
     "react": "^18.3.1",
@@ -32,6 +38,8 @@
     "vite": "^5.4.14"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild"]
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   }
 }

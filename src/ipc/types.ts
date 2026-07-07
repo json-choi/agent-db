@@ -148,12 +148,12 @@ export interface Catalog {
   tables: CatalogTable[];
 }
 
-// One-click connect: an AI platform agent-db can wire up (mirrors mcp/connect.rs).
+// One-click connect: an AI platform dopedb can wire up (mirrors mcp/connect.rs).
 export interface PlatformInfo {
   id: string;
   name: string;
   installed: boolean;
-  connected: boolean; // agentdb entry already present in the platform's MCP config
+  connected: boolean; // dopedb entry already present in the platform's MCP config
   method: string; // "http" | "bridge"
   note: string;
 }

@@ -1,4 +1,4 @@
-# ROADMAP-MCP.md — agent-db MCP Pivot
+# ROADMAP-MCP.md — dopedb MCP Pivot
 
 > Companion to **ARCHITECTURE-MCP.md** (2026-07-01). Phased build plan for a small team (2–3 engineers).
 > **Sequencing rule, enforced throughout:** the read path, audit, and the in-app approval surface all ship **before** any write tool is enabled. The external agent can never write until a human can see and click.
@@ -24,7 +24,7 @@ There is no phase in which the agent can execute a write without audit **and** t
 
 ## Phase 0 — Make-or-break spike: one real platform drives one real read tool
 
-**Goal:** prove, with the smallest possible code on top of the *existing* app, that **one real subscription platform** connects to agent-db's local MCP server and that **a single read-only tool call executes through the real L1→L2 safety pipeline AND produces a visible UI reaction.** If this doesn't hold, the pivot thesis is wrong — find out in week one.
+**Goal:** prove, with the smallest possible code on top of the *existing* app, that **one real subscription platform** connects to dopedb's local MCP server and that **a single read-only tool call executes through the real L1→L2 safety pipeline AND produces a visible UI reaction.** If this doesn't hold, the pivot thesis is wrong — find out in week one.
 
 **Platform pick (per the transport decision):** **Cursor** (or **Claude Code** via `claude mcp add`). Both dial `127.0.0.1` Streamable HTTP directly today with zero brokering — the cleanest path. Claude Desktop is deliberately **out of scope for the spike** (it cannot dial localhost; it needs the stdio bridge, which is Phase 3). We de-risk the *happy path* first.
 
@@ -45,14 +45,14 @@ There is no phase in which the agent can execute a write without audit **and** t
 7. **Adversarial read:** via `run_query`, have the agent attempt a write (`DELETE …`). Confirm L2 rejects it at the DB (PG `25006`), not just at classification.
 
 **Success criteria (ALL must pass)**
-1. Cursor (real, subscribed) completes the MCP handshake against the app-hosted `127.0.0.1:7686/mcp` and lists `agentdb`'s tools.
+1. Cursor (real, subscribed) completes the MCP handshake against the app-hosted `127.0.0.1:7686/mcp` and lists `dopedb`'s tools.
 2. A `list_tables` (or `run_query` SELECT) tool call returns correct data to Cursor **through** `l1_parse` → `l2_enforce` → `executor::read` — verified by a log/breakpoint in each layer, not just a returned payload.
 3. The **app window reacts visibly** to the call within ~1s: the touched table highlights and/or rows stream into the existing Results/grid view.
 4. The call is written to `audit_log` with `origin='mcp'` and an intact hash chain.
 5. A write attempted through `run_query` is **rejected by the read-only DB session** (PG `25006` / SQLite `SQLITE_READONLY`).
 6. A missing/invalid bearer token yields `401` before any handler runs.
 
-**stdio-bridge fallback (include in the spike if the clean HTTP path is uncertain).** If Cursor/Claude Code HTTP proves flaky, OR to pre-validate Phase 3's Claude Desktop path early: have the app also expose `DbTools` over a line-framed local TCP listener; build the ~30-line `agent-db-mcp-stdio` bridge (read port+token from `~/Library/Application Support/agent-db/mcp.json`, then `copy_bidirectional(stdin/stdout ↔ TcpStream)`, no MCP logic); point Claude Desktop's config at the bridge via **absolute path**; repeat criteria 1–4. Bridge success: Claude Desktop drives `list_tables` end-to-end while the GUI runs, dead-ends gracefully when it's down.
+**stdio-bridge fallback (include in the spike if the clean HTTP path is uncertain).** If Cursor/Claude Code HTTP proves flaky, OR to pre-validate Phase 3's Claude Desktop path early: have the app also expose `DbTools` over a line-framed local TCP listener; build the ~30-line `dopedb-mcp-stdio` bridge (read port+token from `~/Library/Application Support/dopedb/mcp.json`, then `copy_bidirectional(stdin/stdout ↔ TcpStream)`, no MCP logic); point Claude Desktop's config at the bridge via **absolute path**; repeat criteria 1–4. Bridge success: Claude Desktop drives `list_tables` end-to-end while the GUI runs, dead-ends gracefully when it's down.
 
 **Definition of done:** criteria 1–6 demonstrated on one macOS dev machine with a real Cursor (or Claude Code) subscription; `rmcp` API surface + working client config written down; go/no-go recorded.
 
@@ -67,7 +67,7 @@ There is no phase in which the agent can execute a write without audit **and** t
 - Read-only catalog (all `readOnly`, all auto-gate): `list_connections` (id/name/engine/readonly/active only — never secrets/DSN/host), `list_tables`, `get_schema`, `get_object_details`, `get_table_rows`, `run_query`, `explain` (EXPLAIN, never ANALYZE).
 - Token-aware serialization: columns-once `{cols, rows, truncated, total_estimate}` + `structuredContent`; caps 100/1000/~10k-token/~50KB; TEXT/BLOB truncated ~200 chars; NULL explicit; PII masking via `redact.rs`. **UI grid gets the full stream; the agent gets the capped payload.**
 - `state.rs`: add `app: OnceCell<AppHandle>`, `pending: DashMap<Uuid, oneshot::Sender<Decision>>` (used Phase 2); **drop `agent`**.
-- `store`: persist `mcp_port` (default 7686, `:0` on `EADDRINUSE`, read back + persist) and `mcp_token` (256-bit in `app.db`); write `~/Library/Application Support/agent-db/mcp.json`. Extend `audit_log`/`query_history` with `origin` + `client_id`.
+- `store`: persist `mcp_port` (default 7686, `:0` on `EADDRINUSE`, read back + persist) and `mcp_token` (256-bit in `app.db`); write `~/Library/Application Support/dopedb/mcp.json`. Extend `audit_log`/`query_history` with `origin` + `client_id`.
 - Frontend `src/screens/Activity/`: timestamped signal log; each entry click-jumps to its data view. Wire `agent.tool_call`/`agent.result` into the **existing** schema tree + `DataGrid.tsx` + Results (zero new view code). `App.tsx`: activity feed replaces the removed Ask rail.
 
 **Modules / screens:** `mcp/` (new), `state.rs`, `store`, `commands` (+`mcp_status`); frontend `screens/Activity`, `App.tsx`, reuse `DataGrid`/Results/schema tree.
@@ -108,16 +108,16 @@ There is no phase in which the agent can execute a write without audit **and** t
 
 ## Phase 3 — Multi-platform onboarding/config generator + security hardening
 
-**Goal:** make agent-db connectable from every target platform with copy-paste config, ship the stdio bridge for Claude Desktop, and harden the localhost port (token, origin, kill switch).
+**Goal:** make dopedb connectable from every target platform with copy-paste config, ship the stdio bridge for Claude Desktop, and harden the localhost port (token, origin, kill switch).
 
 **Deliverables**
-- **Bridge binary crate `agent-db-mcp-stdio`** (~30 lines): reads port+token from `mcp.json`, `copy_bidirectional(stdin/stdout ↔ TcpStream)`; app exposes the line-framed TCP listener in production. Bundled; configs reference it by **absolute path**.
+- **Bridge binary crate `dopedb-mcp-stdio`** (~30 lines): reads port+token from `mcp.json`, `copy_bidirectional(stdin/stdout ↔ TcpStream)`; app exposes the line-framed TCP listener in production. Bundled; configs reference it by **absolute path**.
 - `src/screens/McpStatus/` (new): `Server: ON · 127.0.0.1:7686 · N clients`, **kill switch** (stops server + fires `CancellationToken`; also on window close), token reveal/copy/**rotate**, client count, optional idle auto-stop.
 - **Config generator** with real port/token filled in: Cursor `~/.cursor/mcp.json`; VS Code `.vscode/mcp.json` (**`"type":"http"`** required); Windsurf `mcp_config.json` (**`serverUrl`**, not `url`); Claude Code (`claude mcp add --transport http …`); Codex `~/.codex/config.toml` (`url` + `bearer_token_env_var`, bridge fallback); **Claude Desktop** stdio-bridge block with absolute binary path.
 - **Security hardening** (defense-in-depth around L2/L4): bind `127.0.0.1` only; bearer token required (`401` without), persisted in `app.db`, rotatable (rotate invalidates old configs). Strict **Host** + **Origin** validation (`403` unless Host ∈ {127.0.0.1:7686, localhost:7686} and Origin absent/allowlisted); **explicitly enable rmcp DNS-rebind protection** (ships off — GHSA-89vp-x53w-74fx). Allowlist ships empty; blocked origins surface a "allow this origin" one-click affordance in the feed. Kill switch + rotate + always-visible on/off + client count.
 - Onboarding copy: "the GUI must be running" (bridge dead-ends otherwise); "schema/comments leave the machine via the external model provider" disclosure; prompt-injection ceiling = L2/L4.
 
-**Modules / screens:** `agent-db-mcp-stdio` crate, `mcp/mod.rs` (origin/token/DNS-rebind mw, TCP listener), `store` (`mcp.json` writer, token rotate), `commands` (`rotate_token`, `set_server_running`); frontend `screens/McpStatus`, snippet generator, feed "allow origin".
+**Modules / screens:** `dopedb-mcp-stdio` crate, `mcp/mod.rs` (origin/token/DNS-rebind mw, TCP listener), `store` (`mcp.json` writer, token rotate), `commands` (`rotate_token`, `set_server_running`); frontend `screens/McpStatus`, snippet generator, feed "allow origin".
 
 **Definition of done:**
 - Each of Cursor, VS Code, Windsurf, Claude Code, Codex connects using **only** the generated snippet; **Claude Desktop** connects via the bundled bridge and dead-ends gracefully when the GUI is down.
@@ -162,10 +162,10 @@ Executed in **Phase 1** (read-only + audit already MCP-driven before anything is
 ## Updated repo / module layout
 
 ```
-agent-db/
-├─ Cargo.toml                      # workspace (+ agent-db-mcp-stdio member)
+dopedb/
+├─ Cargo.toml                      # workspace (+ dopedb-mcp-stdio member)
 ├─ ARCHITECTURE-MCP.md  ROADMAP-MCP.md  README.md
-├─ agent-db-mcp-stdio/             # NEW ~30-line stdio→TCP bridge (Phase 3)
+├─ dopedb-mcp-stdio/             # NEW ~30-line stdio→TCP bridge (Phase 3)
 │  └─ src/main.rs                  # copy_bidirectional(stdin/stdout ↔ TcpStream)
 ├─ src-tauri/
 │  ├─ Cargo.toml                   # + rmcp(1.8.x), axum, tokio-util, dashmap, schemars; − codex deps

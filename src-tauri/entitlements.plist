@@ -6,7 +6,7 @@
          notarized build crashes on launch (clean in dev builds). -->
     <key>com.apple.security.cs.allow-jit</key>
     <true/>
-    <!-- No App Sandbox: agent-db must fork/exec the user-installed `codex` binary at
+    <!-- No App Sandbox: dopedb must fork/exec the user-installed `codex` binary at
          an arbitrary PATH, which the sandbox forbids. This is a fixed constraint. -->
 </dict>
 </plist>

@@ -1,11 +1,11 @@
 [package]
-name = "agent-db-mcp-stdio"
+name = "dopedb-mcp-stdio"
 version = "0.1.0"
 edition = "2021"
-description = "stdio<->TCP bridge so stdio-only MCP clients (Claude Desktop) reach the running agent-db app"
+description = "stdio<->TCP bridge so stdio-only MCP clients (Claude Desktop) reach the running dopedb app"
 
 [[bin]]
-name = "agent-db-mcp-stdio"
+name = "dopedb-mcp-stdio"
 path = "src/main.rs"
 
 [dependencies]

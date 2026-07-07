@@ -1,4 +1,4 @@
-# agent-db — Pre-Build Design Review (skeptical pass)
+# dopedb — Pre-Build Design Review (skeptical pass)
 
 I pulled current (2026) billing/ToS facts before writing; they materially change the top finding. Sources at the end.
 
@@ -78,7 +78,7 @@ done
 
 ## 7. [LOW] macOS platform blockers — mostly clear, two things to verify early
 
-**Risk / assessment.** The hard call (no App Sandbox → off MAS → Developer ID + hardened runtime) is **correct and non-negotiable** — a sandboxed app cannot fork/exec an arbitrary external binary. Two items to nail in Phase 1 (as the roadmap already sequences — good): (a) Keychain `-34018` only reproduces on properly signed builds, so wire signing/notarization in Phase 1, confirmed; (b) verify the **spawned CLI inherits no Keychain entitlement** from agent-db — Keychain ACLs are per-signing-identity, so this should be safe, but prove it (the child authing via `~/.claude`/`~/.codex` files, not your Keychain, is the desired outcome and reinforces finding #3's env-scrubbing).
+**Risk / assessment.** The hard call (no App Sandbox → off MAS → Developer ID + hardened runtime) is **correct and non-negotiable** — a sandboxed app cannot fork/exec an arbitrary external binary. Two items to nail in Phase 1 (as the roadmap already sequences — good): (a) Keychain `-34018` only reproduces on properly signed builds, so wire signing/notarization in Phase 1, confirmed; (b) verify the **spawned CLI inherits no Keychain entitlement** from dopedb — Keychain ACLs are per-signing-identity, so this should be safe, but prove it (the child authing via `~/.claude`/`~/.codex` files, not your Keychain, is the desired outcome and reinforces finding #3's env-scrubbing).
 
 **Recommendation.** No change to the packaging decision. Add one Phase-1 check: notarized build actually spawns a user-PATH `claude`/`codex` without Gatekeeper prompting on the *child* (it won't if the child is itself a normal user-installed, already-trusted binary — but confirm on a clean machine).
 

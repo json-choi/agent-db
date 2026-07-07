@@ -1,4 +1,4 @@
-# Building agent-db
+# Building dopedb
 
 macOS-native, agent-driven database client. Rust core (Tauri v2) + React/TS frontend.
 Backend agent is **codex-only**, authenticated via the user's ChatGPT subscription.
@@ -14,7 +14,7 @@ Backend agent is **codex-only**, authenticated via the user's ChatGPT subscripti
   codex login          # authenticates via ChatGPT OAuth, stored under ~/.codex
   codex login status   # should report: Logged in using ChatGPT
   ```
-  agent-db spawns `codex` with a **scrubbed environment** (only HOME/PATH/TERM) so the
+  dopedb spawns `codex` with a **scrubbed environment** (only HOME/PATH/TERM) so the
   child can read `~/.codex` but cannot see any DB credentials. There is **no API-key
   path** — subscription/OAuth only.
 
@@ -38,20 +38,21 @@ pnpm exec tsc --noEmit                         # TS typecheck
 ## MCP stdio bridge (sidecar)
 
 Claude Desktop / Codex reach the in-app MCP server through a tiny stdio↔TCP bridge
-binary (`agent-db-mcp-stdio`, a separate workspace member). It ships as a Tauri
+binary (`dopedb-mcp-stdio`, a separate workspace member). It ships as a Tauri
 **sidecar** (`bundle.externalBin`), so it must be built and staged before packaging:
 
 ```sh
 pnpm build:bridge   # cargo-builds the bridge, copies it to
-                    # src-tauri/binaries/agent-db-mcp-stdio-<target-triple>
+                    # src-tauri/binaries/dopedb-mcp-stdio-<target-triple>
 ```
 
 `build:bridge` is wired into **both** `beforeDevCommand` and `beforeBuildCommand`, so
 `pnpm tauri dev` and `pnpm tauri build` stage it automatically — in dev the same binary
 sits next to the debug app binary in `target/debug/`, which is where the one-click
-Claude Desktop/Codex configs point. The triple comes from `rustc -vV` (host); a
-cross-compiled build needs the matching `-<triple>` file present in `src-tauri/binaries/`.
-The bridge is built with the `dev` profile (it only pumps bytes; no release tuning needed).
+Claude Desktop/Codex configs point. The script uses Tauri's `TAURI_ENV_TARGET_TRIPLE`
+when present, so release builds for `aarch64-apple-darwin` and `x86_64-apple-darwin`
+stage the matching sidecar names. Outside a Tauri hook it falls back to the host triple
+from `rustc -vV`.
 
 ## Build a distributable (.dmg)
 
@@ -60,8 +61,15 @@ pnpm tauri build
 ```
 
 Output lands in `src-tauri/target/release/bundle/`:
-- `dmg/agent-db_<version>_aarch64.dmg` — the installer image
-- `macos/agent-db.app` — the app bundle
+- `dmg/dopedb_<version>_aarch64.dmg` — the installer image
+- `macos/dopedb.app` — the app bundle
+
+The app also has Tauri updater artifacts enabled. Release builds create signed update
+bundles and `.sig` files alongside the installer. The updater endpoint is:
+
+```txt
+https://github.com/json-choi/dopedb/releases/latest/download/latest.json
+```
 
 For a **signed + notarized** build (required for the Keychain to work — see below), set
 the standard Tauri signing env vars before `tauri build`:
@@ -69,6 +77,65 @@ the standard Tauri signing env vars before `tauri build`:
 `APPLE_ID`, `APPLE_PASSWORD`/`APPLE_API_KEY` for notarization. The app ships **off the
 Mac App Store** (Developer ID, hardened runtime, no App Sandbox) — the sandbox forbids
 spawning the external `codex` binary, so MAS distribution is structurally incompatible.
+
+## GitHub Releases and auto-updates
+
+Two workflows live under `.github/workflows/`:
+
+- `ci.yml` runs on pull requests and `main` pushes. It builds the desktop frontend,
+  builds the Next.js landing site, and runs `cargo check --workspace`.
+- `release.yml` runs on `app-v*` tags or manual dispatch. It builds macOS Apple Silicon
+  and Intel bundles with `tauri-apps/tauri-action`, uploads the installers to GitHub
+  Releases, and uploads `latest.json` for the in-app updater.
+
+One repository secret is required before `release.yml` can publish update artifacts:
+
+```txt
+TAURI_SIGNING_PRIVATE_KEY
+```
+
+Set it to the contents of the private updater key. The current local key was generated at
+`~/.tauri/dopedb-updater.key`; keep it secret and do not commit it. The generated key has
+no password. The workflow still exports `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` as an empty
+value so the Tauri CLI does not try to prompt for one in CI.
+
+For a local bundle build with updater signing enabled:
+
+```sh
+TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/dopedb-updater.key)" \
+TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" \
+pnpm tauri build
+```
+
+Release flow:
+
+```sh
+# 1. Bump all app versions to the same SemVer:
+#    package.json, src-tauri/Cargo.toml, src-tauri/tauri.conf.json
+
+git tag app-v0.1.1
+git push origin app-v0.1.1
+```
+
+Once the workflow finishes, the landing page download button points to the latest GitHub
+Release and the installed app can detect the new version from Settings -> Updates.
+
+## macOS Gatekeeper warning
+
+Until the app is signed and notarized with an Apple Developer ID, macOS may show a
+"developer cannot be verified" or "unidentified developer" warning. For test releases,
+users should only bypass this after confirming the app came from the official GitHub
+Release.
+
+User-facing install path:
+
+1. Try opening dopedb once so macOS records the blocked app.
+2. Open System Settings -> Privacy & Security.
+3. In the Security section, click `Open Anyway` for dopedb.
+4. Confirm with `Open`.
+
+Finder's Control-click/right-click -> `Open` flow can also grant the same exception.
+Apple's current guidance is here: https://support.apple.com/102445
 
 ## Known limitations / deferred items
 

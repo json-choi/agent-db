@@ -1,9 +1,9 @@
 //! One-click platform connection. Instead of making the user hand-edit
-//! `claude_desktop_config.json` / run `claude mcp add` / edit `config.toml`, agent-db
+//! `claude_desktop_config.json` / run `claude mcp add` / edit `config.toml`, dopedb
 //! writes the config for them:
 //!   - Claude Code : `claude mcp add --transport http … -s user`   (direct HTTP)
-//!   - Codex CLI   : `codex mcp add agentdb -- <bridge>`           (stdio bridge)
-//!   - Claude Desktop : merge `mcpServers.agentdb` into its JSON    (no CLI available)
+//!   - Codex CLI   : `codex mcp add dopedb -- <bridge>`           (stdio bridge)
+//!   - Claude Desktop : merge `mcpServers.dopedb` into its JSON    (no CLI available)
 //! Each user's own token is filled in from their local mcp.json, so no manual JSON.
 
 use std::path::{Path, PathBuf};
@@ -17,9 +17,9 @@ pub struct PlatformInfo {
     pub id: String,
     pub name: String,
     pub installed: bool,
-    /// An `agentdb` entry already exists in this platform's MCP config.
+    /// An `dopedb` entry already exists in this platform's MCP config.
     pub connected: bool,
-    /// "http" (direct) | "bridge" (stdio) — how this platform reaches agent-db.
+    /// "http" (direct) | "bridge" (stdio) — how this platform reaches dopedb.
     pub method: String,
     pub note: String,
 }
@@ -58,17 +58,17 @@ fn claude_desktop_installed() -> bool {
             .unwrap_or(false)
 }
 
-/// `claude mcp get agentdb` exits 0 only when the server is registered. One CLI spawn
+/// `claude mcp get dopedb` exits 0 only when the server is registered. One CLI spawn
 /// (~1s node startup) per detect — acceptable for a settings screen.
 fn claude_code_connected(claude: Option<&PathBuf>) -> bool {
-    claude.is_some_and(|bin| run(bin, &["mcp", "get", "agentdb"]).is_ok())
+    claude.is_some_and(|bin| run(bin, &["mcp", "get", "dopedb"]).is_ok())
 }
 
-/// `codex mcp add` writes a `[mcp_servers.agentdb]` table; a text probe is enough.
+/// `codex mcp add` writes a `[mcp_servers.dopedb]` table; a text probe is enough.
 fn codex_connected() -> bool {
     dirs::home_dir()
         .and_then(|h| std::fs::read_to_string(h.join(".codex/config.toml")).ok())
-        .is_some_and(|s| s.contains("[mcp_servers.agentdb]"))
+        .is_some_and(|s| s.contains("[mcp_servers.dopedb]"))
 }
 
 fn claude_desktop_config_path() -> Option<PathBuf> {
@@ -79,7 +79,7 @@ fn claude_desktop_connected() -> bool {
     claude_desktop_config_path()
         .and_then(|p| std::fs::read_to_string(p).ok())
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-        .is_some_and(|v| v.get("mcpServers").and_then(|m| m.get("agentdb")).is_some())
+        .is_some_and(|v| v.get("mcpServers").and_then(|m| m.get("dopedb")).is_some())
 }
 
 pub fn detect() -> Vec<PlatformInfo> {
@@ -130,18 +130,18 @@ pub fn connect(id: &str, token: &str, url: &str, bridge_path: &str) -> Result<St
     match id {
         "claude-code" => {
             let bin = which("claude").ok_or("Claude Code (`claude`) not found")?;
-            let _ = run(&bin, &["mcp", "remove", "agentdb", "-s", "user"]); // idempotent
+            let _ = run(&bin, &["mcp", "remove", "dopedb", "-s", "user"]); // idempotent
             let header = format!("Authorization: Bearer {token}");
             run(
                 &bin,
-                &["mcp", "add", "--transport", "http", "agentdb", url, "-H", &header, "-s", "user"],
+                &["mcp", "add", "--transport", "http", "dopedb", url, "-H", &header, "-s", "user"],
             )?;
             Ok("Connected to Claude Code. Run /mcp there to confirm.".into())
         }
         "codex" => {
             let bin = which("codex").ok_or("Codex (`codex`) not found")?;
-            let _ = run(&bin, &["mcp", "remove", "agentdb"]); // idempotent
-            run(&bin, &["mcp", "add", "agentdb", "--", bridge_path])?;
+            let _ = run(&bin, &["mcp", "remove", "dopedb"]); // idempotent
+            run(&bin, &["mcp", "add", "dopedb", "--", bridge_path])?;
             Ok("Connected to Codex (stdio bridge).".into())
         }
         "claude-desktop" => connect_claude_desktop(bridge_path),
@@ -149,7 +149,7 @@ pub fn connect(id: &str, token: &str, url: &str, bridge_path: &str) -> Result<St
     }
 }
 
-/// Remove the `agentdb` MCP entry from a platform's config (inverse of [`connect`]).
+/// Remove the `dopedb` MCP entry from a platform's config (inverse of [`connect`]).
 /// Idempotent: removing an entry that is already gone succeeds.
 pub fn disconnect(id: &str) -> Result<String, String> {
     match id {
@@ -157,13 +157,13 @@ pub fn disconnect(id: &str) -> Result<String, String> {
             let bin = which("claude").ok_or("Claude Code (`claude`) not found")?;
             // No -s flag: removes from whichever scope holds it (we add at user scope,
             // but this also cleans up legacy local-scope entries).
-            run(&bin, &["mcp", "remove", "agentdb"])?;
-            Ok("Removed agentdb from Claude Code.".into())
+            run(&bin, &["mcp", "remove", "dopedb"])?;
+            Ok("Removed dopedb from Claude Code.".into())
         }
         "codex" => {
             let bin = which("codex").ok_or("Codex (`codex`) not found")?;
-            run(&bin, &["mcp", "remove", "agentdb"])?;
-            Ok("Removed agentdb from Codex.".into())
+            run(&bin, &["mcp", "remove", "dopedb"])?;
+            Ok("Removed dopedb from Codex.".into())
         }
         "claude-desktop" => disconnect_claude_desktop(),
         other => Err(format!("unknown platform '{other}'")),
@@ -183,12 +183,12 @@ fn disconnect_claude_desktop() -> Result<String, String> {
     let removed = root
         .get_mut("mcpServers")
         .and_then(|m| m.as_object_mut())
-        .and_then(|m| m.remove("agentdb"))
+        .and_then(|m| m.remove("dopedb"))
         .is_some();
     if !removed {
         return Ok("Already removed.".into());
     }
-    let _ = std::fs::write(path.with_extension("json.agentdb-bak"), &s);
+    let _ = std::fs::write(path.with_extension("json.dopedb-bak"), &s);
     let pretty = serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?;
     std::fs::write(&path, pretty).map_err(|e| e.to_string())?;
     Ok("Removed — restart Claude Desktop to apply.".into())
@@ -209,7 +209,7 @@ fn connect_claude_desktop(bridge_path: &str) -> Result<String, String> {
         })?;
         // Back up only a file that parsed OK, so a known-good backup is never clobbered
         // by a broken current state.
-        let _ = std::fs::write(path.with_extension("json.agentdb-bak"), &s);
+        let _ = std::fs::write(path.with_extension("json.dopedb-bak"), &s);
         parsed
     } else {
         if let Some(d) = path.parent() {
@@ -228,7 +228,7 @@ fn connect_claude_desktop(bridge_path: &str) -> Result<String, String> {
     servers
         .as_object_mut()
         .unwrap()
-        .insert("agentdb".into(), serde_json::json!({ "command": bridge_path }));
+        .insert("dopedb".into(), serde_json::json!({ "command": bridge_path }));
 
     let pretty = serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?;
     std::fs::write(&path, pretty).map_err(|e| e.to_string())?;
