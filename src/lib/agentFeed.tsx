@@ -90,10 +90,10 @@ export function AgentFeedProvider({ children }: { children: ReactNode }) {
       // One agent operation emits a call AND a result — count it once, on completion.
       if (item.kind === "result") setUnseen((n) => n + 1);
     };
-    const p1 = listen<Record<string, unknown>>("agent.tool_call", (e) =>
+    const p1 = listen<Record<string, unknown>>("agent:tool_call", (e) =>
       push({ kind: "call", tool: String(e.payload.tool ?? "?"), detail: String(e.payload.sql ?? e.payload.connection ?? "") }),
     ).catch((e) => console.error("agent feed listen failed:", e));
-    const p2 = listen<Record<string, unknown>>("agent.result", (e) =>
+    const p2 = listen<Record<string, unknown>>("agent:result", (e) =>
       push({
         kind: "result",
         tool: String(e.payload.tool ?? "?"),

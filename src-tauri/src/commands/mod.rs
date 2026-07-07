@@ -895,7 +895,7 @@ pub fn detect_migrations_dir(project_dir: String) -> Option<String> {
     crate::migrations::detect_dir(&project_dir)
 }
 
-/// Watch the migrations folder; emit `migrations.changed` on any change so the UI can
+/// Watch the migrations folder; emit `migrations:changed` on any change so the UI can
 /// re-analyze live. Replaces any previous watcher.
 #[tauri::command]
 pub fn start_migration_watch(
@@ -909,7 +909,7 @@ pub fn start_migration_watch(
     let handle = app.clone();
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         if res.is_ok() {
-            let _ = handle.emit("migrations.changed", ());
+            let _ = handle.emit("migrations:changed", ());
         }
     })
     .map_err(|e| AppError::Config(format!("migration watch init failed: {e}")))?;

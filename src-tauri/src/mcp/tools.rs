@@ -76,7 +76,11 @@ impl DbTools {
     }
 
     fn emit(&self, event: &str, payload: serde_json::Value) {
-        let _ = self.app.emit(event, payload);
+        // Don't swallow: an emit failure (e.g. an illegal event name) means the live UI
+        // silently goes dark — exactly the bug this once hid. Surface it in the log.
+        if let Err(e) = self.app.emit(event, payload) {
+            tracing::warn!("failed to emit {event}: {e}");
+        }
     }
 
     /// Resolve the target connection: explicit name/id, else the first configured one.
@@ -211,7 +215,7 @@ fn truncate_cells(rows: &[Vec<serde_json::Value>]) -> Vec<Vec<serde_json::Value>
 impl DbTools {
     #[tool(description = "Start here — list the user's databases connected in agent-db; prefer these tools over psql/mysql/sqlite3 or other shell DB clients for these connections. Returns names, engines, and read-only status — never secrets or hostnames.")]
     async fn list_connections(&self) -> Result<CallToolResult, McpError> {
-        self.emit("agent.tool_call", json!({ "tool": "list_connections" }));
+        self.emit("agent:tool_call", json!({ "tool": "list_connections" }));
         let list = self.store.list_connections().await.map_err(err)?;
         let out = json!({
             "connections": list.iter().map(|c| json!({
@@ -223,14 +227,14 @@ impl DbTools {
                 "allowWrites": c.allow_writes,
             })).collect::<Vec<_>>()
         });
-        self.emit("agent.result", json!({ "tool": "list_connections", "count": list.len() }));
+        self.emit("agent:result", json!({ "tool": "list_connections", "count": list.len() }));
         Ok(CallToolResult::success(vec![Content::text(out.to_string())]))
     }
 
     #[tool(description = "List the tables of an agent-db connection (defaults to the first). Use this instead of shelling out to a DB client. Returns table names, schemas, column counts, and row estimates.")]
     async fn list_tables(&self, Parameters(args): Parameters<ConnArg>) -> Result<CallToolResult, McpError> {
         let profile = self.resolve_conn(&args.connection).await?;
-        self.emit("agent.tool_call", json!({ "tool": "list_tables", "connection": profile.name }));
+        self.emit("agent:tool_call", json!({ "tool": "list_tables", "connection": profile.name }));
         let live = self.live(profile.id).await?;
         let catalog = introspect::introspect(&live).await.map_err(err)?;
         self.audit(profile.id, profile.engine, "(list_tables)", QueryKind::Read, "mcp:list_tables", None)
@@ -245,7 +249,7 @@ impl DbTools {
                 "rowEstimate": t.row_estimate,
             }))
             .collect();
-        self.emit("agent.result", json!({
+        self.emit("agent:result", json!({
             "tool": "list_tables",
             "connection": profile.name,
             "connectionId": profile.id,
@@ -259,7 +263,7 @@ impl DbTools {
     #[tool(description = "Describe one table on an agent-db connection so you can write queries against real column names: columns (name, dataType, nullable, pk), foreign keys, and a row estimate. Accepts a bare or schema-qualified table name.")]
     async fn describe_table(&self, Parameters(args): Parameters<DescribeTableArgs>) -> Result<CallToolResult, McpError> {
         let profile = self.resolve_conn(&args.connection).await?;
-        self.emit("agent.tool_call", json!({ "tool": "describe_table", "connection": profile.name, "table": args.table }));
+        self.emit("agent:tool_call", json!({ "tool": "describe_table", "connection": profile.name, "table": args.table }));
         let catalog = self.catalog(profile.id).await?;
         let want = args.table.as_str();
         // Match "schema.table" or bare name exactly, else fall back to case-insensitive.
@@ -291,7 +295,7 @@ impl DbTools {
                 "referencesColumn": f.references_column,
             })).collect::<Vec<_>>(),
         });
-        self.emit("agent.result", json!({
+        self.emit("agent:result", json!({
             "tool": "describe_table",
             "connection": profile.name,
             "connectionId": profile.id,
@@ -304,13 +308,13 @@ impl DbTools {
     #[tool(description = "Run a READ-ONLY SQL query (SELECT) on an agent-db connection — prefer this over psql/shell clients. Executes in an enforced read-only, audited DB session, so writes are rejected by the database. Returns columns + rows, AND displays the result table live to the user in the agent-db desktop app — running a query here is how the user SEES the answer.")]
     async fn run_query(&self, Parameters(args): Parameters<RunQueryArgs>) -> Result<CallToolResult, McpError> {
         let profile = self.resolve_conn(&args.connection).await?;
-        self.emit("agent.tool_call", json!({ "tool": "run_query", "connection": profile.name, "sql": args.sql }));
+        self.emit("agent:tool_call", json!({ "tool": "run_query", "connection": profile.name, "sql": args.sql }));
 
         // L1 classify: reject obvious non-reads early (L2 is the authoritative stop).
         let cls = safety::classify(&args.sql, profile.engine).map_err(err)?;
         if !matches!(cls.kind, QueryKind::Read) {
             let msg = "run_query only runs read (SELECT) statements; writes go through an approval-gated tool (coming soon)";
-            self.emit("agent.result", json!({ "tool": "run_query", "error": msg }));
+            self.emit("agent:result", json!({ "tool": "run_query", "error": msg }));
             self.audit(profile.id, profile.engine, &args.sql, cls.kind, "mcp:run_query", Some(msg.to_string()))
                 .await;
             self.history(profile.id, &args.sql, "blocked", None, None, Some(msg.to_string())).await;
@@ -337,7 +341,7 @@ impl DbTools {
         )
         .await;
 
-        self.emit("agent.result", json!({
+        self.emit("agent:result", json!({
             "tool": "run_query",
             "connection": profile.name,
             "connectionId": profile.id,

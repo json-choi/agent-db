@@ -140,7 +140,7 @@ export default function Migrations({
   // Re-analyze (debounced) whenever the backend reports a file change.
   useEffect(() => {
     let t: number | undefined;
-    const p = listen("migrations.changed", () => {
+    const p = listen("migrations:changed", () => {
       window.clearTimeout(t);
       t = window.setTimeout(() => void analyze(dirRef.current), 400);
     }).catch((e) => console.error("migrations watch listen failed:", e));
