@@ -48,6 +48,8 @@ jobs:
       - name: Build landing site
         run: pnpm site:build
 
+      - name: Stage MCP bridge sidecar
+        run: pnpm build:bridge
+
       - name: Check Rust workspace
         run: cargo check --workspace
-
