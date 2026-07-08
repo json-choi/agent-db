@@ -20,6 +20,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.26.1
+          run_install: false
+
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
@@ -28,11 +34,6 @@ jobs:
           cache-dependency-path: |
             pnpm-lock.yaml
             site/pnpm-lock.yaml
-
-      - name: Setup pnpm
-        run: |
-          corepack enable
-          corepack prepare pnpm@10.26.1 --activate
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
