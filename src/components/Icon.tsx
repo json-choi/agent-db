@@ -52,6 +52,12 @@ const glyphs = {
       <path d="M12 9v4M12 17h.01" />
     </>
   ),
+  circleSlash: (
+    <>
+      <circle cx="12" cy="12" r="10" />
+      <path d="m4.93 4.93 14.14 14.14" />
+    </>
+  ),
   check: <path d="M20 6 9 17l-5-5" />,
   play: <path d="M5 3l14 9-14 9V3z" />,
   download: <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />,

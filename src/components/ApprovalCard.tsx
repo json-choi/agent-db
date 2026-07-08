@@ -40,6 +40,7 @@ export default function ApprovalCard({
   sql,
   safety,
   rationale,
+  collapseSql = false,
   onExecuted,
   onReject,
 }: {
@@ -48,6 +49,7 @@ export default function ApprovalCard({
   sql: string;
   safety: SafetySettings;
   rationale?: string;
+  collapseSql?: boolean;
   onExecuted: (outcome: ExecOutcome) => void;
   onReject?: () => void;
 }) {
@@ -146,90 +148,107 @@ export default function ApprovalCard({
 
   const previewN =
     preview?.exactRows ?? preview?.estimatedRows ?? null;
+  const compact = collapseSql;
+  const sqlBlock = <LazySqlViewer value={sql} minHeight={collapseSql ? "56px" : "80px"} />;
+  const approvalHead = (
+    <div className="approval-head">
+      {cls ? (
+        <>
+          <span className="badge kind">{cls.kind.toUpperCase()}</span>
+          <span className={riskClass(cls.risk)}>{cls.risk} risk</span>
+          <span className="badge dialect">{ENGINE_LABEL[engine]}</span>
+          {cls.noWhere && <span className="badge nowhere">NO WHERE</span>}
+          {cls.statementCount > 1 && (
+            <span className="badge nowhere">{cls.statementCount} statements</span>
+          )}
+        </>
+      ) : (
+        <span className="muted">Checking safety...</span>
+      )}
+    </div>
+  );
+  const tablesBlock = cls && cls.tables.length > 0 && (
+    <div className="tables">
+      <span className="label">Target tables:</span>{" "}
+      {cls.tables.map((t) => (
+        <code key={t}>{t}</code>
+      ))}
+    </div>
+  );
+  const previewBlock = (
+    <div className="preview">
+      <span className="label">Impact preview</span>
+      {!preview ? (
+        <span className="muted"> estimating...</span>
+      ) : isWrite && !writesBlocked && previewN === null ? (
+        // A runnable write with NO row estimate (skipped over threshold, or an EXPLAIN
+        // that yielded no count) means approving a destructive statement blind — surface
+        // it. Not for writes-disabled (can't run) or reads (a null estimate is benign).
+        <span className="impact-warn">
+          {" "}
+          <Icon name="alert" /> Impact could not be estimated — affected row count unknown
+          {preview.note && <em className="muted"> — {preview.note}</em>}
+        </span>
+      ) : (
+        <span>
+          {" "}
+          {preview.mode === "explain" && "EXPLAIN plan"}
+          {preview.mode === "execRollback" && "executed + rolled back (exact)"}
+          {preview.mode === "skipped" && "skipped (over threshold)"}
+          {previewN !== null && (
+            <>
+              {" — "}
+              <strong>{previewN.toLocaleString()}</strong> rows
+            </>
+          )}
+          {preview.note && <em className="muted"> — {preview.note}</em>}
+        </span>
+      )}
+    </div>
+  );
+  const planBlock = preview?.plan && (
+    <details className="plan">
+      <summary>Query plan</summary>
+      <pre>{preview.plan}</pre>
+    </details>
+  );
+  const notesBlock = cls?.notes.map((n, i) => (
+    <div key={i} className="note muted">
+      - {n}
+    </div>
+  ));
+  const compactStatus = writesBlocked
+    ? "Writes are disabled. Enable writes in Safety to apply this change."
+    : !cls
+      ? "Checking safety..."
+      : !preview
+        ? "Checking impact..."
+        : previewN !== null
+          ? `${previewN.toLocaleString()} row${previewN === 1 ? "" : "s"} in scope.`
+          : "Ready to review. Details are available below.";
 
   return (
     <div className="card approval">
-      <div className="approval-head">
-        {cls ? (
-          <>
-            <span className="badge kind">{cls.kind.toUpperCase()}</span>
-            <span className={riskClass(cls.risk)}>{cls.risk} risk</span>
-            <span className="badge dialect">{ENGINE_LABEL[engine]}</span>
-            {cls.noWhere && (
-              <span className="badge nowhere">⚠ NO WHERE</span>
-            )}
-            {cls.statementCount > 1 && (
-              <span className="badge nowhere">
-                ⚠ {cls.statementCount} statements
-              </span>
-            )}
-          </>
-        ) : (
-          <span className="muted">classifying…</span>
-        )}
-      </div>
-
-      <LazySqlViewer value={sql} />
+      {!compact && approvalHead}
 
       {rationale && (
         <div className="restatement">
-          <div className="label">Plain English</div>
+          <div className="label">{compact ? "Change" : "Review"}</div>
           <p>{rationale}</p>
         </div>
       )}
 
-      {cls && cls.tables.length > 0 && (
-        <div className="tables">
-          <span className="label">Target tables:</span>{" "}
-          {cls.tables.map((t) => (
-            <code key={t}>{t}</code>
-          ))}
+      {compact && (
+        <div className={writesBlocked ? "review-status blocked" : "review-status"}>
+          {compactStatus}
         </div>
       )}
 
-      <div className="preview">
-        <span className="label">Impact preview</span>
-        {!preview ? (
-          <span className="muted"> estimating…</span>
-        ) : isWrite && !writesBlocked && previewN === null ? (
-          // A runnable write with NO row estimate (skipped over threshold, or an EXPLAIN
-          // that yielded no count) means approving a destructive statement blind — surface
-          // it. Not for writes-disabled (can't run) or reads (a null estimate is benign).
-          <span className="impact-warn">
-            {" "}
-            <Icon name="alert" /> Impact could not be estimated — affected row
-            count unknown
-            {preview.note && <em className="muted"> — {preview.note}</em>}
-          </span>
-        ) : (
-          <span>
-            {" "}
-            {preview.mode === "explain" && "EXPLAIN plan"}
-            {preview.mode === "execRollback" && "executed + rolled back (exact)"}
-            {preview.mode === "skipped" && "skipped (over threshold)"}
-            {previewN !== null && (
-              <>
-                {" — "}
-                <strong>{previewN.toLocaleString()}</strong> rows
-              </>
-            )}
-            {preview.note && <em className="muted"> — {preview.note}</em>}
-          </span>
-        )}
-      </div>
-
-      {preview?.plan && (
-        <details className="plan">
-          <summary>Query plan</summary>
-          <pre>{preview.plan}</pre>
-        </details>
-      )}
-
-      {cls?.notes.map((n, i) => (
-        <div key={i} className="note muted">
-          • {n}
-        </div>
-      ))}
+      {!compact && sqlBlock}
+      {!compact && tablesBlock}
+      {!compact && previewBlock}
+      {!compact && planBlock}
+      {!compact && notesBlock}
 
       {error && <div className="error">{error}</div>}
       {/* Additive, not a terminal branch — the action buttons below stay reachable so a
@@ -260,7 +279,7 @@ export default function ApprovalCard({
         <div className="muted">Read-only — auto-running…</div>
       ) : (
         <div className="approval-actions">
-          {writesBlocked && (
+          {writesBlocked && !compact && (
             <div className="error">
               Writes are disabled for this connection (allow_writes = 0). Enable
               them in Safety to approve.
@@ -271,7 +290,7 @@ export default function ApprovalCard({
             disabled={busy || !cls || writesBlocked}
             onClick={() => execute(true)}
           >
-            {isWrite ? "Approve & run write" : "Run"}
+            {isWrite ? (compact ? "Apply change" : "Approve & run write") : "Run"}
           </button>
           <button
             className="btn"
@@ -283,6 +302,22 @@ export default function ApprovalCard({
           >
             Reject
           </button>
+        </div>
+      )}
+      {compact && (
+        <div className="review-disclosures">
+          <details className="safety-details">
+            <summary>Safety details</summary>
+            {approvalHead}
+            {tablesBlock}
+            {previewBlock}
+            {planBlock}
+            {notesBlock}
+          </details>
+          <details className="generated-sql">
+            <summary>Generated SQL</summary>
+            {sqlBlock}
+          </details>
         </div>
       )}
     </div>

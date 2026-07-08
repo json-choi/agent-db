@@ -430,6 +430,54 @@ h3 {
 }
 .restatement p {
   margin: 4px 0 0;
+  line-height: 1.45;
+}
+.review-status {
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.review-status.blocked {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.review-disclosures {
+  display: grid;
+  gap: 8px;
+}
+.generated-sql {
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--panel-2);
+  overflow: hidden;
+}
+.generated-sql summary {
+  cursor: pointer;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.generated-sql .cm-editor {
+  border-top: 1px solid var(--border);
+}
+.safety-details {
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--panel-2);
+  overflow: hidden;
+}
+.safety-details > summary {
+  cursor: pointer;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.safety-details > :not(summary) {
+  margin: 0 10px 10px;
 }
 .tables code,
 .audit-sql {

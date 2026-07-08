@@ -17,7 +17,7 @@ import { errMessage } from "../../ipc/types";
 import DataGrid from "../../components/DataGrid";
 import { Icon } from "../../components/Icon";
 import CellViewer from "../../components/CellViewer";
-import RowEditor from "../../components/RowEditor";
+import RowEditor, { type RowEditorSubmission } from "../../components/RowEditor";
 import ApprovalCard from "../../components/ApprovalCard";
 import { useToast } from "../../components/Toast";
 import { tableKey, tableLabel } from "../../lib/tableRef";
@@ -36,6 +36,11 @@ const PAGE = 100;
 
 type Editor = { mode: "insert" | "edit" | "duplicate"; initial: Record<string, string | null> };
 type CellSel = { value: unknown; column: string };
+type PreparedWrite = {
+  sql: string;
+  rationale?: string;
+  collapseSql?: boolean;
+};
 
 export default function TableData({
   connection,
@@ -58,7 +63,7 @@ export default function TableData({
   const [selected, setSelected] = useState<number | null>(null);
   const [cellSel, setCellSel] = useState<CellSel | null>(null);
   const [editor, setEditor] = useState<Editor | null>(null);
-  const [prepared, setPrepared] = useState<string | null>(null);
+  const [prepared, setPrepared] = useState<PreparedWrite | null>(null);
   // Readable confirm gate for DELETE: PK pairs of the target row, mirroring how
   // insert/edit/duplicate pass through RowEditor before arming the ApprovalCard.
   const [pendingDelete, setPendingDelete] = useState<Record<string, string | null> | null>(null);
@@ -180,7 +185,11 @@ export default function TableData({
   function armDelete() {
     if (!pendingDelete) return;
     try {
-      setPrepared(buildDelete(engine, table, pendingDelete));
+      setPrepared({
+        sql: buildDelete(engine, table, pendingDelete),
+        rationale: `Delete selected row from ${table.name}.`,
+        collapseSql: true,
+      });
       setPendingDelete(null);
     } catch (e) {
       setErr(errMessage(e));
@@ -359,45 +368,49 @@ export default function TableData({
           className="btn small"
           disabled={!canEdit || selected == null}
           title={canEdit ? undefined : noEditTitle}
-          onClick={() => openEdit("duplicate")}
-        >
-          Duplicate
-        </button>
-        <button
-          className="btn small"
-          disabled={!canEdit || selected == null}
-          title={canEdit ? undefined : noEditTitle}
           onClick={doDelete}
         >
           Delete
         </button>
-        <span className="tb-sep" />
-        <button className="btn small" disabled={selected == null} onClick={() => copyRow(false)}>
-          Copy TSV
-        </button>
-        <button className="btn small" disabled={selected == null} onClick={() => copyRow(true)}>
-          Copy JSON
-        </button>
-        <button
-          className="btn small"
-          disabled={!rows}
-          title="Exports the current page"
-          onClick={() =>
-            result && downloadCsv(`${table.name}-page${page + 1}-${stamp()}`, result.columns, result.rows)
-          }
-        >
-          Export page (CSV)
-        </button>
-        <button
-          className="btn small"
-          disabled={!rows}
-          title="Exports the current page"
-          onClick={() =>
-            result && downloadJson(`${table.name}-page${page + 1}-${stamp()}`, result.columns, result.rows)
-          }
-        >
-          Export page (JSON)
-        </button>
+        <details className="toolbar-menu">
+          <summary className="btn small">More</summary>
+          <div className="toolbar-menu-panel">
+            <button
+              className="btn small"
+              disabled={!canEdit || selected == null}
+              title={canEdit ? undefined : noEditTitle}
+              onClick={() => openEdit("duplicate")}
+            >
+              Duplicate
+            </button>
+            <button className="btn small" disabled={selected == null} onClick={() => copyRow(false)}>
+              Copy TSV
+            </button>
+            <button className="btn small" disabled={selected == null} onClick={() => copyRow(true)}>
+              Copy JSON
+            </button>
+            <button
+              className="btn small"
+              disabled={!rows}
+              title="Exports the current page"
+              onClick={() =>
+                result && downloadCsv(`${table.name}-page${page + 1}-${stamp()}`, result.columns, result.rows)
+              }
+            >
+              Export CSV
+            </button>
+            <button
+              className="btn small"
+              disabled={!rows}
+              title="Exports the current page"
+              onClick={() =>
+                result && downloadJson(`${table.name}-page${page + 1}-${stamp()}`, result.columns, result.rows)
+              }
+            >
+              Export JSON
+            </button>
+          </div>
+        </details>
         {activeFilters > 0 && (
           <>
             <span className="tb-sep" />
@@ -447,14 +460,14 @@ export default function TableData({
 
         {panelOpen && (
           <aside className="grid-panel">
-            {editor && (
+            {editor && !prepared && (
               <RowEditor
                 key={`${editor.mode}-${selected}`}
                 engine={engine}
                 table={table}
                 mode={editor.mode}
                 initial={editor.initial}
-                onSubmit={(sql) => setPrepared(sql)}
+                onSubmit={(write: RowEditorSubmission) => setPrepared(write)}
                 onCancel={() => {
                   setEditor(null);
                   setPrepared(null);
@@ -492,11 +505,13 @@ export default function TableData({
             )}
             {prepared && (
               <ApprovalCard
-                key={prepared}
+                key={prepared.sql}
                 connectionId={connection.id}
                 engine={engine}
-                sql={prepared}
+                sql={prepared.sql}
                 safety={safety}
+                rationale={prepared.rationale}
+                collapseSql={prepared.collapseSql}
                 onExecuted={onWritten}
                 onReject={() => setPrepared(null)}
               />
