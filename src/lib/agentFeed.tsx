@@ -28,6 +28,7 @@ export interface AgentActivity {
   rowsDropped?: boolean; // rows evicted to bound memory; metadata (columns/rowCount) kept
   sql?: string;
   connection?: string; // source connection name, for the result provenance header
+  payload?: Record<string, unknown>; // sanitized event payload for the context ledger
 }
 
 function resultOf(p: Record<string, unknown>): QueryResult | undefined {
@@ -48,6 +49,24 @@ function resultDetail(p: Record<string, unknown>): string {
   if (typeof p.rowCount === "number") return `${p.rowCount} rows`;
   if (typeof p.count === "number") return `${p.count} items`;
   return "ok";
+}
+
+function sanitizePayload(p: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(p)) {
+    if (key === "rows") {
+      out.rows = Array.isArray(value) ? `[${value.length} preview rows]` : value;
+    } else if (key === "columns" && Array.isArray(value)) {
+      out.columns = value.slice(0, 24);
+      if (value.length > 24) out.columnsMore = value.length - 24;
+    } else if (key === "tables" && Array.isArray(value)) {
+      out.tables = value.slice(0, 40);
+      if (value.length > 40) out.tablesMore = value.length - 40;
+    } else {
+      out[key] = value;
+    }
+  }
+  return out;
 }
 
 interface AgentFeedValue {
@@ -91,7 +110,14 @@ export function AgentFeedProvider({ children }: { children: ReactNode }) {
       if (item.kind === "result") setUnseen((n) => n + 1);
     };
     const p1 = listen<Record<string, unknown>>("agent:tool_call", (e) =>
-      push({ kind: "call", tool: String(e.payload.tool ?? "?"), detail: String(e.payload.sql ?? e.payload.connection ?? "") }),
+      push({
+        kind: "call",
+        tool: String(e.payload.tool ?? "?"),
+        detail: String(e.payload.sql ?? e.payload.table ?? e.payload.connection ?? ""),
+        sql: typeof e.payload.sql === "string" ? e.payload.sql : undefined,
+        connection: typeof e.payload.connection === "string" ? e.payload.connection : undefined,
+        payload: sanitizePayload(e.payload),
+      }),
     ).catch((e) => console.error("agent feed listen failed:", e));
     const p2 = listen<Record<string, unknown>>("agent:result", (e) =>
       push({
@@ -102,6 +128,7 @@ export function AgentFeedProvider({ children }: { children: ReactNode }) {
         result: resultOf(e.payload),
         sql: typeof e.payload.sql === "string" ? e.payload.sql : undefined,
         connection: typeof e.payload.connection === "string" ? e.payload.connection : undefined,
+        payload: sanitizePayload(e.payload),
       }),
     ).catch((e) => console.error("agent feed listen failed:", e));
     return () => {

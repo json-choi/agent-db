@@ -389,6 +389,15 @@ h3 {
   color: var(--risk-high);
   border-color: var(--risk-high);
 }
+.badge.status-ok {
+  color: var(--risk-low);
+  border-color: var(--risk-low);
+}
+.badge.status-error,
+.badge.status-blocked {
+  color: var(--danger);
+  border-color: var(--danger);
+}
 .badge.nowhere {
   color: var(--accent-text);
   background: var(--danger);
@@ -1027,6 +1036,163 @@ h3 {
 .manual-setup .mcp-field { margin-top: 8px; }
 
 /* MCP live agent result */
+.agent-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+  min-height: 0;
+}
+.agent-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+.agent-head p {
+  max-width: 820px;
+  margin-top: 4px;
+  line-height: 1.45;
+}
+.agent-stats {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.agent-stats span,
+.seg {
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--panel);
+}
+.agent-stats span {
+  padding: 5px 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.agent-view-tabs {
+  display: inline-flex;
+  align-self: flex-start;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--panel-2);
+}
+.seg {
+  min-width: 96px;
+  padding: 6px 12px;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+.seg.active {
+  background: var(--accent);
+  color: var(--accent-text);
+  border-color: transparent;
+}
+.agent-empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 180px;
+}
+.agent-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+  gap: 14px;
+  min-height: 0;
+  flex: 1;
+}
+.agent-primary,
+.agent-secondary,
+.agent-policy-card {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--panel);
+  padding: 14px;
+}
+.agent-primary,
+.agent-secondary {
+  overflow: auto;
+}
+.agent-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.agent-section-head h3,
+.agent-secondary h3,
+.agent-policy-card h3 {
+  margin-top: 0;
+}
+.agent-timeline {
+  max-height: 100%;
+  overflow: auto;
+}
+.context-card {
+  display: grid;
+  gap: 12px;
+}
+.context-card p {
+  margin: 0;
+  color: var(--text);
+  line-height: 1.45;
+}
+.context-sql {
+  display: block;
+  padding: 10px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--panel-2);
+  white-space: pre-wrap;
+}
+.context-grid {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+.context-row {
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr);
+  gap: 10px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.context-row:last-child {
+  border-bottom: none;
+}
+.context-row span {
+  color: var(--muted);
+}
+.context-row code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-audit-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+.agent-policy-card {
+  min-height: 160px;
+}
+.agent-policy-card.wide {
+  grid-column: 1 / -1;
+}
+.agent-policy-card p {
+  margin: 8px 0 0;
+  line-height: 1.48;
+}
 .mcp-result { margin-bottom: 8px; }
 .mcp-result-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
 .mcp-result-sql {
@@ -1039,3 +1205,16 @@ h3 {
 .act.has-result:hover { background: var(--hover); }
 .act.has-result::after { content: "›"; position: absolute; right: 8px; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: 16px; }
 .act.sel { background: var(--accent-soft); }
+
+@media (max-width: 1100px) {
+  .agent-split,
+  .agent-audit-grid {
+    grid-template-columns: 1fr;
+  }
+  .agent-head {
+    flex-direction: column;
+  }
+  .agent-stats {
+    justify-content: flex-start;
+  }
+}

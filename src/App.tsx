@@ -5,6 +5,7 @@ import { errMessage } from "./ipc/types";
 import { tableKey } from "./lib/tableRef";
 import { ConnectionForm, DatabaseExplorer } from "./screens/Connections";
 import TableData from "./screens/Tables";
+import SchemaExplorer from "./screens/Schema";
 import Sql from "./screens/Sql";
 import History from "./screens/History";
 import Audit from "./screens/Audit";
@@ -18,12 +19,13 @@ import { useI18n, type I18nKey } from "./lib/i18n";
 
 // App-level tabs. Agent is a live feed/result surface, connection-independent; the rest
 // are per-connection data views. Migrations lives in the sidebar; Settings behind ⚙.
-type Tab = "data" | "sql" | "agent" | "history" | "audit";
+type Tab = "data" | "schema" | "sql" | "agent" | "history" | "audit";
 // Agent is last: it's connection-independent, so it sits apart from the per-connection
 // data tabs (the .agent-tab class pushes it right with a divider via shared CSS).
-const TABS: Tab[] = ["data", "sql", "history", "audit", "agent"];
+const TABS: Tab[] = ["data", "schema", "sql", "history", "audit", "agent"];
 const TAB_LABELS: Record<Tab, I18nKey> = {
   data: "tabs.data",
+  schema: "tabs.schema",
   sql: "tabs.sql",
   history: "tabs.history",
   audit: "tabs.audit",
@@ -370,6 +372,19 @@ function Shell() {
               <div className="placeholder muted">
                 {t("app.noTableSelected")}
               </div>
+            ))}
+          {tab === "schema" &&
+            (selected ? (
+              <SchemaExplorer
+                connection={selected}
+                selectedTable={selectedTable}
+                onOpenTable={(table) => {
+                  setSelectedTable(table);
+                  setTab("data");
+                }}
+              />
+            ) : (
+              needsConn
             ))}
           {tab === "sql" &&
             (!selected ? (

@@ -1,0 +1,236 @@
+.schema-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 100%;
+}
+
+.schema-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.schema-filter {
+  width: min(320px, 42vw);
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+}
+
+.schema-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 14px;
+  min-height: 0;
+  flex: 1;
+}
+
+.schema-canvas-wrap {
+  min-width: 0;
+  min-height: 480px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background:
+    linear-gradient(var(--hover) 1px, transparent 1px),
+    linear-gradient(90deg, var(--hover) 1px, transparent 1px),
+    var(--panel-2);
+  background-size: 28px 28px;
+}
+
+.schema-canvas {
+  position: relative;
+  margin: 24px;
+}
+
+.schema-lines {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.schema-lines marker path {
+  fill: var(--muted);
+}
+
+.schema-link {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.5;
+  opacity: 0.42;
+}
+
+.schema-link.active {
+  stroke: var(--accent);
+  stroke-width: 2.5;
+  opacity: 0.94;
+}
+
+.schema-node {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 280px;
+  height: 172px;
+  padding: 12px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--panel);
+  color: var(--text);
+  text-align: left;
+  box-shadow: var(--shadow);
+  cursor: pointer;
+}
+
+.schema-node:hover,
+.schema-node.selected {
+  border-color: var(--accent);
+}
+
+.schema-node.selected {
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.schema-node-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.schema-node-head strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.schema-node-head em {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+}
+
+.schema-node-meta {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.schema-cols {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.schema-cols span,
+.schema-detail-row span {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.schema-cols code,
+.schema-detail-row code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.schema-cols b,
+.schema-detail-row b {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 9px;
+  line-height: 15px;
+}
+
+.schema-inspector {
+  min-width: 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--panel);
+  padding: 14px;
+}
+
+.schema-inspector-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.schema-inspector h3 {
+  margin-top: 16px;
+}
+
+.schema-inspector-head h3 {
+  margin-top: 0;
+  color: var(--text);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.schema-detail-list {
+  display: grid;
+  gap: 1px;
+  margin-top: 12px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--border);
+}
+
+.schema-detail-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(90px, auto);
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  background: var(--panel-2);
+  font-size: 12px;
+}
+
+.schema-detail-row em {
+  color: var(--muted);
+  font-style: normal;
+  text-align: right;
+}
+
+.schema-rel-list {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+@media (max-width: 1100px) {
+  .schema-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .schema-inspector {
+    max-height: 360px;
+  }
+}
