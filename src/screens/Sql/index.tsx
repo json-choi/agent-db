@@ -22,6 +22,7 @@ import LazySqlViewer from "../../components/LazySqlViewer";
 import DataGrid from "../../components/DataGrid";
 import ResultToolbar from "../../components/ResultToolbar";
 import { stamp } from "../../lib/export";
+import { useI18n } from "../../lib/i18n";
 import "./sql.css";
 
 const STEP = 200;
@@ -49,6 +50,7 @@ export default function Sql({
   draft: string;
   setDraft: (s: string) => void;
 }) {
+  const { t } = useI18n();
   const draftStatements = useMemo(() => splitStatements(draft), [draft]);
   const draftIsScript = draftStatements.length > 1;
 
@@ -104,7 +106,7 @@ export default function Sql({
       const cls = await classifySql(connection.id, draft);
       if (cls.kind !== "read") {
         setPlan(null);
-        setPlanErr("Explain is for read statements — Run shows a write's impact preview instead.");
+        setPlanErr(t("sql.explainReadOnly"));
         return;
       }
       setPlan(await previewSql(connection.id, draft));
@@ -160,35 +162,37 @@ export default function Sql({
       </div>
       <div className="form-actions sql-actions">
         <button className="btn primary" disabled={!draft.trim()} onClick={() => armRun()}>
-          Run
+          {t("sql.run")}
         </button>
         <button
           className="btn"
           disabled={!draft.trim() || draftIsScript || explaining}
-          title={draftIsScript ? "Explain works on a single statement" : "Show the query plan (reads only)"}
+          title={draftIsScript ? t("sql.explainSingle") : t("sql.explainTitle")}
           onClick={explain}
         >
-          {explaining ? "Planning…" : "Explain"}
+          {explaining ? t("sql.planning") : t("sql.explain")}
         </button>
         {draftIsScript && (
-          <span className="badge script-count">{draftStatements.length} statements</span>
+          <span className="badge script-count">
+            {t("sql.statementCount", { count: draftStatements.length })}
+          </span>
         )}
-        <span className="muted run-hint">⌘↩ to run (selection runs alone)</span>
+        <span className="muted run-hint">{t("sql.runHint")}</span>
       </div>
 
       {planErr && <div className="error">{planErr}</div>}
       {plan && (
         <details open className="card explain-plan">
           <summary>
-            Query plan
-            <button className="btn small plan-close" onClick={() => setPlan(null)} title="Close" aria-label="Close">
+            {t("sql.queryPlan")}
+            <button className="btn small plan-close" onClick={() => setPlan(null)} title={t("common.close")} aria-label={t("common.close")}>
               <Icon name="close" />
             </button>
           </summary>
           {plan.plan ? (
             <pre>{plan.plan}</pre>
           ) : (
-            <div className="muted">No plan available ({plan.mode}).</div>
+            <div className="muted">{t("sql.noPlan", { mode: plan.mode })}</div>
           )}
         </details>
       )}
@@ -260,6 +264,7 @@ function ScriptApproval({
   onExecuted: (o: ScriptOutcome) => void;
   onCancel: () => void;
 }) {
+  const { t } = useI18n();
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -296,13 +301,10 @@ function ScriptApproval({
     <div className="card approval script-approval">
       <div className="approval-head">
         <span className="badge kind">SCRIPT</span>
-        <span className="badge">{statements.length} statements</span>
+        <span className="badge">{t("sql.statementCount", { count: statements.length })}</span>
         <span className="badge dialect">{ENGINE_LABEL[connection.engine]}</span>
       </div>
-      <p className="muted script-note">
-        A script that modifies data runs as ONE transaction — all statements commit
-        together or none do. A read-only script runs sequentially.
-      </p>
+      <p className="muted script-note">{t("sql.scriptNote")}</p>
       <ol className="stmt-list">
         {statements.map((s, i) => (
           <li key={i}>
@@ -311,13 +313,10 @@ function ScriptApproval({
         ))}
       </ol>
       {!safety.allowWrites && (
-        <div className="note muted">
-          Writes are disabled for this connection — a script that modifies data will be
-          blocked. Enable writes in Settings ▸ Safety.
-        </div>
+        <div className="note muted">{t("sql.writesDisabledScript")}</div>
       )}
       {error && <div className="error">{error}</div>}
-      {cancelled && <div className="muted">Query cancelled.</div>}
+      {cancelled && <div className="muted">{t("sql.cancelled")}</div>}
       <div className="approval-actions">
         <label className="script-confirm">
           <input
@@ -325,18 +324,18 @@ function ScriptApproval({
             checked={confirmed}
             onChange={(e) => setConfirmed(e.target.checked)}
           />
-          I have reviewed these {statements.length} statements
+          {t("sql.confirmReviewed", { count: statements.length })}
         </label>
         <button className="btn primary" disabled={busy || !confirmed} onClick={execute}>
-          Execute script
+          {t("sql.executeScript")}
         </button>
         {busy ? (
           <button className="btn" onClick={cancel}>
-            Cancel query
+            {t("sql.cancel")}
           </button>
         ) : (
           <button className="btn" onClick={onCancel}>
-            Cancel
+            {t("common.cancel")}
           </button>
         )}
       </div>
@@ -345,15 +344,16 @@ function ScriptApproval({
 }
 
 function ScriptResults({ outcome, at }: { outcome: ScriptOutcome; at: string }) {
+  const { t } = useI18n();
   const summary = outcome.allReads
-    ? "read-only script"
+    ? t("sql.readOnlyScript")
     : outcome.committed
-      ? "script committed (one transaction)"
-      : "script failed — rolled back";
+      ? t("sql.committed")
+      : t("sql.failedRolledBack");
   return (
     <div className="results script-results">
       <div className="result-meta muted">
-        {summary} · {outcome.statements.length} statements · {at}
+        {summary} · {t("sql.statementCount", { count: outcome.statements.length })} · {at}
       </div>
       {outcome.statements.map((s, i) => (
         <div key={i} className="stmt-result">
@@ -366,7 +366,9 @@ function ScriptResults({ outcome, at }: { outcome: ScriptOutcome; at: string }) 
           ) : s.result ? (
             <>
               <div className="muted stmt-rowmeta">
-                {s.result.rowCount} rows{s.result.truncated && " (truncated)"} ·{" "}
+                {t(s.result.truncated ? "agent.rowsTruncated" : "agent.rows", {
+                  count: s.result.rowCount,
+                })} ·{" "}
                 {s.result.durationMs} ms
                 {" · "}
                 <ResultToolbar
@@ -378,7 +380,7 @@ function ScriptResults({ outcome, at }: { outcome: ScriptOutcome; at: string }) 
               <DataGrid result={s.result} />
             </>
           ) : (
-            <div className="muted">{s.affected ?? 0} affected</div>
+            <div className="muted">{t("sql.affected", { count: s.affected ?? 0 })}</div>
           )}
         </div>
       ))}
@@ -397,6 +399,7 @@ function Outcome({
   maxRows: number;
   onMore: () => void;
 }) {
+  const { t } = useI18n();
   const { outcome, sql, at } = run;
   const r = outcome.result;
 
@@ -407,8 +410,10 @@ function Outcome({
         {r ? (
           <>
             {" · "}
-            {r.rowCount} rows
-            {r.truncated && ` — capped at ${maxRows} rows — add LIMIT to see more`} ·{" "}
+            {t(r.truncated ? "agent.rowsTruncated" : "agent.rows", {
+              count: r.rowCount,
+            })}
+            {r.truncated && ` - ${t("sql.capped", { count: maxRows })}`} ·{" "}
             {r.durationMs} ms · {at}
             {" · "}
             <ResultToolbar
@@ -420,8 +425,8 @@ function Outcome({
         ) : (
           <>
             {" · "}
-            {outcome.committed ? "write committed" : "no rows returned"}
-            {outcome.affected !== null && <> · {outcome.affected} affected</>} · {at}
+            {outcome.committed ? t("sql.writeCommitted") : t("sql.noRowsReturned")}
+            {outcome.affected !== null && <> · {t("sql.affected", { count: outcome.affected })}</>} · {at}
           </>
         )}
       </div>
@@ -430,7 +435,10 @@ function Outcome({
           <DataGrid result={limit < r.rows.length ? { ...r, rows: r.rows.slice(0, limit) } : r} />
           {r.rows.length > limit && (
             <button className="btn" onClick={onMore}>
-              Show {Math.min(STEP, r.rows.length - limit)} more of {r.rows.length}
+              {t("sql.showMore", {
+                count: Math.min(STEP, r.rows.length - limit),
+                total: r.rows.length,
+              })}
             </button>
           )}
         </>

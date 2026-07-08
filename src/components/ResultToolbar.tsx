@@ -1,6 +1,7 @@
 // Compact export/copy controls for any result grid: Copy (TSV) · CSV · JSON.
 // Always operate on the FULL result rows, not a display-sliced subset.
 import { downloadCsv, downloadJson, toTsv } from "../lib/export";
+import { useI18n } from "../lib/i18n";
 import { useToast } from "./Toast";
 import "./ResultToolbar.css";
 
@@ -17,34 +18,35 @@ export default function ResultToolbar({
   // the bare "CSV"/"JSON" labels so existing callers (Sql, Agent) are unchanged.
   scopeLabel?: string;
 }) {
+  const { t } = useI18n();
   const toast = useToast();
   return (
     <span className="result-tools">
       <button
         className="btn small"
-        title="Copy all rows as tab-separated text (pastes into Excel/Sheets)"
+        title={t("results.copyTitle")}
         onClick={() =>
           navigator.clipboard
             .writeText(toTsv(columns, rows))
-            .then(() => toast(`Copied ${rows.length} rows`))
-            .catch(() => toast("Copy failed", "error"))
+            .then(() => toast(t("results.copyRows", { count: rows.length })))
+            .catch(() => toast(t("results.copyFailed"), "error"))
         }
       >
-        Copy
+        {t("results.copy")}
       </button>
       <button
         className="btn small"
-        title="Download as CSV (opens in Excel)"
+        title={t("results.downloadCsvTitle")}
         onClick={() => downloadCsv(filenameBase, columns, rows)}
       >
-        {scopeLabel ? `Export ${scopeLabel} (CSV)` : "CSV"}
+        {scopeLabel ? t("results.exportCsv", { scope: scopeLabel }) : "CSV"}
       </button>
       <button
         className="btn small"
-        title="Download as JSON"
+        title={t("results.downloadJsonTitle")}
         onClick={() => downloadJson(filenameBase, columns, rows)}
       >
-        {scopeLabel ? `Export ${scopeLabel} (JSON)` : "JSON"}
+        {scopeLabel ? t("results.exportJson", { scope: scopeLabel }) : "JSON"}
       </button>
     </span>
   );

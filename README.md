@@ -2,7 +2,7 @@
 
 로컬에서 실행되는 오픈소스 macOS 데이터베이스 클라이언트입니다. AI 도구는 MCP로 dopedb에 연결하고, dopedb는 연결 정보, 읽기 전용 실행, 승인 게이트, 감사 로그를 앱 안에서 관리합니다.
 
-- 웹사이트: https://dopedb.dev
+- 웹사이트: https://dopedb.dev (English: https://dopedb.dev/?lang=en)
 - 다운로드: https://github.com/json-choi/dopedb/releases/latest
 - English: [README.en.md](./README.en.md)
 - 상세 문서: [docs/PROJECT.md](./docs/PROJECT.md)
@@ -14,7 +14,14 @@
 - 쓰기/DDL 실행 전 승인 카드와 `allow_writes` 게이트
 - 쿼리 히스토리와 hash-chain 감사 로그
 - 로컬 MCP 서버: Claude Code, Claude Desktop, Codex 등에서 읽기 도구 사용
+- 한국어/영어 지원: 소개 사이트, 데스크톱 클라이언트 UI, GitHub README
 - GitHub Releases 기반 macOS 다운로드와 Tauri updater
+
+## 언어 지원
+
+- 소개 사이트: 오른쪽 위 언어 전환 버튼 또는 `?lang=ko` / `?lang=en`
+- 데스크톱 클라이언트: Settings -> Language에서 한국어/English 선택
+- GitHub README: [한국어](./README.md) / [English](./README.en.md)
 
 현재 MCP 도구는 읽기 전용입니다. MCP 쓰기 도구는 아직 제공하지 않으며, 수동 UI의 쓰기 기능만 승인 게이트 뒤에서 동작합니다.
 

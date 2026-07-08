@@ -6,6 +6,7 @@ import type { AuditEntry } from "../../ipc/types";
 import { errMessage } from "../../ipc/types";
 import { Icon } from "../../components/Icon";
 import { relTime, fullTime } from "../../lib/relTime";
+import { useI18n } from "../../lib/i18n";
 
 function short(h: string | null): string {
   if (!h) return "∅";
@@ -15,6 +16,7 @@ function short(h: string | null): string {
 type ChainVerdict = { ok: boolean; firstBadIndex: number | null };
 
 export default function Audit({ connectionId }: { connectionId: string }) {
+  const { t } = useI18n();
   const [entries, setEntries] = useState<AuditEntry[]>([]);
   const [verdict, setVerdict] = useState<ChainVerdict | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
@@ -52,24 +54,26 @@ export default function Audit({ connectionId }: { connectionId: string }) {
     <div className="screen audit">
       <div className="form-actions">
         <button className="btn small" onClick={refresh}>
-          Refresh
+          {t("common.refresh")}
         </button>
       </div>
       {msg && <div className="error">{msg}</div>}
-      {loading && <div className="muted loading">Loading…</div>}
+      {loading && <div className="muted loading">{t("common.loading")}</div>}
       {!loading && entries.length === 0 && !msg && (
-        <div className="muted empty">No audit records yet.</div>
+        <div className="muted empty">{t("audit.empty")}</div>
       )}
       {entries.length > 0 &&
         verdict &&
         (verdict.ok ? (
           <div className="chain-verdict ok">
-            <Icon name="check" /> Chain verified · {entries.length} entries
+            <Icon name="check" /> {t("audit.chainVerified", { count: entries.length })}
           </div>
         ) : (
           <div className="chain-verdict bad">
-            <Icon name="alert" /> Chain broken
-            {tamperedTs ? ` at ${relTime(tamperedTs)}` : ""}
+            <Icon name="alert" />{" "}
+            {tamperedTs
+              ? t("audit.chainBrokenAt", { time: relTime(tamperedTs) })
+              : t("audit.chainBroken")}
           </div>
         ))}
       <ul className="audit-list">
@@ -87,7 +91,7 @@ export default function Audit({ connectionId }: { connectionId: string }) {
                 {relTime(e.ts)}
               </span>
               {e.approvedBy && (
-                <span className="muted">by {e.approvedBy}</span>
+                <span className="muted">{t("audit.by", { name: e.approvedBy })}</span>
               )}
             </div>
             {e.agentPrompt && (
@@ -100,11 +104,13 @@ export default function Audit({ connectionId }: { connectionId: string }) {
             <code className="audit-sql">{e.sql}</code>
             {e.error && <div className="error">{e.error}</div>}
             <div className="audit-chain muted">
-              <span title={e.prevHash ?? ""}>prev {short(e.prevHash)}</span>
+              <span title={e.prevHash ?? ""}>
+                {t("audit.prev", { hash: short(e.prevHash) })}
+              </span>
               {" → "}
-              <span title={e.hash}>hash {short(e.hash)}</span>
+              <span title={e.hash}>{t("audit.hash", { hash: short(e.hash) })}</span>
               {e.affectedEstimate !== null && (
-                <span> · ~{e.affectedEstimate} rows</span>
+                <span> · {t("audit.rowsEstimate", { count: e.affectedEstimate })}</span>
               )}
             </div>
           </li>

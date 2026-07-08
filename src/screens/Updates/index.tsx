@@ -3,6 +3,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updater";
 import { useEffect, useMemo, useState } from "react";
 import { errMessage } from "../../ipc/types";
+import { useI18n } from "../../lib/i18n";
 
 type UpdateState =
   | "idle"
@@ -25,8 +26,9 @@ function pct(done: number, total: number | null) {
 }
 
 export default function Updates() {
+  const { t } = useI18n();
   const [state, setState] = useState<UpdateState>("idle");
-  const [currentVersion, setCurrentVersion] = useState<string>("unknown");
+  const [currentVersion, setCurrentVersion] = useState<string>(t("common.unknown"));
   const [update, setUpdate] = useState<Update | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [downloaded, setDownloaded] = useState(0);
@@ -85,32 +87,36 @@ export default function Updates() {
     <div className="screen updates">
       <div className="updates-head">
         <div>
-          <h2>App updates</h2>
-          <p className="muted">
-            Checks GitHub Releases for a signed dopedb update package.
-          </p>
+          <h2>{t("updates.title")}</h2>
+          <p className="muted">{t("updates.description")}</p>
         </div>
         <button className="btn small" disabled={state === "checking" || state === "downloading"} onClick={refresh}>
-          Check again
+          {t("updates.checkAgain")}
         </button>
       </div>
 
       <div className="card update-card">
         <div className="update-row">
-          <span className="muted">Installed version</span>
+          <span className="muted">{t("updates.installedVersion")}</span>
           <strong>{currentVersion}</strong>
         </div>
         <div className="update-row">
-          <span className="muted">Latest release</span>
-          <strong>{update ? update.version : state === "checking" ? "checking..." : "none"}</strong>
+          <span className="muted">{t("updates.latestRelease")}</span>
+          <strong>
+            {update
+              ? update.version
+              : state === "checking"
+                ? t("updates.checking")
+                : t("updates.none")}
+          </strong>
         </div>
         <div className="update-row">
-          <span className="muted">Status</span>
+          <span className="muted">{t("updates.status")}</span>
           <span className={`badge update-state update-${state}`}>
             {state === "available"
-              ? "update available"
+              ? t("updates.available")
               : state === "current"
-                ? "up to date"
+                ? t("updates.current")
                 : state}
           </span>
         </div>
@@ -122,7 +128,9 @@ export default function Updates() {
             </div>
             <div className="muted">
               {progress == null
-                ? `${bytes(downloaded) ?? "Downloading"} received`
+                ? t("updates.received", {
+                    amount: bytes(downloaded) ?? t("updates.downloadingFallback"),
+                  })
                 : `${progress}% (${bytes(downloaded)} / ${bytes(contentLength)})`}
             </div>
           </div>
@@ -130,12 +138,12 @@ export default function Updates() {
 
         {releaseNotes && (
           <details className="release-notes">
-            <summary>Release notes</summary>
+            <summary>{t("updates.releaseNotes")}</summary>
             <pre>{releaseNotes}</pre>
           </details>
         )}
 
-        {error && <div className="error">Update check failed: {error}</div>}
+        {error && <div className="error">{t("updates.checkFailed", { error })}</div>}
 
         <div className="form-actions">
           <button
@@ -143,10 +151,10 @@ export default function Updates() {
             disabled={!update || state === "checking" || state === "downloading"}
             onClick={install}
           >
-            {state === "downloading" ? "Installing..." : "Update and relaunch"}
+            {state === "downloading" ? t("updates.installing") : t("updates.updateAndRelaunch")}
           </button>
           <a className="btn" href="https://github.com/json-choi/dopedb/releases/latest">
-            Open GitHub Releases
+            {t("updates.openReleases")}
           </a>
         </div>
       </div>

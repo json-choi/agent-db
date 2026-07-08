@@ -1,5 +1,7 @@
 // First-run onboarding — shown when no database is connected yet. Instead of a blank
 // screen, guide the user to connect a database or wire up the MCP server.
+import { useI18n } from "../../lib/i18n";
+
 export default function Onboarding({
   onNewConnection,
   onOpenMcp,
@@ -7,45 +9,35 @@ export default function Onboarding({
   onNewConnection: () => void;
   onOpenMcp: () => void;
 }) {
+  const { t } = useI18n();
+
   return (
     <div className="onboarding">
       <div className="onboarding-inner">
-        <h1>Welcome to dopedb</h1>
-        <p className="lead muted">
-          A safe database client for the AI era. Your agent queries and edits databases
-          through dopedb, which keeps everything read-only by default, requires a human
-          click for writes, and audits every statement.
-        </p>
+        <h1>{t("onboarding.title")}</h1>
+        <p className="lead muted">{t("onboarding.lead")}</p>
 
         <div className="onboarding-steps">
           <div className="step-card">
             <div className="step-num">1</div>
-            <h3>Connect a database</h3>
-            <p className="muted">
-              Add a PostgreSQL, MySQL, or SQLite connection. Credentials are stored in your
-              macOS Keychain — never in plain text.
-            </p>
+            <h3>{t("onboarding.databaseTitle")}</h3>
+            <p className="muted">{t("onboarding.databaseBody")}</p>
             <button className="btn primary" onClick={onNewConnection}>
-              Add connection
+              {t("onboarding.addConnection")}
             </button>
           </div>
 
           <div className="step-card">
             <div className="step-num">2</div>
-            <h3>Connect your AI agent</h3>
-            <p className="muted">
-              dopedb runs a local MCP server. Point Claude Code, Cursor, or Codex at it —
-              the chat stays in your platform, while this app shows and controls the data.
-            </p>
+            <h3>{t("onboarding.agentTitle")}</h3>
+            <p className="muted">{t("onboarding.agentBody")}</p>
             <button className="btn" onClick={onOpenMcp}>
-              Set up MCP
+              {t("onboarding.setupMcp")}
             </button>
           </div>
         </div>
 
-        <p className="onboarding-foot muted">
-          You can do both, or start with just a database and add the agent later.
-        </p>
+        <p className="onboarding-foot muted">{t("onboarding.foot")}</p>
       </div>
     </div>
   );

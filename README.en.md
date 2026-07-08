@@ -2,7 +2,7 @@
 
 dopedb is an open-source macOS database client that runs locally. AI tools connect to dopedb over MCP, while dopedb keeps database connections, read-only execution, approval gates, and audit logs inside the desktop app.
 
-- Website: https://dopedb.dev
+- Website: https://dopedb.dev (Korean: https://dopedb.dev/?lang=ko)
 - Download: https://github.com/json-choi/dopedb/releases/latest
 - Korean: [README.md](./README.md)
 - Project docs: [docs/PROJECT.md](./docs/PROJECT.md)
@@ -14,7 +14,14 @@ dopedb is an open-source macOS database client that runs locally. AI tools conne
 - Approval card plus `allow_writes` gate for writes and DDL
 - Query history and hash-chained audit log
 - Local MCP server for read tools from Claude Code, Claude Desktop, Codex, and similar clients
+- Korean/English support across the marketing site, desktop client UI, and GitHub README
 - macOS downloads and Tauri updater metadata through GitHub Releases
+
+## Language Support
+
+- Website: use the top-right language switcher or `?lang=ko` / `?lang=en`
+- Desktop client: choose Korean or English from Settings -> Language
+- GitHub README: [Korean](./README.md) / [English](./README.en.md)
 
 The current MCP tool surface is read-only. MCP write tools are not shipped yet; manual writes in the desktop UI remain behind approval gates.
 

@@ -23,6 +23,7 @@ import ConfirmButton from "../../components/ConfirmButton";
 import { Icon } from "../../components/Icon";
 import LazySqlViewer from "../../components/LazySqlViewer";
 import { useToast } from "../../components/Toast";
+import { useI18n } from "../../lib/i18n";
 import "./connections.css";
 
 const DEFAULT_PORT: Record<Engine, number> = {
@@ -60,6 +61,7 @@ function DdlModal({
   table: CatalogTable;
   onClose: () => void;
 }) {
+  const { t } = useI18n();
   const [text, setText] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -105,18 +107,22 @@ function DdlModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="ddl-head">
-          <span className="ddl-title">{tableLabel(conn.engine, table)} — DDL</span>
+          <span className="ddl-title">
+            {t("connections.ddlTitle", { table: tableLabel(conn.engine, table) })}
+          </span>
           <div className="ddl-actions">
             <button className="btn small" onClick={copy} disabled={!text}>
-              {copied ? "Copied" : "Copy"}
+              {copied ? t("common.copied") : t("common.copy")}
             </button>
             <button className="btn small" ref={closeRef} onClick={onClose}>
-              Close
+              {t("common.close")}
             </button>
           </div>
         </div>
         {err && <div className="error">{err}</div>}
-        {!err && text == null && <div className="muted small-pad loading">Loading…</div>}
+        {!err && text == null && (
+          <div className="muted small-pad loading">{t("common.loading")}</div>
+        )}
         {text != null && <LazySqlViewer value={text} minHeight="240px" />}
       </div>
     </div>
@@ -146,6 +152,7 @@ export function DatabaseExplorer({
   onOpenSettings: () => void;
   migrationsOpen: boolean;
 }) {
+  const { t } = useI18n();
   // Per-connection: any node can be expanded independently of selection, so
   // catalogs/errors/filters are keyed by connection id (DataGrip-style tree).
   const [catalogs, setCatalogs] = useState<Record<string, Catalog>>({});
@@ -218,14 +225,14 @@ export function DatabaseExplorer({
   return (
     <aside className="sidebar">
       <div className="sidebar-head">
-        <span>Databases</span>
+        <span>{t("connections.databases")}</span>
         <button className="btn small" onClick={onNew}>
-          + New
+          {t("connections.add")}
         </button>
       </div>
       <div className="explorer">
         {connections.length === 0 && (
-          <div className="muted empty">No connections yet.</div>
+          <div className="muted empty">{t("connections.noConnections")}</div>
         )}
         {connections.map((c) => {
           const isSel = c.id === selectedId;
@@ -249,7 +256,11 @@ export function DatabaseExplorer({
               >
                 <span
                   className="tw"
-                  title={open.has(c.id) ? "Collapse" : "Expand"}
+                  title={
+                    open.has(c.id)
+                      ? t("connections.collapse")
+                      : t("connections.expand")
+                  }
                   onClick={(e) => {
                     e.stopPropagation();
                     toggleOpen(c.id);
@@ -257,7 +268,7 @@ export function DatabaseExplorer({
                 >
                   <Icon name={open.has(c.id) ? "chevronDown" : "chevronRight"} />
                 </span>
-                <span className="db-conn-name">{c.name || "(unnamed)"}</span>
+                <span className="db-conn-name">{c.name || t("app.unnamed")}</span>
                 {(c.env === "staging" || c.env === "prod") && (
                   <span className={`env-chip env-${c.env}`}>{c.env}</span>
                 )}
@@ -265,8 +276,8 @@ export function DatabaseExplorer({
                 {open.has(c.id) && (
                   <button
                     className="db-refresh"
-                    title="Refresh schema (re-introspect live)"
-                    aria-label="Refresh schema"
+                    title={t("connections.refreshSchemaTitle")}
+                    aria-label={t("connections.refreshSchema")}
                     onClick={(e) => {
                       e.stopPropagation();
                       void refreshSchema(c.id);
@@ -290,8 +301,8 @@ export function DatabaseExplorer({
                     : [];
                   const tbls = all.filter((t) => t.kind !== "view");
                   const views = all.filter((t) => t.kind === "view");
-                  const renderRow = (t: CatalogTable) => {
-                    const key = tableKey(t);
+                  const renderRow = (table: CatalogTable) => {
+                    const key = tableKey(table);
                     return (
                       <div
                         key={key}
@@ -302,32 +313,32 @@ export function DatabaseExplorer({
                         }
                         role="button"
                         tabIndex={0}
-                        onClick={() => onOpenTable(c, t)}
+                        onClick={() => onOpenTable(c, table)}
                         onKeyDown={(e) => {
                           if (e.key === "Enter" || e.key === " ") {
                             e.preventDefault();
-                            onOpenTable(c, t);
+                            onOpenTable(c, table);
                           }
                         }}
-                        title={`${t.columns.length} columns`}
+                        title={t("connections.columns", { count: table.columns.length })}
                       >
                         <span className="db-table-ico">
-                          {t.kind === "view" ? "◇" : "▦"}
+                          {table.kind === "view" ? "◇" : "▦"}
                         </span>
                         <span className="tbl-name">
-                          {tableLabel(c.engine, t)}
+                          {tableLabel(c.engine, table)}
                         </span>
-                        {t.rowEstimate != null && t.rowEstimate >= 0 && (
+                        {table.rowEstimate != null && table.rowEstimate >= 0 && (
                           <span className="tbl-count muted">
-                            ~{t.rowEstimate.toLocaleString()}
+                            ~{table.rowEstimate.toLocaleString()}
                           </span>
                         )}
                         <button
                           className="ddl-btn"
-                          title="Show CREATE DDL"
+                          title={t("connections.showDdl")}
                           onClick={(e) => {
                             e.stopPropagation();
-                            setDdl({ conn: c, table: t });
+                            setDdl({ conn: c, table });
                           }}
                         >
                           DDL
@@ -348,14 +359,15 @@ export function DatabaseExplorer({
                             onOpenMigrations(c);
                           }
                         }}
-                        title="Schema migration change-log"
+                        title={t("connections.migrationsTitle")}
                       >
-                        <span className="db-nav-ico">◱</span> Migrations
+                        <span className="db-nav-ico">◱</span>{" "}
+                        {t("connections.migrations")}
                       </div>
                       {cat && cat.tables.length > 5 && (
                         <input
                           className="table-filter"
-                          placeholder="Filter tables…"
+                          placeholder={t("connections.filterTables")}
                           value={filter}
                           onChange={(e) =>
                             setFilters((m) => ({ ...m, [c.id]: e.target.value }))
@@ -364,11 +376,15 @@ export function DatabaseExplorer({
                       )}
                       {cerr && <div className="error small-pad">{cerr}</div>}
                       {!cat && !cerr && (
-                        <div className="muted small-pad loading">Loading schema…</div>
+                        <div className="muted small-pad loading">
+                          {t("connections.loadingSchema")}
+                        </div>
                       )}
                       {cat && all.length === 0 && (
                         <div className="muted small-pad">
-                          {f ? `No tables match "${f}".` : "No tables."}
+                          {f
+                            ? t("connections.noTablesMatch", { filter: f })
+                            : t("connections.noTables")}
                         </div>
                       )}
                       {tbls.length > 0 && (
@@ -389,7 +405,7 @@ export function DatabaseExplorer({
                             <span className="tw">
                               <Icon name={tablesOpen ? "chevronDown" : "chevronRight"} />
                             </span>{" "}
-                            Tables ({tbls.length})
+                            {t("connections.tables", { count: tbls.length })}
                           </div>
                           {tablesOpen && tbls.map(renderRow)}
                         </>
@@ -412,7 +428,7 @@ export function DatabaseExplorer({
                             <span className="tw">
                               <Icon name={viewsOpen ? "chevronDown" : "chevronRight"} />
                             </span>{" "}
-                            Views ({views.length})
+                            {t("connections.views", { count: views.length })}
                           </div>
                           {viewsOpen && views.map(renderRow)}
                         </>
@@ -427,7 +443,8 @@ export function DatabaseExplorer({
 
       <div className="sidebar-foot">
         <button className="foot-btn" onClick={onOpenSettings}>
-          <span className="gear"><Icon name="gear" /></span> Settings
+          <span className="gear"><Icon name="gear" /></span>{" "}
+          {t("common.settings")}
         </button>
       </div>
 
@@ -449,6 +466,7 @@ export function ConnectionForm({
   onCancel: () => void;
   onDeleted: (id: string) => void;
 }) {
+  const { t } = useI18n();
   const toast = useToast();
   const [form, setForm] = useState<ConnectionProfile>(initial ?? blank());
   const [password, setPassword] = useState("");
@@ -474,9 +492,9 @@ export function ConnectionForm({
     try {
       const saved = await upsertConnection(form, password || undefined);
       setPassword("");
-      toast("Connection saved");
+      toast(t("connections.connectionSaved"));
       onSaved(saved);
-      setMsg("Saved.");
+      setMsg(t("connections.saved"));
       setMsgErr(false);
     } catch (e) {
       setMsg(errMessage(e));
@@ -495,7 +513,7 @@ export function ConnectionForm({
       // A literal reachability check — dials the current form values WITHOUT
       // saving the connection or storing the secret. Just OK / not OK.
       await testConnectionProfile(form, password || undefined);
-      setMsg("✓ Connection OK");
+      setMsg(`✓ ${t("connections.connectionOk")}`);
       setMsgErr(false);
     } catch (e) {
       setMsg(errMessage(e));
@@ -510,7 +528,7 @@ export function ConnectionForm({
     setBusy(true);
     try {
       await deleteConnection(form.id);
-      toast("Connection deleted");
+      toast(t("connections.connectionDeleted"));
       onDeleted(form.id);
     } catch (e) {
       const m = errMessage(e);
@@ -540,10 +558,10 @@ export function ConnectionForm({
         }
       }}
     >
-      <h2>{isNew ? "New connection" : "Edit connection"}</h2>
+      <h2>{isNew ? t("connections.new") : t("connections.edit")}</h2>
 
       <label>
-        Name
+        {t("connections.name")}
         <input
           value={form.name}
           onChange={(e) => set("name", e.target.value)}
@@ -552,7 +570,7 @@ export function ConnectionForm({
       </label>
 
       <label>
-        Engine
+        {t("connections.engine")}
         <select
           value={form.engine}
           onChange={(e) => {
@@ -574,7 +592,7 @@ export function ConnectionForm({
 
       {isSqlite ? (
         <label>
-          Database file path
+          {t("connections.databaseFile")}
           <div className="row">
             <input
               className="grow"
@@ -587,7 +605,7 @@ export function ConnectionForm({
               className="btn small"
               onClick={() => void pickFile().then((f) => f && set("database", f))}
             >
-              Browse…
+              {t("connections.browse")}
             </button>
           </div>
         </label>
@@ -595,14 +613,14 @@ export function ConnectionForm({
         <>
           <div className="row">
             <label className="grow">
-              Host
+              {t("connections.host")}
               <input
                 value={form.host}
                 onChange={(e) => set("host", e.target.value)}
               />
             </label>
             <label className="port">
-              Port
+              {t("connections.port")}
               <input
                 type="number"
                 value={form.port}
@@ -616,7 +634,7 @@ export function ConnectionForm({
           </div>
 
           <label>
-            Database
+            {t("connections.database")}
             <input
               value={form.database}
               onChange={(e) => set("database", e.target.value)}
@@ -625,27 +643,29 @@ export function ConnectionForm({
 
           <div className="row">
             <label className="grow">
-              User
+              {t("connections.user")}
               <input
                 value={form.username}
                 onChange={(e) => set("username", e.target.value)}
               />
             </label>
             <label className="grow">
-              Password
+              {t("connections.password")}
               <input
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder={
-                  form.secretRef ? "•••••• (stored)" : "stored in Keychain"
+                  form.secretRef
+                    ? `•••••• (${t("connections.passwordStoredExisting")})`
+                    : t("connections.passwordStored")
                 }
               />
             </label>
           </div>
 
           <label>
-            SSL mode
+            {t("connections.sslMode")}
             <select
               value={form.sslmode}
               onChange={(e) => set("sslmode", e.target.value)}
@@ -660,7 +680,8 @@ export function ConnectionForm({
       )}
 
       <label>
-        Project folder <span className="muted">(optional — locates migrations)</span>
+        {t("connections.projectFolder")}{" "}
+        <span className="muted">{t("connections.projectFolderHint")}</span>
         <div className="row">
           <input
             className="grow"
@@ -673,18 +694,19 @@ export function ConnectionForm({
             className="btn small"
             onClick={() => void pickFolder().then((d) => d && set("projectDir", d))}
           >
-            Browse…
+            {t("connections.browse")}
           </button>
         </div>
       </label>
 
       <label>
-        Environment <span className="muted">(optional — labels the sidebar)</span>
+        {t("connections.environment")}{" "}
+        <span className="muted">{t("connections.environmentHint")}</span>
         <select
           value={form.env ?? ""}
           onChange={(e) => set("env", e.target.value || null)}
         >
-          <option value="">— none —</option>
+          <option value="">{t("common.none")}</option>
           <option value="dev">dev</option>
           <option value="staging">staging</option>
           <option value="prod">prod</option>
@@ -692,22 +714,22 @@ export function ConnectionForm({
       </label>
 
       <p className="muted">
-        Write access is controlled per-connection in Settings ▸ Safety.
+        {t("connections.writeAccessHint")}
       </p>
 
       <div className="form-actions">
         <button className="btn primary" disabled={busy} onClick={save}>
-          {running === "save" ? "Saving…" : "Save"}
+          {running === "save" ? t("common.saving") : t("common.save")}
         </button>
         <button className="btn" disabled={busy} onClick={test}>
-          {running === "test" ? "Testing…" : "Test connection"}
+          {running === "test" ? t("connections.testing") : t("connections.test")}
         </button>
         <button className="btn" disabled={busy} onClick={onCancel}>
-          Cancel
+          {t("common.cancel")}
         </button>
         {!isNew && (
           <ConfirmButton className="btn danger" disabled={busy} onConfirm={remove}>
-            Delete
+            {t("common.delete")}
           </ConfirmButton>
         )}
       </div>

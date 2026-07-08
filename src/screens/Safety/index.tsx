@@ -4,21 +4,23 @@ import { getSafety, setSafety } from "../../ipc/commands";
 import type { SafetySettings } from "../../ipc/types";
 import { errMessage } from "../../ipc/types";
 import { useToast } from "../../components/Toast";
+import { useI18n, type I18nKey } from "../../lib/i18n";
 
-const TOGGLES: { key: keyof SafetySettings; label: string; hint: string }[] = [
-  { key: "requireApproval", label: "Require approval", hint: "Gate every statement behind the approval card." },
-  { key: "allowWrites", label: "Allow writes", hint: "Master gate for the write path (off by default)." },
-  { key: "autoRunReads", label: "Auto-run reads", hint: "Run read-only SELECTs without a manual approve." },
-  { key: "wrapWritesInTx", label: "Wrap writes in a transaction", hint: "BEGIN … writes … so they can be rolled back." },
-  { key: "explainPreview", label: "EXPLAIN preview", hint: "Show the plan / row estimate before running." },
+const TOGGLES: { key: keyof SafetySettings; label: I18nKey; hint: I18nKey }[] = [
+  { key: "requireApproval", label: "safety.requireApproval", hint: "safety.requireApprovalHint" },
+  { key: "allowWrites", label: "safety.allowWrites", hint: "safety.allowWritesHint" },
+  { key: "autoRunReads", label: "safety.autoRunReads", hint: "safety.autoRunReadsHint" },
+  { key: "wrapWritesInTx", label: "safety.wrapWritesInTx", hint: "safety.wrapWritesInTxHint" },
+  { key: "explainPreview", label: "safety.explainPreview", hint: "safety.explainPreviewHint" },
 ];
 
-const NUMBERS: { key: keyof SafetySettings; label: string; hint: string }[] = [
-  { key: "maxRows", label: "Max rows", hint: "Row cap applied to read result sets." },
-  { key: "execPreviewRowLimit", label: "Exec-preview row limit", hint: "Skip execute-preview above this estimate (L3 gate)." },
+const NUMBERS: { key: keyof SafetySettings; label: I18nKey; hint: I18nKey }[] = [
+  { key: "maxRows", label: "safety.maxRows", hint: "safety.maxRowsHint" },
+  { key: "execPreviewRowLimit", label: "safety.execPreviewRowLimit", hint: "safety.execPreviewRowLimitHint" },
 ];
 
 export default function Safety({ connectionId }: { connectionId: string }) {
+  const { t } = useI18n();
   const [settings, setSettings] = useState<SafetySettings | null>(null);
   const [msg, setMsg] = useState<string | null>(null); // load-failure only; save feedback goes through toast
   const [busy, setBusy] = useState(false);
@@ -41,7 +43,7 @@ export default function Safety({ connectionId }: { connectionId: string }) {
   }, [connectionId]);
 
   if (!settings) {
-    return <div className={msg ? "screen muted" : "screen muted loading"}>{msg ?? "Loading safety settings…"}</div>;
+    return <div className={msg ? "screen muted" : "screen muted loading"}>{msg ?? t("safety.loading")}</div>;
   }
 
   function set<K extends keyof SafetySettings>(key: K, value: SafetySettings[K]) {
@@ -53,7 +55,7 @@ export default function Safety({ connectionId }: { connectionId: string }) {
     setBusy(true);
     try {
       await setSafety(connectionId, settings);
-      toast("Safety settings saved");
+      toast(t("safety.saved"));
     } catch (e) {
       toast(errMessage(e), "error");
     } finally {
@@ -63,23 +65,23 @@ export default function Safety({ connectionId }: { connectionId: string }) {
 
   return (
     <div className="screen safety form">
-      <h2>Safety settings</h2>
-      {TOGGLES.map((t) => (
-        <label key={t.key} className="check">
+      <h2>{t("safety.title")}</h2>
+      {TOGGLES.map((item) => (
+        <label key={item.key} className="check">
           <input
             type="checkbox"
-            checked={settings[t.key] as boolean}
-            onChange={(e) => set(t.key, e.target.checked as never)}
+            checked={settings[item.key] as boolean}
+            onChange={(e) => set(item.key, e.target.checked as never)}
           />
           <span>
-            {t.label}
-            <small className="muted"> — {t.hint}</small>
+            {t(item.label)}
+            <small className="muted"> - {t(item.hint)}</small>
           </span>
         </label>
       ))}
       {NUMBERS.map((n) => (
         <label key={n.key}>
-          {n.label}
+          {t(n.label)}
           <input
             type="number"
             min={n.key === "maxRows" ? 1 : 0}
@@ -95,12 +97,12 @@ export default function Safety({ connectionId }: { connectionId: string }) {
               set(n.key, v as never);
             }}
           />
-          <small className="muted">{n.hint}</small>
+          <small className="muted">{t(n.hint)}</small>
         </label>
       ))}
       <div className="form-actions">
         <button className="btn primary" disabled={busy} onClick={save}>
-          Save
+          {t("common.save")}
         </button>
       </div>
     </div>

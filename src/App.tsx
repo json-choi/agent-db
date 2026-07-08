@@ -14,19 +14,21 @@ import Settings from "./screens/Settings";
 import AgentResultView from "./components/AgentResultView";
 import { ToastProvider, useToast } from "./components/Toast";
 import { AgentFeedProvider, useAgentFeed } from "./lib/agentFeed";
+import { useI18n, type I18nKey } from "./lib/i18n";
 
 // App-level tabs. Agent is a live feed/result surface, connection-independent; the rest
 // are per-connection data views. Migrations lives in the sidebar; Settings behind ⚙.
 type Tab = "data" | "sql" | "agent" | "history" | "audit";
 // Agent is last: it's connection-independent, so it sits apart from the per-connection
 // data tabs (the .agent-tab class pushes it right with a divider via shared CSS).
-const TABS: { id: Tab; label: string }[] = [
-  { id: "data", label: "Data" },
-  { id: "sql", label: "SQL" },
-  { id: "history", label: "History" },
-  { id: "audit", label: "Audit" },
-  { id: "agent", label: "Agent" },
-];
+const TABS: Tab[] = ["data", "sql", "history", "audit", "agent"];
+const TAB_LABELS: Record<Tab, I18nKey> = {
+  data: "tabs.data",
+  sql: "tabs.sql",
+  history: "tabs.history",
+  audit: "tabs.audit",
+  agent: "tabs.agent",
+};
 
 // `null` = not editing; "new" = blank form; a profile = edit that profile.
 type Editing = ConnectionProfile | "new" | null;
@@ -46,6 +48,7 @@ const SIDEBAR_MAX = 520;
 const SIDEBAR_DEFAULT = 240;
 
 function Shell() {
+  const { t } = useI18n();
   const { unseen, latest, markSeen } = useAgentFeed();
   const toast = useToast();
   const [conns, setConns] = useState<ConnectionProfile[]>([]);
@@ -118,7 +121,7 @@ function Shell() {
       const now = Date.now();
       if (tab !== "agent" && now - lastToastAt.current > 30000) {
         lastToastAt.current = now;
-        toast("Agent ran a query — open the Agent tab");
+        toast(t("app.toastAgentQuery"));
       }
     }
   }, [latest, tab, toast]);
@@ -166,7 +169,12 @@ function Shell() {
   async function toggleWrites() {
     if (!selectedId || !safety || togglingWrites) return;
     const enabling = !safety.allowWrites;
-    if (enabling && !window.confirm(`Allow writes on "${selected?.name || "this connection"}"?`))
+    if (
+      enabling &&
+      !window.confirm(
+        t("app.confirmAllowWrites", { name: selected?.name || t("app.thisConnection") }),
+      )
+    )
       return;
     setTogglingWrites(true);
     try {
@@ -242,9 +250,11 @@ function Shell() {
     if (loadError) {
       return (
         <div className="placeholder">
-          <div className="error">Could not load connections: {loadError}</div>
+          <div className="error">
+            {t("app.couldNotLoadConnections", { error: loadError })}
+          </div>
           <button className="btn" onClick={() => void refresh()}>
-            Retry
+            {t("app.retry")}
           </button>
         </div>
       );
@@ -259,20 +269,20 @@ function Shell() {
     }
     const safetyFallback = safetyError ? (
       <div className="error">
-        Failed to load safety settings: {safetyError}{" "}
+        {t("app.loadSafetyFailed", { error: safetyError })}{" "}
         <button className="btn small" onClick={() => selectedId && loadSafety(selectedId)}>
-          Retry
+          {t("app.retry")}
         </button>
       </div>
     ) : (
-      <div className="muted">Loading…</div>
+      <div className="muted">{t("app.loading")}</div>
     );
 
     // Data/SQL/History/Audit need a connection; Agent is connection-independent and always
     // renders its live feed. With no connection selected, the tab bar still shows so Agent
     // stays reachable — the data tabs fall back to a "pick a connection" placeholder.
     const needsConn = (
-      <div className="placeholder muted">Select a connection from the sidebar.</div>
+      <div className="placeholder muted">{t("app.connectionRequired")}</div>
     );
 
     return (
@@ -280,7 +290,7 @@ function Shell() {
         {selected && (
           <header className="main-head">
             <div>
-              <strong>{selected.name || "(unnamed)"}</strong>
+              <strong>{selected.name || t("app.unnamed")}</strong>
               <span className="muted">
                 {" "}
                 {selected.engine} · {selected.database}
@@ -294,49 +304,53 @@ function Shell() {
                   onClick={() => void toggleWrites()}
                   title={
                     safety.allowWrites
-                      ? "Writes allowed — click to switch to read-only"
-                      : "Read-only — click to allow writes"
+                      ? t("app.writeWritesAllowedTitle")
+                      : t("app.writeReadOnlyTitle")
                   }
                 >
-                  {togglingWrites ? "…" : safety.allowWrites ? "writes allowed" : "read-only"}
+                  {togglingWrites
+                    ? "..."
+                    : safety.allowWrites
+                      ? t("app.writeWritesAllowed")
+                      : t("app.writeReadOnly")}
                 </button>
               )}
             </div>
             <button className="btn small" onClick={() => setEditing(selected)}>
-              Edit
+              {t("app.edit")}
             </button>
           </header>
         )}
 
         <nav className="tabs" role="tablist">
-          {TABS.map((t) => (
+          {TABS.map((tabId) => (
             <button
-              key={t.id}
+              key={tabId}
               ref={(el) => {
-                tabRefs.current[t.id] = el;
+                tabRefs.current[tabId] = el;
               }}
               role="tab"
-              aria-selected={t.id === tab}
+              aria-selected={tabId === tab}
               // Roving tabindex: only the active tab is in the Tab order; arrows move within.
-              tabIndex={t.id === tab ? 0 : -1}
+              tabIndex={tabId === tab ? 0 : -1}
               className={
-                (t.id === tab ? "tab active" : "tab") +
-                (t.id === "agent" ? " agent-tab" : "")
+                (tabId === tab ? "tab active" : "tab") +
+                (tabId === "agent" ? " agent-tab" : "")
               }
-              onClick={() => setTab(t.id)}
+              onClick={() => setTab(tabId)}
               // Arrow keys move focus+selection across TABS, wrapping — mirrors the sidebar tree.
               onKeyDown={(e) => {
                 if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
                 e.preventDefault();
-                const i = TABS.findIndex((x) => x.id === tab);
+                const i = TABS.findIndex((x) => x === tab);
                 const d = e.key === "ArrowRight" ? 1 : -1;
-                const next = TABS[(i + d + TABS.length) % TABS.length].id;
+                const next = TABS[(i + d + TABS.length) % TABS.length];
                 setTab(next);
                 tabRefs.current[next]?.focus();
               }}
             >
-              {t.label}
-              {t.id === "agent" && unseen > 0 && (
+              {t(TAB_LABELS[tabId])}
+              {tabId === "agent" && unseen > 0 && (
                 <span className="tab-dot">{unseen > 9 ? "9+" : unseen}</span>
               )}
             </button>
@@ -354,7 +368,7 @@ function Shell() {
               <TableData connection={selected} table={selectedTable} safety={safety} />
             ) : (
               <div className="placeholder muted">
-                Select a table from the sidebar, or open the SQL tab to run a query.
+                {t("app.noTableSelected")}
               </div>
             ))}
           {tab === "sql" &&
@@ -422,7 +436,7 @@ function Shell() {
       />
       <div
         className="sidebar-resizer"
-        title="Drag to resize (double-click resets)"
+        title={t("app.dragResize")}
         onMouseDown={startSidebarDrag}
         onDoubleClick={() => {
           setSidebarW(SIDEBAR_DEFAULT);

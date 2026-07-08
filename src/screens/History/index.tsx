@@ -7,6 +7,7 @@ import type { ConnectionProfile, HistoryEntry } from "../../ipc/types";
 import { errMessage } from "../../ipc/types";
 import { useToast } from "../../components/Toast";
 import { relTime, fullTime } from "../../lib/relTime";
+import { useI18n } from "../../lib/i18n";
 import "./history.css";
 
 const CAP = 200;
@@ -28,6 +29,7 @@ export default function History({
   connection: ConnectionProfile;
   onLoadSql: (sql: string) => void;
 }) {
+  const { t } = useI18n();
   const [rows, setRows] = useState<HistoryEntry[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -70,15 +72,15 @@ export default function History({
 
   function load(sql: string) {
     onLoadSql(sql);
-    toast("Loaded into editor");
+    toast(t("history.loaded"));
   }
 
   return (
     <div className="screen history">
       <div className="history-head">
-        <span className="history-title">Query history</span>
+        <span className="history-title">{t("history.title")}</span>
         <button className="btn small" onClick={refresh} disabled={loading}>
-          {loading ? "…" : "Refresh"}
+          {loading ? "..." : t("common.refresh")}
         </button>
       </div>
 
@@ -87,12 +89,12 @@ export default function History({
           <input
             className="history-filter-text"
             type="search"
-            placeholder="Filter SQL…"
+            placeholder={t("history.filterSql")}
             value={text}
             onChange={(e) => setText(e.target.value)}
           />
           <select value={statusF} onChange={(e) => setStatusF(e.target.value)}>
-            <option value="">All statuses</option>
+            <option value="">{t("history.allStatuses")}</option>
             {statuses.map((s) => (
               <option key={s} value={s}>
                 {s}
@@ -100,7 +102,7 @@ export default function History({
             ))}
           </select>
           <select value={originF} onChange={(e) => setOriginF(e.target.value)}>
-            <option value="">All origins</option>
+            <option value="">{t("history.allOrigins")}</option>
             {origins.map((o) => (
               <option key={o} value={o}>
                 {o}
@@ -113,7 +115,9 @@ export default function History({
       {err && <div className="error">{err}</div>}
       {!err && rows.length === 0 && (
         <div className="muted empty">
-          No queries run against {connection.name || "this connection"} yet.
+          {t("history.empty", {
+            name: connection.name || t("app.thisConnection"),
+          })}
         </div>
       )}
 
@@ -121,13 +125,13 @@ export default function History({
         <table className="history-table">
           <thead>
             <tr>
-              <th>Executed</th>
-              <th>Origin</th>
-              <th>Kind</th>
-              <th>Status</th>
-              <th className="num">Rows</th>
-              <th className="num">Duration</th>
-              <th>SQL</th>
+              <th>{t("history.executed")}</th>
+              <th>{t("history.origin")}</th>
+              <th>{t("history.kind")}</th>
+              <th>{t("history.status")}</th>
+              <th className="num">{t("history.rows")}</th>
+              <th className="num">{t("history.duration")}</th>
+              <th>{t("history.sql")}</th>
             </tr>
           </thead>
           <tbody>
@@ -144,7 +148,7 @@ export default function History({
                     load(h.sql);
                   }
                 }}
-                title="Load this statement into the SQL editor"
+                title={t("history.loadTitle")}
               >
                 <td className="nowrap muted" title={fullTime(h.executedAt)}>
                   {relTime(h.executedAt)}
@@ -174,12 +178,12 @@ export default function History({
       )}
 
       {rows.length > 0 && filtered.length === 0 && (
-        <div className="muted empty">No queries match the filter.</div>
+        <div className="muted empty">{t("history.noMatches")}</div>
       )}
 
       {filtered.length > CAP && (
         <div className="muted history-note">
-          Showing latest {CAP} of {filtered.length} matching.
+          {t("history.matching", { cap: CAP, count: filtered.length })}
         </div>
       )}
     </div>

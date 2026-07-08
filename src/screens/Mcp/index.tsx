@@ -16,6 +16,7 @@ import type { PlatformInfo } from "../../ipc/types";
 import { errMessage } from "../../ipc/types";
 import ConfirmButton from "../../components/ConfirmButton";
 import { useToast } from "../../components/Toast";
+import { useI18n } from "../../lib/i18n";
 
 interface Result {
   ok: boolean;
@@ -23,6 +24,7 @@ interface Result {
 }
 
 export default function Mcp({ onOpenAgent }: { onOpenAgent?: () => void }) {
+  const { t } = useI18n();
   const toast = useToast();
   const [status, setStatus] = useState<McpStatus | null>(null);
   const [runtime, setRuntime] = useState<McpRuntimeStatus | null>(null);
@@ -84,15 +86,19 @@ export default function Mcp({ onOpenAgent }: { onOpenAgent?: () => void }) {
   }
 
   const connect = (id: string) =>
-    runPlatformAction(id, connectPlatform, (name) => `Connected ${name}`);
+    runPlatformAction(id, connectPlatform, (name) =>
+      t("mcp.connectedToast", { name }),
+    );
 
   async function disconnect(id: string) {
-    await runPlatformAction(id, disconnectPlatform, (name) => `Removed from ${name}`);
+    await runPlatformAction(id, disconnectPlatform, (name) =>
+      t("mcp.removedToast", { name }),
+    );
   }
 
   const copy = (text: string, label: string) => {
     void navigator.clipboard.writeText(text);
-    toast(`${label} copied`);
+    toast(t("mcp.copied", { label }));
   };
 
   const running = !!runtime?.httpRunning;
@@ -106,33 +112,33 @@ export default function Mcp({ onOpenAgent }: { onOpenAgent?: () => void }) {
 
   return (
     <div className="screen mcp">
-      <h2>MCP server</h2>
+      <h2>{t("mcp.server")}</h2>
 
       {running ? (
         <div className="mcp-status">
-          <span className="dot-on" /> HTTP running{status && <> · <code>{status.url}</code></>}
+          <span className="dot-on" /> {t("mcp.httpRunning")}{status && <> · <code>{status.url}</code></>}
           <span className="muted"> (Claude Code · Cursor · VS Code)</span>
         </div>
       ) : (
         <div className="error">
-          MCP HTTP server not running.
+          {t("mcp.httpNotRunning")}
           {runtime?.error ? ` ${runtime.error}` : statusErr ? ` ${statusErr}` : ""}
         </div>
       )}
       {/* Bridge listener (7687) is the path Claude Desktop / Codex use. If it's down,
           those clients can't reach the app even though HTTP works. */}
       <div className={bridge ? "mcp-status" : "error"}>
-        {bridge ? <span className="dot-on" /> : null} stdio bridge{" "}
-        {bridge ? "ready" : "down"}
+        {bridge ? <span className="dot-on" /> : null} {t("mcp.stdioBridge")}{" "}
+        {bridge ? t("mcp.bridgeReady") : t("mcp.bridgeDown")}
         <span className="muted"> (Claude Desktop · Codex)</span>
         {!bridge && runtime?.error ? ` — ${runtime.error}` : ""}
       </div>
 
-      <h3>Connect your agent (one click)</h3>
+      <h3>{t("mcp.connectAgent")}</h3>
       {platErr ? (
-        <div className="error">Could not detect AI platforms: {platErr}</div>
+        <div className="error">{t("mcp.platformDetectFailed", { error: platErr })}</div>
       ) : platforms.length === 0 ? (
-        <div className="muted">No supported AI platforms detected on this machine.</div>
+        <div className="muted">{t("mcp.noPlatforms")}</div>
       ) : (
         <div className="mcp-platforms">
           {platforms.map((p) => (
@@ -140,24 +146,28 @@ export default function Mcp({ onOpenAgent }: { onOpenAgent?: () => void }) {
               <div className="plat-row">
                 <div className="plat-info">
                   <strong>{p.name}</strong>
-                  {p.connected && <span className="plat-tag">✓ Connected</span>}
-                  <span className="muted"> · {p.installed ? p.note : "not installed"}</span>
+                  {p.connected && <span className="plat-tag">✓ {t("mcp.connected")}</span>}
+                  <span className="muted"> · {p.installed ? p.note : t("mcp.notInstalled")}</span>
                 </div>
                 <button
                   className={p.connected ? "btn small" : "btn small primary"}
                   disabled={!p.installed || connecting === p.id}
                   onClick={() => void connect(p.id)}
                 >
-                  {connecting === p.id ? "Working…" : p.connected ? "Reconnect" : "Connect"}
+                  {connecting === p.id
+                    ? t("mcp.working")
+                    : p.connected
+                      ? t("mcp.reconnect")
+                      : t("mcp.connect")}
                 </button>
                 {p.connected && (
                   <ConfirmButton
                     className="btn small danger"
-                    confirmLabel="Remove dopedb?"
+                    confirmLabel={t("mcp.removeConfirm")}
                     disabled={connecting === p.id}
                     onConfirm={() => void disconnect(p.id)}
                   >
-                    Remove
+                    {t("mcp.remove")}
                   </ConfirmButton>
                 )}
               </div>
@@ -171,30 +181,30 @@ export default function Mcp({ onOpenAgent }: { onOpenAgent?: () => void }) {
 
       {status && (
         <details className="manual-setup">
-          <summary>Manual setup / other platforms (Cursor, VS Code, …)</summary>
+          <summary>{t("mcp.manualSetup")}</summary>
           <div className="mcp-field">
-            <label>Bearer token</label>
+            <label>{t("mcp.token")}</label>
             <div className="mcp-token">
               <code>{status.token}</code>
               <button className="btn small" onClick={() => copy(status.token, "Token")}>
-                Copy
+                {t("common.copy")}
               </button>
             </div>
           </div>
           <div className="mcp-field">
             <div className="mcp-field-head">
-              <label>HTTP config (Cursor / VS Code / Windsurf)</label>
+              <label>{t("mcp.httpConfig")}</label>
               <button className="btn small" onClick={() => copy(httpConfig, "HTTP config")}>
-                Copy
+                {t("common.copy")}
               </button>
             </div>
             <pre onClick={() => copy(httpConfig, "HTTP config")}>{httpConfig}</pre>
           </div>
           <div className="mcp-field">
             <div className="mcp-field-head">
-              <label>Claude Desktop config (stdio bridge)</label>
+              <label>{t("mcp.desktopConfig")}</label>
               <button className="btn small" onClick={() => copy(desktopConfig, "Desktop config")}>
-                Copy
+                {t("common.copy")}
               </button>
             </div>
             <pre onClick={() => copy(desktopConfig, "Desktop config")}>{desktopConfig}</pre>
@@ -203,10 +213,10 @@ export default function Mcp({ onOpenAgent }: { onOpenAgent?: () => void }) {
       )}
 
       <p className="muted">
-        Live agent activity has moved to the Agent tab.{" "}
+        {t("mcp.liveMoved")}{" "}
         {onOpenAgent && (
           <button className="btn small" onClick={onOpenAgent}>
-            Open Agent tab
+            {t("mcp.openAgent")}
           </button>
         )}
       </p>

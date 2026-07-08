@@ -1,13 +1,14 @@
 // Inline two-step confirm: one click arms it ("Really delete? Yes / No"), auto-reverts
 // after 3s if untouched. No window.confirm. Styling reuses .btn; inline flex, no css file.
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useI18n } from "../lib/i18n";
 
 export default function ConfirmButton({
   children,
   onConfirm,
   className = "btn",
   disabled,
-  confirmLabel = "Really delete?",
+  confirmLabel,
 }: {
   children: ReactNode;
   onConfirm: () => void;
@@ -15,6 +16,7 @@ export default function ConfirmButton({
   disabled?: boolean;
   confirmLabel?: string;
 }) {
+  const { t } = useI18n();
   const [armed, setArmed] = useState(false);
   const timer = useRef<number | undefined>(undefined);
 
@@ -37,7 +39,7 @@ export default function ConfirmButton({
 
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-      <span className="muted">{confirmLabel}</span>
+      <span className="muted">{confirmLabel ?? t("common.reallyDelete")}</span>
       <button
         className="btn danger small"
         disabled={disabled}
@@ -47,7 +49,7 @@ export default function ConfirmButton({
           onConfirm();
         }}
       >
-        Yes
+        {t("common.yes")}
       </button>
       <button
         className="btn small"
@@ -57,7 +59,7 @@ export default function ConfirmButton({
           setArmed(false);
         }}
       >
-        No
+        {t("common.no")}
       </button>
     </span>
   );

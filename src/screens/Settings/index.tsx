@@ -2,11 +2,12 @@
 // per-connection safety. Moved out of the top tab bar so tabs stay data-focused.
 import { useEffect, useRef, useState } from "react";
 import type { ConnectionProfile } from "../../ipc/types";
+import { useI18n } from "../../lib/i18n";
 import Mcp from "../Mcp";
 import Safety from "../Safety";
 import Updates from "../Updates";
 
-type Section = "mcp" | "safety" | "updates";
+type Section = "mcp" | "safety" | "updates" | "language";
 
 export default function Settings({
   connection,
@@ -23,6 +24,7 @@ export default function Settings({
   // Jump from the MCP section to the app-level Agent tab (closes Settings).
   onOpenAgent: () => void;
 }) {
+  const { lang, setLang, t } = useI18n();
   const [section, setSection] = useState<Section>(
     initialSection ?? (connection ? "safety" : "mcp"),
   );
@@ -53,41 +55,61 @@ export default function Settings({
     <div className="settings">
       <aside className="settings-nav">
         <div className="settings-head">
-          <strong>Settings</strong>
+          <strong>{t("common.settings")}</strong>
           <button className="btn small" onClick={close}>
-            Done
+            {t("common.done")}
           </button>
         </div>
         <button
           className={section === "mcp" ? "snav active" : "snav"}
           onClick={() => setSection("mcp")}
         >
-          MCP server
+          {t("mcp.server")}
         </button>
         <button
           className={section === "safety" ? "snav active" : "snav"}
           onClick={() => setSection("safety")}
           disabled={!connection}
-          title={connection ? undefined : "Select a connection first"}
+          title={connection ? undefined : t("settings.selectConnectionTitle")}
         >
-          Safety{connection ? ` · ${connection.name || "(unnamed)"}` : ""}
+          {t("settings.safety")}
+          {connection ? ` · ${connection.name || t("app.unnamed")}` : ""}
+        </button>
+        <button
+          className={section === "language" ? "snav active" : "snav"}
+          onClick={() => setSection("language")}
+        >
+          {t("settings.languageTitle")}
         </button>
         <button
           className={section === "updates" ? "snav active" : "snav"}
           onClick={() => setSection("updates")}
         >
-          Updates
+          {t("settings.updates")}
         </button>
       </aside>
 
       <div className="settings-body">
         {section === "mcp" && <Mcp onOpenAgent={onOpenAgent} />}
         {section === "updates" && <Updates />}
+        {section === "language" && (
+          <div className="screen form">
+            <h2>{t("settings.languageTitle")}</h2>
+            <p className="muted">{t("settings.languageBody")}</p>
+            <label>
+              {t("language.label")}
+              <select value={lang} onChange={(e) => setLang(e.target.value as typeof lang)}>
+                <option value="ko">{t("language.korean")}</option>
+                <option value="en">{t("language.english")}</option>
+              </select>
+            </label>
+          </div>
+        )}
         {section === "safety" &&
           (connection ? (
             <Safety connectionId={connection.id} />
           ) : (
-            <div className="muted">Select a connection to edit its safety settings.</div>
+            <div className="muted">{t("settings.selectConnection")}</div>
           ))}
       </div>
     </div>

@@ -22,6 +22,7 @@ import ApprovalCard from "../../components/ApprovalCard";
 import { useToast } from "../../components/Toast";
 import { tableKey, tableLabel } from "../../lib/tableRef";
 import { downloadCsv, downloadJson, stamp } from "../../lib/export";
+import { useI18n } from "../../lib/i18n";
 import {
   buildCountQuery,
   buildDelete,
@@ -51,6 +52,7 @@ export default function TableData({
   table: CatalogTable;
   safety: SafetySettings;
 }) {
+  const { t } = useI18n();
   const toast = useToast();
   const engine = connection.engine;
   const [result, setResult] = useState<QueryResult | null>(null);
@@ -208,13 +210,13 @@ export default function TableData({
           .map((v) => (v == null ? "" : typeof v === "object" ? JSON.stringify(v) : String(v)))
           .join("\t");
     void navigator.clipboard.writeText(text);
-    toast("Row copied");
+    toast(t("tables.copyRow"));
   }
 
   function onWritten(o: ExecOutcome) {
     // A committed write that matched no rows is not a success — flag it, don't green-light it.
-    if (o.affected === 0) toast("No rows matched — nothing was changed", "error");
-    else toast(o.affected != null ? `${o.affected} row(s) written` : "Write committed");
+    if (o.affected === 0) toast(t("tables.noRowsWritten"), "error");
+    else toast(o.affected != null ? t("tables.rowsWritten", { count: o.affected }) : t("tables.writeCommitted"));
     setPrepared(null);
     setEditor(null);
     setPendingDelete(null);
@@ -222,8 +224,8 @@ export default function TableData({
   }
 
   const noEditTitle = nonScalarPk
-    ? "Primary key is a binary/JSON/array/composite type — row editing disabled (value can't be matched safely)"
-    : "Table has no primary key — row editing disabled";
+    ? t("tables.nonScalarPk")
+    : t("tables.noTablePk");
   const panelOpen = !!prepared || !!editor || !!cellSel || !!pendingDelete;
 
   return (
@@ -231,28 +233,34 @@ export default function TableData({
       <div className="table-data-head">
         <strong>{tableLabel(engine, table)}</strong>
         <span className="muted">
-          {table.columns.length} cols
+          {t("tables.cols", { count: table.columns.length })}
           {result && (
             <>
-              {" · "}rows {from}–{to}
-              {total != null && ` of ${total.toLocaleString()}`}
+              {" · "}
+              {total != null
+                ? t("tables.rowRangeTotal", {
+                    from,
+                    to,
+                    total: total.toLocaleString(),
+                  })
+                : t("tables.rowRange", { from, to })}
               {result.truncated ? " (truncated)" : ""} · {result.durationMs} ms
             </>
           )}
         </span>
         <div className="table-pager">
           <button className="btn small" disabled={busy || !hasPrev} onClick={() => void load(0)}>
-            « First
+            « {t("common.first")}
           </button>
           <button
             className="btn small"
             disabled={busy || !hasPrev}
             onClick={() => void load(page - 1)}
           >
-            ‹ Prev
+            ‹ {t("common.prev")}
           </button>
           <span className="muted page-ind">
-            Page {page + 1}
+            {t("tables.page", { page: page + 1 })}
             {lastPage != null && ` / ${lastPage + 1}`}
           </span>
           <button
@@ -260,20 +268,20 @@ export default function TableData({
             disabled={busy || !hasNext}
             onClick={() => void load(page + 1)}
           >
-            Next ›
+            {t("common.next")} ›
           </button>
           <button
             className="btn small"
             disabled={busy || lastPage == null || !hasNext}
             onClick={() => lastPage != null && void load(lastPage)}
           >
-            Last »
+            {t("tables.last")} »
           </button>
           <button
             className="btn small refresh"
             disabled={busy}
-            aria-label="Refresh"
-            title="Refresh"
+            aria-label={t("common.refresh")}
+            title={t("common.refresh")}
             onClick={() => void load(page)}
           >
             {busy ? "…" : <Icon name="refresh" />}
@@ -281,10 +289,10 @@ export default function TableData({
           <button
             className="btn small"
             aria-expanded={structure}
-            title="Show columns, indexes and foreign keys"
+            title={t("tables.structureTitle")}
             onClick={() => setStructure((s) => !s)}
           >
-            Structure
+            {t("tables.structure")}
           </button>
         </div>
       </div>
@@ -295,9 +303,9 @@ export default function TableData({
           <table className="struct-table">
             <thead>
               <tr>
-                <th>Column</th>
-                <th>Type</th>
-                <th>Nullable</th>
+                <th>{t("tables.column")}</th>
+                <th>{t("tables.type")}</th>
+                <th>{t("tables.nullable")}</th>
                 <th>PK</th>
               </tr>
             </thead>
@@ -306,7 +314,7 @@ export default function TableData({
                 <tr key={c.name}>
                   <td>{c.name}</td>
                   <td className="muted">{c.dataType}</td>
-                  <td>{c.nullable ? "yes" : "no"}</td>
+                  <td>{c.nullable ? t("common.yes") : t("common.no")}</td>
                   <td>{c.pk ? "PK" : ""}</td>
                 </tr>
               ))}
@@ -314,22 +322,22 @@ export default function TableData({
           </table>
           <div className="struct-meta">
             <div>
-              <strong>Indexes</strong>
+              <strong>{t("tables.indexes")}</strong>
               {table.indexes.length ? (
                 <ul>
                   {table.indexes.map((ix) => (
                     <li key={ix.name}>
                       {ix.name}
-                      {ix.unique ? " (unique)" : ""}: {ix.columns.join(", ")}
+                      {ix.unique ? ` (${t("tables.unique")})` : ""}: {ix.columns.join(", ")}
                     </li>
                   ))}
                 </ul>
               ) : (
-                <span className="muted"> none</span>
+                <span className="muted"> {t("common.none")}</span>
               )}
             </div>
             <div>
-              <strong>Foreign keys</strong>
+              <strong>{t("tables.foreignKeys")}</strong>
               {table.foreignKeys.length ? (
                 <ul>
                   {table.foreignKeys.map((fk) => (
@@ -340,7 +348,7 @@ export default function TableData({
                   ))}
                 </ul>
               ) : (
-                <span className="muted"> none</span>
+                <span className="muted"> {t("common.none")}</span>
               )}
             </div>
           </div>
@@ -354,7 +362,7 @@ export default function TableData({
           title={canEdit ? undefined : noEditTitle}
           onClick={() => openEdit("insert")}
         >
-          + Insert
+          {t("tables.insert")}
         </button>
         <button
           className="btn small"
@@ -362,7 +370,7 @@ export default function TableData({
           title={canEdit ? undefined : noEditTitle}
           onClick={() => openEdit("edit")}
         >
-          Edit
+          {t("tables.edit")}
         </button>
         <button
           className="btn small"
@@ -370,10 +378,10 @@ export default function TableData({
           title={canEdit ? undefined : noEditTitle}
           onClick={doDelete}
         >
-          Delete
+          {t("tables.delete")}
         </button>
         <details className="toolbar-menu">
-          <summary className="btn small">More</summary>
+          <summary className="btn small">{t("tables.more")}</summary>
           <div className="toolbar-menu-panel">
             <button
               className="btn small"
@@ -381,33 +389,33 @@ export default function TableData({
               title={canEdit ? undefined : noEditTitle}
               onClick={() => openEdit("duplicate")}
             >
-              Duplicate
+              {t("tables.duplicate")}
             </button>
             <button className="btn small" disabled={selected == null} onClick={() => copyRow(false)}>
-              Copy TSV
+              {t("tables.copyTsv")}
             </button>
             <button className="btn small" disabled={selected == null} onClick={() => copyRow(true)}>
-              Copy JSON
+              {t("tables.copyJson")}
             </button>
             <button
               className="btn small"
               disabled={!rows}
-              title="Exports the current page"
+              title={t("tables.exportPageTitle")}
               onClick={() =>
                 result && downloadCsv(`${table.name}-page${page + 1}-${stamp()}`, result.columns, result.rows)
               }
             >
-              Export CSV
+              {t("tables.exportCsv")}
             </button>
             <button
               className="btn small"
               disabled={!rows}
-              title="Exports the current page"
+              title={t("tables.exportPageTitle")}
               onClick={() =>
                 result && downloadJson(`${table.name}-page${page + 1}-${stamp()}`, result.columns, result.rows)
               }
             >
-              Export JSON
+              {t("tables.exportJson")}
             </button>
           </div>
         </details>
@@ -415,10 +423,12 @@ export default function TableData({
           <>
             <span className="tb-sep" />
             <span className="muted">
-              {activeFilters} filter{activeFilters > 1 ? "s" : ""}
+              {t(activeFilters > 1 ? "tables.activeFiltersPlural" : "tables.activeFilters", {
+                count: activeFilters,
+              })}
             </span>
             <button className="btn small" onClick={() => setFilters({})}>
-              Clear
+              {t("tables.clear")}
             </button>
           </>
         )}
@@ -447,15 +457,15 @@ export default function TableData({
           ) : busy ? (
             // Reloading (filter cleared / table switched) — the stale zero-row result would
             // otherwise flash a wrong "Table is empty." against the now-live filter state.
-            <div className="muted loading">Loading rows…</div>
+            <div className="muted loading">{t("tables.loadingRows")}</div>
           ) : (
             // Loaded but zero rows: distinguish an empty table from a filter that matched nothing.
             <div className="muted">
-              {activeFilters > 0 ? "No rows match the current filter." : "Table is empty."}
+              {activeFilters > 0 ? t("tables.noRowsFilter") : t("tables.tableEmpty")}
             </div>
           )
         ) : (
-          !err && <div className={busy ? "muted loading" : "muted"}>{busy ? "Loading rows…" : "No rows."}</div>
+          !err && <div className={busy ? "muted loading" : "muted"}>{busy ? t("tables.loadingRows") : t("tables.noRows")}</div>
         )}
 
         {panelOpen && (
@@ -477,8 +487,8 @@ export default function TableData({
             {pendingDelete && (
               <div className="row-editor">
                 <div className="panel-head">
-                  <strong>Delete row?</strong>
-                  <button className="btn small" aria-label="Cancel" onClick={() => setPendingDelete(null)}>
+                  <strong>{t("tables.deleteRow")}</strong>
+                  <button className="btn small" aria-label={t("common.cancel")} onClick={() => setPendingDelete(null)}>
                     <Icon name="close" />
                   </button>
                 </div>
@@ -495,10 +505,10 @@ export default function TableData({
                 </div>
                 <div className="row-editor-actions">
                   <button className="btn primary" onClick={armDelete}>
-                    Review DELETE
+                    {t("tables.reviewDelete")}
                   </button>
                   <button className="btn" onClick={() => setPendingDelete(null)}>
-                    Cancel
+                    {t("common.cancel")}
                   </button>
                 </div>
               </div>
