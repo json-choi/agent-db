@@ -33,36 +33,36 @@ const copy = {
       home: "dopedb home",
     },
     hero: {
-      eyebrow: "Free, open-source MCP database client",
-      tag: "Give your AI agent a safe path to your database",
+      eyebrow: "Free local MCP database gateway",
+      tag: "Let your agent query data without handing over the keys",
       text:
-        "dopedb is a free local database client with a built-in MCP server. Keep using your favorite agent for questions and analysis, while credentials, read tools, write approvals, rollback previews, and audit logs stay inside a native macOS app.",
+        "dopedb gives MCP-capable agents a guarded path into Postgres, MySQL, and SQLite. Keep using your favorite agent for questions and analysis while credentials, read-only enforcement, write approvals, rollback previews, and audit logs stay inside a native macOS app.",
       download: "Download for macOS",
       github: "View on GitHub",
-      signals: ["Free to use", "MCP-ready", "Local safety gate"],
+      signals: ["Agent-ready", "Credentials stay local", "Writes stay gated"],
       imageAlt:
         "dopedb desktop app showing a SQL result, safety gate, and audit timeline",
     },
     positioning: {
-      eyebrow: "Why it feels different",
-      title: "Not another AI SQL box. A database client your agent can actually use.",
+      eyebrow: "The gap dopedb fills",
+      title: "Your agent needs database context. It does not need your database keys.",
       body:
-        "The market already has great database clients and plenty of text-to-SQL assistants. dopedb is the missing bridge: a free local client that exposes database context to MCP-capable agents without handing them raw credentials or silent write access.",
+        "Database clients help humans operate data. Text-to-SQL tools help generate queries. dopedb sits between them: a local MCP gateway that lets agents inspect and query databases without raw credentials or silent write access.",
       items: [
         {
-          title: "Your agent stays your agent",
+          title: "Use the agent you already trust",
           body:
-            "Use the AI tool you already live in. dopedb provides the guarded database surface through MCP.",
+            "Claude Code, Codex, Claude Desktop, or another MCP client can ask dopedb for schema and read-query context.",
         },
         {
-          title: "Free client, real guardrails",
+          title: "Expose context, not credentials",
           body:
-            "Connect Postgres, MySQL, or SQLite, browse data, and let reads flow while risky paths stay gated.",
+            "Connections and secrets stay in the local app boundary while the agent gets a narrow, auditable tool surface.",
         },
         {
-          title: "Results land where humans review them",
+          title: "Keep risky actions visible",
           body:
-            "Agent queries show up in the app with history, audit logs, approvals, and rollback context.",
+            "Read queries can flow. Writes and DDL stay behind policy, approval, rollback preview, and audit history.",
         },
       ],
     },
@@ -148,7 +148,7 @@ dopedb safety:
       ],
     },
     jsonDescription:
-      "dopedb is a free local MCP database client for AI agents. Agents can inspect and query databases while credentials, write approvals, rollback previews, and audit logs stay in a native macOS app.",
+      "dopedb is a free local MCP database gateway for AI agents. Agents can inspect schemas and run read queries while credentials, write approvals, rollback previews, and audit logs stay in a native macOS app.",
   },
   ko: {
     nav: {
@@ -160,36 +160,36 @@ dopedb safety:
       home: "dopedb 홈",
     },
     hero: {
-      eyebrow: "무료 오픈소스 MCP 데이터베이스 클라이언트",
-      tag: "AI 에이전트에게 안전한 데이터베이스 통로를 열어주세요",
+      eyebrow: "무료 로컬 MCP 데이터베이스 게이트웨이",
+      tag: "키를 넘기지 않고 에이전트에게 데이터 통로를 열어주세요",
       text:
-        "dopedb는 MCP 서버가 내장된 무료 로컬 데이터베이스 클라이언트입니다. 질문과 분석은 좋아하는 에이전트에게 맡기고, 연결 정보, 읽기 도구, 쓰기 승인, 롤백 미리보기, 감사 로그는 네이티브 macOS 앱 안에 둡니다.",
+        "dopedb는 MCP 지원 에이전트가 Postgres, MySQL, SQLite를 안전하게 읽고 이해할 수 있게 합니다. 질문과 분석은 좋아하는 에이전트에게 맡기고, 인증 정보, 읽기 전용 실행, 쓰기 승인, 롤백 미리보기, 감사 로그는 네이티브 macOS 앱 안에 둡니다.",
       download: "macOS용 다운로드",
       github: "GitHub에서 보기",
-      signals: ["무료 사용", "MCP 지원", "로컬 안전 게이트"],
+      signals: ["에이전트 준비 완료", "인증 정보는 로컬에", "쓰기는 승인 뒤에"],
       imageAlt:
         "SQL 결과, 안전 게이트, 감사 타임라인을 보여주는 dopedb 데스크톱 앱",
     },
     positioning: {
-      eyebrow: "무엇이 다른가",
-      title: "또 하나의 AI SQL 입력창이 아니라, 에이전트가 실제로 쓸 수 있는 DB 클라이언트.",
+      eyebrow: "dopedb가 메우는 빈틈",
+      title: "에이전트에게 필요한 건 DB 맥락이지, DB 키가 아닙니다.",
       body:
-        "시장에는 좋은 데이터베이스 클라이언트도 많고 text-to-SQL 도구도 많습니다. dopedb의 빈자리는 그 사이입니다. MCP 지원 에이전트가 데이터베이스 맥락을 읽고 쿼리할 수 있게 하되, 원본 인증 정보와 조용한 쓰기 권한은 넘기지 않는 무료 로컬 클라이언트입니다.",
+        "데이터베이스 클라이언트는 사람이 데이터를 다루게 해주고, text-to-SQL 도구는 쿼리를 만들어줍니다. dopedb는 그 사이에 있습니다. 에이전트가 데이터베이스를 읽고 쿼리할 수 있게 하되, 원본 인증 정보와 조용한 쓰기 권한은 넘기지 않는 로컬 MCP 게이트웨이입니다.",
       items: [
         {
-          title: "에이전트는 그대로",
+          title: "이미 믿는 에이전트를 그대로",
           body:
-            "이미 쓰는 AI 도구를 계속 쓰세요. dopedb가 MCP를 통해 안전한 데이터베이스 표면을 제공합니다.",
+            "Claude Code, Codex, Claude Desktop 같은 MCP 클라이언트가 dopedb를 통해 스키마와 읽기 쿼리 맥락을 요청할 수 있습니다.",
         },
         {
-          title: "무료 클라이언트, 실제 가드레일",
+          title: "인증 정보가 아닌 맥락만 노출",
           body:
-            "Postgres, MySQL, SQLite를 연결하고 데이터를 탐색하세요. 읽기는 흐르게 두고 위험한 경로는 게이트 뒤에 둡니다.",
+            "연결과 비밀값은 로컬 앱 경계 안에 두고, 에이전트에는 좁고 감사 가능한 도구 표면만 제공합니다.",
         },
         {
-          title: "결과는 사람이 검토하는 곳으로",
+          title: "위험한 동작은 보이는 곳에",
           body:
-            "에이전트 쿼리는 앱에 실시간으로 나타나고 히스토리, 감사 로그, 승인, 롤백 맥락과 함께 남습니다.",
+            "읽기 쿼리는 자연스럽게 흐르게 두고, 쓰기와 DDL은 정책, 승인, 롤백 미리보기, 감사 기록 뒤에 둡니다.",
         },
       ],
     },
@@ -275,7 +275,7 @@ dopedb safety:
       ],
     },
     jsonDescription:
-      "dopedb는 AI 에이전트를 위한 무료 로컬 MCP 데이터베이스 클라이언트입니다. 에이전트는 데이터베이스를 확인하고 쿼리할 수 있고, 인증 정보, 쓰기 승인, 롤백 미리보기, 감사 로그는 네이티브 macOS 앱에 남습니다.",
+      "dopedb는 AI 에이전트를 위한 무료 로컬 MCP 데이터베이스 게이트웨이입니다. 에이전트는 스키마를 확인하고 읽기 쿼리를 실행할 수 있고, 인증 정보, 쓰기 승인, 롤백 미리보기, 감사 로그는 네이티브 macOS 앱에 남습니다.",
   },
 };
 

@@ -1,6 +1,6 @@
 # dopedb
 
-dopedb is a **free, open-source macOS database client for AI agents that support MCP**. Agents can use dopedb to inspect, understand, and query your databases, while dopedb keeps connections, read-only execution, write approval gates, rollback previews, and audit logs inside the local desktop app.
+dopedb is a **free, open-source macOS app that gives AI agents a safe path to your databases**. Through MCP, agents can inspect schemas, run read queries, and understand results, while raw credentials, read-only enforcement, write approvals, rollback previews, and audit logs stay under the control of the local app.
 
 - Website: https://dopedb.dev (Korean: https://dopedb.dev/?lang=ko)
 - Download: https://github.com/json-choi/dopedb/releases/latest
@@ -10,7 +10,7 @@ dopedb is a **free, open-source macOS database client for AI agents that support
 ## Features
 
 - PostgreSQL, MySQL/MariaDB, and SQLite connection management
-- Built-in MCP server that gives MCP-capable agents a guarded database surface
+- Built-in MCP server that gives existing agents a guarded database surface
 - Read-only defaults and SQL classification
 - Approval card plus `allow_writes` gate for writes and DDL
 - Query history and hash-chained audit log
@@ -20,12 +20,12 @@ dopedb is a **free, open-source macOS database client for AI agents that support
 
 ## Why dopedb
 
-There are great free database clients, and there are plenty of AI SQL generators. dopedb is aimed at a different gap.
+There are great free database clients, and there are plenty of AI SQL generators. dopedb closes the risky gap between them.
 
-- It is not an AI feature bolted onto a SQL editor. It is a **free database client your existing agent can use through MCP**.
+- It is not an AI feature bolted onto a SQL editor. It is a **local database gateway your existing agent can use through MCP**.
 - The agent does not receive raw database credentials; the local app owns connections and secrets.
-- The MCP tool surface is read-only today, while writes and DDL remain behind the app approval gate.
-- Agent query results, history, approvals, and audit logs land in a UI humans can review.
+- The MCP tool surface is read-only today. Writes and DDL stay behind a human-visible approval gate.
+- The context your agent saw, the queries it ran, the results, approvals, and audit logs land in a UI humans can review.
 
 ## Language Support
 
