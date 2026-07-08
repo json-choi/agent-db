@@ -32,6 +32,7 @@ import {
   pkColumns,
   type GridSort,
 } from "../../lib/sqlBuild";
+import "./tables.css";
 
 const PAGE = 100;
 
@@ -230,25 +231,35 @@ export default function TableData({
 
   return (
     <div className="table-data">
-      <div className="table-data-head">
-        <strong>{tableLabel(engine, table)}</strong>
-        <span className="muted">
-          {t("tables.cols", { count: table.columns.length })}
-          {result && (
-            <>
-              {" · "}
-              {total != null
-                ? t("tables.rowRangeTotal", {
-                    from,
-                    to,
-                    total: total.toLocaleString(),
-                  })
-                : t("tables.rowRange", { from, to })}
-              {result.truncated ? " (truncated)" : ""} · {result.durationMs} ms
-            </>
-          )}
-        </span>
-        <div className="table-pager">
+      <div className="table-data-head ds-workbench-head">
+        <div className="ds-workbench-title">
+          <h3>{t("tables.editor")}</h3>
+          <div className="ds-title-line">
+            <strong>{tableLabel(engine, table)}</strong>
+            <span className="ds-context-badge">{table.kind === "view" ? t("schema.view") : t("tables.sourceTable")}</span>
+          </div>
+          <div className="ds-meta-row">
+            <span>{t("tables.cols", { count: table.columns.length })}</span>
+            {result && (
+              <>
+                <span className="ds-meta-dot" />
+                <span>
+                  {total != null
+                    ? t("tables.rowRangeTotal", {
+                        from,
+                        to,
+                        total: total.toLocaleString(),
+                      })
+                    : t("tables.rowRange", { from, to })}
+                  {result.truncated ? " (truncated)" : ""}
+                </span>
+                <span className="ds-meta-dot" />
+                <span>{result.durationMs} ms</span>
+              </>
+            )}
+          </div>
+        </div>
+        <div className="table-pager ds-command-group" aria-label={t("tables.pagination")}>
           <button className="btn small" disabled={busy || !hasPrev} onClick={() => void load(0)}>
             « {t("common.first")}
           </button>
@@ -295,6 +306,39 @@ export default function TableData({
             {t("tables.structure")}
           </button>
         </div>
+      </div>
+
+      <div className="table-query-strip ds-filter-strip" aria-label={t("tables.querySurface")}>
+        <span className={activeFilters ? "ds-filter-token active" : "ds-filter-token"}>
+          <strong>WHERE</strong>
+          {activeFilters
+            ? t(activeFilters > 1 ? "tables.activeFiltersPlural" : "tables.activeFilters", {
+                count: activeFilters,
+              })
+            : t("tables.noFilters")}
+        </span>
+        <span className={sort ? "ds-filter-token active" : "ds-filter-token"}>
+          <strong>ORDER BY</strong>
+          {sort ? `${sort.col} ${sort.dir.toUpperCase()}` : t("tables.unsorted")}
+        </span>
+        <span className="ds-filter-token">
+          <strong>LIMIT</strong>
+          {pageSize.toLocaleString()}
+        </span>
+        <span className={safety.allowWrites ? "ds-filter-token risk" : "ds-filter-token"}>
+          <strong>{t("tables.writePolicy")}</strong>
+          {safety.allowWrites ? t("tables.writePolicyWrites") : t("tables.writePolicyReadonly")}
+        </span>
+        <span className="ds-toolbar-spacer" />
+        <span className="ds-filter-token column-policy" title={t("tables.columnPolicyHint")}>
+          <strong>{t("tables.columnPolicy")}</strong>
+          {t("tables.columnPolicyCompact")}
+        </span>
+        {activeFilters > 0 && (
+          <button className="btn small" onClick={() => setFilters({})}>
+            {t("tables.clear")}
+          </button>
+        )}
       </div>
 
       {/* Introspected metadata already on the prop — no backend call. Collapsed by default. */}
@@ -355,31 +399,35 @@ export default function TableData({
         </div>
       )}
 
-      <div className="grid-toolbar">
-        <button
-          className="btn small"
-          disabled={!canEdit}
-          title={canEdit ? undefined : noEditTitle}
-          onClick={() => openEdit("insert")}
-        >
-          {t("tables.insert")}
-        </button>
-        <button
-          className="btn small"
-          disabled={!canEdit || selected == null}
-          title={canEdit ? undefined : noEditTitle}
-          onClick={() => openEdit("edit")}
-        >
-          {t("tables.edit")}
-        </button>
-        <button
-          className="btn small"
-          disabled={!canEdit || selected == null}
-          title={canEdit ? undefined : noEditTitle}
-          onClick={doDelete}
-        >
-          {t("tables.delete")}
-        </button>
+      <div className="grid-toolbar ds-data-toolbar">
+        <div className="ds-toolbar-group">
+          <button
+            className="btn small"
+            disabled={!canEdit}
+            title={canEdit ? undefined : noEditTitle}
+            onClick={() => openEdit("insert")}
+          >
+            {t("tables.insert")}
+          </button>
+          <button
+            className="btn small"
+            disabled={!canEdit || selected == null}
+            title={canEdit ? undefined : noEditTitle}
+            onClick={() => openEdit("edit")}
+          >
+            {t("tables.edit")}
+          </button>
+          <button
+            className="btn small danger"
+            disabled={!canEdit || selected == null}
+            title={canEdit ? undefined : noEditTitle}
+            onClick={doDelete}
+          >
+            {t("tables.delete")}
+          </button>
+        </div>
+        <span className="ds-toolbar-spacer" />
+        <div className="ds-toolbar-group">
         <details className="toolbar-menu">
           <summary className="btn small">{t("tables.more")}</summary>
           <div className="toolbar-menu-panel">
@@ -419,19 +467,7 @@ export default function TableData({
             </button>
           </div>
         </details>
-        {activeFilters > 0 && (
-          <>
-            <span className="tb-sep" />
-            <span className="muted">
-              {t(activeFilters > 1 ? "tables.activeFiltersPlural" : "tables.activeFilters", {
-                count: activeFilters,
-              })}
-            </span>
-            <button className="btn small" onClick={() => setFilters({})}>
-              {t("tables.clear")}
-            </button>
-          </>
-        )}
+        </div>
       </div>
 
       {err && <div className="error">{err}</div>}

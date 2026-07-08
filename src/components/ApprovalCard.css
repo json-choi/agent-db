@@ -1,0 +1,89 @@
+/* Approval/review workflow primitives used by write previews and agent safety cards. */
+.restatement .label,
+.preview .label,
+.tables .label {
+  color: var(--ds-text-muted);
+  font-size: var(--ds-font-size-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.restatement p {
+  margin: 4px 0 0;
+  line-height: 1.45;
+}
+
+.review-status {
+  padding: 9px 10px;
+  border: 1px solid var(--ds-border-subtle);
+  border-radius: var(--ds-radius-sm);
+  background: var(--ds-surface-1);
+  color: var(--ds-text-muted);
+  font-size: var(--ds-font-size-ui);
+  line-height: 1.4;
+}
+
+.review-status.blocked {
+  color: var(--ds-danger);
+  border-color: var(--ds-danger);
+}
+
+.review-disclosures {
+  display: grid;
+  gap: var(--ds-space-2);
+}
+
+.generated-sql,
+.safety-details {
+  overflow: hidden;
+  border: 1px solid var(--ds-border-subtle);
+  border-radius: var(--ds-radius-sm);
+  background: var(--ds-surface-1);
+}
+
+.generated-sql summary,
+.safety-details > summary {
+  cursor: pointer;
+  padding: 8px 10px;
+  color: var(--ds-text-muted);
+  font-size: var(--ds-font-size-ui);
+}
+
+.generated-sql .cm-editor {
+  border-top: 1px solid var(--ds-border-subtle);
+}
+
+.safety-details > :not(summary) {
+  margin: 0 10px 10px;
+}
+
+.tables code {
+  margin-right: 6px;
+  padding: 1px 6px;
+  border-radius: var(--ds-radius-sm);
+  background: var(--ds-hover-strong);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-font-size-sm);
+}
+
+.plan summary {
+  cursor: pointer;
+  padding: 4px 0;
+  color: var(--ds-text-muted);
+  font-size: var(--ds-font-size-ui);
+}
+
+.plan pre {
+  max-height: 220px;
+  overflow: auto;
+  padding: var(--ds-space-2);
+  border: 1px solid var(--ds-border-subtle);
+  border-radius: var(--ds-radius-sm);
+  background: var(--ds-surface-1);
+  font-size: var(--ds-font-size-sm);
+}
+
+.impact-warn {
+  color: var(--ds-warning);
+  font-weight: 500;
+}

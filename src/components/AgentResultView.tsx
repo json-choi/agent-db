@@ -2,10 +2,12 @@
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import DataGrid from "./DataGrid";
 import ResultToolbar from "./ResultToolbar";
+import { Icon } from "./Icon";
 import { stamp } from "../lib/export";
 import { fullTime } from "../lib/relTime";
 import { useAgentFeed, type AgentActivity } from "../lib/agentFeed";
 import { useI18n, type I18nKey } from "../lib/i18n";
+import "./AgentResultView.css";
 
 type AgentView = "result" | "context" | "audit";
 
@@ -83,7 +85,65 @@ function Timeline({
   );
 }
 
-export default function AgentResultView({ onOpenMcpSettings }: { onOpenMcpSettings?: () => void }) {
+function AgentEmptyState() {
+  const { t } = useI18n();
+  const items: {
+    icon: "database" | "play" | "circleSlash" | "alert";
+    title: I18nKey;
+    body: I18nKey;
+    tone: "trust" | "risk" | "danger";
+  }[] = [
+    {
+      icon: "database",
+      title: "agent.schemaAccess",
+      body: "agent.schemaAccessBody",
+      tone: "trust",
+    },
+    {
+      icon: "play",
+      title: "agent.dataAccess",
+      body: "agent.dataAccessBody",
+      tone: "trust",
+    },
+    {
+      icon: "circleSlash",
+      title: "agent.schemaModification",
+      body: "agent.schemaModificationBody",
+      tone: "risk",
+    },
+    {
+      icon: "alert",
+      title: "agent.dataModification",
+      body: "agent.dataModificationBody",
+      tone: "danger",
+    },
+  ];
+
+  return (
+    <div className="agent-empty-panel ds-trust-surface">
+      <div className="agent-empty-copy">
+        <h3>{t("agent.ledgerTitle")}</h3>
+        <p>{t("agent.emptyBody")}</p>
+      </div>
+      <div className="agent-empty-rows ds-ledger-grid" aria-label={t("agent.emptyCards")}>
+        {items.map((item) => (
+          <div
+            className={`agent-empty-row ds-ledger-card ds-ledger-card-${item.tone}`}
+            key={item.title}
+          >
+            <div className="ds-ledger-card-header">
+              <Icon name={item.icon} />
+              <strong>{t(item.title)}</strong>
+            </div>
+            <p>{t(item.body)}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export default function AgentResultView() {
   const { t } = useI18n();
   const { feed, latest } = useAgentFeed();
   const [view, setView] = useState<AgentView>("result");
@@ -113,8 +173,12 @@ export default function AgentResultView({ onOpenMcpSettings }: { onOpenMcpSettin
     <div className="agent-workspace">
       <header className="agent-head">
         <div>
-          <h2>{t("agent.workspace")}</h2>
-          <p className="muted">{t("agent.contextHelp")}</p>
+          <div className="agent-title-row">
+            <h2>{t("agent.workspace")}</h2>
+            <span className="ui-help" title={t("agent.contextHelp")} aria-label={t("agent.contextHelp")}>
+              ?
+            </span>
+          </div>
         </div>
         <div className="agent-stats" aria-label={t("agent.session")}>
           <span>{t("agent.toolCalls", { count: stats.calls })}</span>
@@ -138,14 +202,7 @@ export default function AgentResultView({ onOpenMcpSettings }: { onOpenMcpSettin
       </div>
 
       {feed.length === 0 ? (
-        <div className="agent-empty muted">
-          {t("agent.empty")}{" "}
-          {onOpenMcpSettings && (
-            <button className="btn small" onClick={onOpenMcpSettings}>
-              {t("mcp.server")}
-            </button>
-          )}
-        </div>
+        <AgentEmptyState />
       ) : view === "result" ? (
         <div className="agent-split">
           <section className="agent-primary">
@@ -222,20 +279,29 @@ export default function AgentResultView({ onOpenMcpSettings }: { onOpenMcpSettin
           </aside>
         </div>
       ) : (
-        <div className="agent-audit-grid">
-          <section className="agent-policy-card">
-            <h3>{t("agent.auditReadOnly")}</h3>
-            <p className="muted">{t("agent.auditReadOnlyBody")}</p>
+        <div className="agent-audit-grid ds-policy-grid">
+          <section className="agent-policy-card ds-policy-card ds-policy-card-trust" title={t("agent.auditReadOnlyBody")}>
+            <Icon name="database" />
+            <div>
+              <strong>{t("agent.auditReadOnly")}</strong>
+              <small>{t("agent.auditReadOnlyBody")}</small>
+            </div>
           </section>
-          <section className="agent-policy-card">
-            <h3>{t("agent.auditBlockedWrites")}</h3>
-            <p className="muted">{t("agent.auditBlockedWritesBody")}</p>
+          <section className="agent-policy-card ds-policy-card ds-policy-card-danger" title={t("agent.auditBlockedWritesBody")}>
+            <Icon name="circleSlash" />
+            <div>
+              <strong>{t("agent.auditBlockedWrites")}</strong>
+              <small>{t("agent.auditBlockedWritesBody")}</small>
+            </div>
           </section>
-          <section className="agent-policy-card">
-            <h3>{t("agent.auditHashChain")}</h3>
-            <p className="muted">{t("agent.auditHashChainBody")}</p>
+          <section className="agent-policy-card ds-policy-card" title={t("agent.auditHashChainBody")}>
+            <Icon name="check" />
+            <div>
+              <strong>{t("agent.auditHashChain")}</strong>
+              <small>{t("agent.auditHashChainBody")}</small>
+            </div>
           </section>
-          <section className="agent-policy-card wide">
+          <section className="agent-policy-card wide ds-panel">
             <div className="agent-section-head">
               <h3>{t("agent.policy")}</h3>
               <span className={errorItems.length ? "badge status status-error" : "badge status status-ok"}>

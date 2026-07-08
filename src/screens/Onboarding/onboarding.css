@@ -1,0 +1,23 @@
+
+
+/* Onboarding (first run, nothing connected) */
+.onboarding { height: 100%; overflow: auto; display: grid; place-items: center; padding: 32px; }
+.onboarding-inner { max-width: 720px; text-align: center; }
+.onboarding h1 { font-size: 28px; margin: 0 0 10px; }
+.onboarding .lead { font-size: 15px; line-height: 1.55; margin: 0 auto 28px; max-width: 580px; }
+.onboarding-steps { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; text-align: left; }
+.step-card {
+  border: 1px solid var(--ds-border-subtle); border-radius: var(--ds-radius-lg); padding: 20px;
+  background: var(--ds-surface-0); box-shadow: var(--ds-shadow-panel);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.step-num {
+  width: 26px; height: 26px; border-radius: var(--ds-radius-pill); background: var(--ds-accent);
+  color: var(--ds-text-inverse); display: grid; place-items: center; font-weight: 600; font-size: 13px;
+}
+/* Onboarding card titles are headline-style, not the global uppercase h3. */
+.step-card h3 { margin: 4px 0 0; font-size: 16px; text-transform: none; letter-spacing: 0; color: var(--ds-text); }
+.step-card p { margin: 0; flex: 1; font-size: 13px; line-height: 1.5; }
+.step-card .btn { align-self: flex-start; margin-top: 6px; }
+.onboarding-foot { margin-top: 20px; font-size: 13px; }
+

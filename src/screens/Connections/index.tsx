@@ -162,6 +162,7 @@ export function DatabaseExplorer({
   const [refreshing, setRefreshing] = useState<string | null>(null);
   const [tablesOpen, setTablesOpen] = useState(true);
   const [viewsOpen, setViewsOpen] = useState(true);
+  const [showRowCounts, setShowRowCounts] = useState(true);
   const [ddl, setDdl] = useState<{ conn: ConnectionProfile; table: CatalogTable } | null>(
     null,
   );
@@ -230,6 +231,10 @@ export function DatabaseExplorer({
           {t("connections.add")}
         </button>
       </div>
+      <div className="explorer-toolbar">
+        <span className="ds-kicker">{t("connections.objectExplorer")}</span>
+        <span className="ds-badge">{t("connections.sourceCount", { count: connections.length })}</span>
+      </div>
       <div className="explorer">
         {connections.length === 0 && (
           <div className="muted empty">{t("connections.noConnections")}</div>
@@ -239,7 +244,7 @@ export function DatabaseExplorer({
           return (
             <div key={c.id} className="db-node">
               <div
-                className={isSel ? "db-conn selected" : "db-conn"}
+                className={isSel ? "db-conn selected ds-object-row" : "db-conn ds-object-row"}
                 role="button"
                 tabIndex={0}
                 onClick={() => (isSel ? toggleOpen(c.id) : onSelectConn(c.id))}
@@ -301,6 +306,9 @@ export function DatabaseExplorer({
                     : [];
                   const tbls = all.filter((t) => t.kind !== "view");
                   const views = all.filter((t) => t.kind === "view");
+                  const schemaCount = cat
+                    ? new Set(cat.tables.map((item) => item.schema || "default")).size
+                    : 0;
                   const renderRow = (table: CatalogTable) => {
                     const key = tableKey(table);
                     return (
@@ -308,9 +316,10 @@ export function DatabaseExplorer({
                         key={key}
                         className={
                           isSel && selectedTableKey === key
-                            ? "db-table selected"
-                            : "db-table"
+                            ? "db-table selected ds-object-row"
+                            : "db-table ds-object-row"
                         }
+                        aria-selected={isSel && selectedTableKey === key}
                         role="button"
                         tabIndex={0}
                         onClick={() => onOpenTable(c, table)}
@@ -328,7 +337,7 @@ export function DatabaseExplorer({
                         <span className="tbl-name">
                           {tableLabel(c.engine, table)}
                         </span>
-                        {table.rowEstimate != null && table.rowEstimate >= 0 && (
+                        {showRowCounts && table.rowEstimate != null && table.rowEstimate >= 0 && (
                           <span className="tbl-count muted">
                             ~{table.rowEstimate.toLocaleString()}
                           </span>
@@ -348,6 +357,31 @@ export function DatabaseExplorer({
                   };
                   return (
                     <div className="db-tables">
+                      {cat && (
+                        <div className="db-context-strip">
+                          <span className="ds-filter-token">
+                            <strong>{t("connections.schemaCount", { count: schemaCount })}</strong>
+                          </span>
+                          <span className="ds-filter-token">
+                            <strong>{t("connections.objectCount", { count: cat.tables.length })}</strong>
+                          </span>
+                          <details className="view-options-menu">
+                            <summary className="ds-filter-token" title={t("connections.viewOptionsHint")}>
+                              {t("connections.viewOptions")}
+                            </summary>
+                            <div className="view-options-panel">
+                              <label>
+                                <input
+                                  type="checkbox"
+                                  checked={showRowCounts}
+                                  onChange={(e) => setShowRowCounts(e.target.checked)}
+                                />
+                                {t("connections.showRowCounts")}
+                              </label>
+                            </div>
+                          </details>
+                        </div>
+                      )}
                       <div
                         className={migrationsOpen && isSel ? "db-nav active" : "db-nav"}
                         role="button"

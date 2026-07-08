@@ -4,6 +4,7 @@ import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updat
 import { useEffect, useMemo, useState } from "react";
 import { errMessage } from "../../ipc/types";
 import { useI18n } from "../../lib/i18n";
+import "./updates.css";
 
 type UpdateState =
   | "idle"

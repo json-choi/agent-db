@@ -1,28 +1,71 @@
-/* Data grid visuals — owns the grid's look (extends styles.css .grid rules WITHOUT
-   editing that file; table.grid outranks .grid so these win regardless of load order)
-   plus the Data-tab layout: sortable header, filter row, sticky header + rownum column,
-   zebra striping, hover, selected-row tint, toolbar, and the right-side panel. Colors
-   come from the existing token set (var(--panel)/(--panel-2)/(--accent)/…). */
+/* Data grid visuals and result table shell. */
+
+.result-meta {
+  margin-bottom: var(--ds-space-2);
+}
+
+.result-sql {
+  display: inline-block;
+  max-width: 60ch;
+  overflow: hidden;
+  padding: 1px 6px;
+  border-radius: var(--ds-radius-sm);
+  background: var(--ds-hover-strong);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-font-size-sm);
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
+}
+
+.grid-scroll {
+  max-height: 60vh;
+  overflow: auto;
+  border: 1px solid var(--ds-border-subtle);
+  border-radius: var(--ds-radius-lg);
+}
+
+.grid {
+  width: 100%;
+  font-size: var(--ds-font-size-ui);
+}
+
+.grid th,
+.grid td {
+  padding: 5px 9px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.grid .rownum {
+  color: var(--ds-text-muted);
+  text-align: right;
+}
+
+.grid .nullcell {
+  color: var(--ds-text-muted);
+  font-style: italic;
+}
 
 /* border-collapse:separate + border-spacing:0 stops sticky-header borders from
    vanishing in WebKit; cells keep single borders via bottom+right only. */
 table.grid {
   border-collapse: separate;
   border-spacing: 0;
-  background: var(--panel);
+  background: var(--ds-surface-0);
 }
 table.grid th,
 table.grid td {
   box-sizing: border-box;
-  border-bottom: 1px solid var(--border);
-  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--ds-border-subtle);
+  border-right: 1px solid var(--ds-border-subtle);
 }
 table.grid thead th {
   position: sticky;
   top: 0;
   z-index: 2;
   height: 30px;
-  background: var(--panel-2);
+  background: var(--ds-surface-1);
 }
 table.grid thead tr.filter-row th {
   top: 30px;
@@ -38,7 +81,7 @@ table.grid tbody td.rownum {
   position: sticky;
   left: 0;
   z-index: 1;
-  background: var(--panel-2);
+  background: var(--ds-surface-1);
 }
 
 /* Offscreen body rows skip layout/paint — big win on large result sets, no windowing.
@@ -50,30 +93,30 @@ table.grid tbody tr {
 
 /* Zebra / hover / selected — later rule wins at equal specificity, so order matters. */
 table.grid tbody td {
-  background: var(--panel);
+  background: var(--ds-surface-0);
 }
 table.grid tbody tr:nth-child(even) td {
-  background: var(--panel-2);
+  background: var(--ds-surface-1);
 }
 table.grid tbody tr:hover td {
-  background: var(--panel-2);
+  background: var(--ds-surface-1);
 }
 table.grid tbody tr.selected td {
-  background: var(--panel-2);
+  background: var(--ds-surface-1);
 }
 @supports (background: color-mix(in srgb, red, blue)) {
   table.grid tbody tr:hover td {
-    background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+    background: color-mix(in srgb, var(--ds-accent) 8%, var(--ds-surface-0));
   }
   table.grid tbody tr.selected td {
-    background: color-mix(in srgb, var(--accent) 18%, var(--panel));
+    background: color-mix(in srgb, var(--ds-accent) 18%, var(--ds-surface-0));
   }
 }
 
 /* Selected cell (click to select, ⌘C to copy). Inset box-shadow draws an accent
    outline without shifting layout or fighting the cell's own borders. */
 table.grid tbody td.cell-sel {
-  box-shadow: inset 0 0 0 2px var(--accent);
+  box-shadow: inset 0 0 0 2px var(--ds-accent);
 }
 
 /* Always-visible scrollbars: custom WebKit styling opts out of macOS auto-hiding
@@ -83,13 +126,13 @@ table.grid tbody td.cell-sel {
   height: 11px;
 }
 .grid-scroll::-webkit-scrollbar-thumb {
-  background: var(--muted);
+  background: var(--ds-text-muted);
   border-radius: 999px;
   border: 3px solid transparent;
   background-clip: padding-box;
 }
 .grid-scroll::-webkit-scrollbar-thumb:hover {
-  background: var(--text);
+  background: var(--ds-text);
   background-clip: padding-box;
 }
 .grid-scroll::-webkit-scrollbar-track,
@@ -110,7 +153,7 @@ table.grid tbody td.cell-sel {
 }
 .col-resizer:hover,
 .col-resizer:active {
-  background: var(--accent);
+  background: var(--ds-accent);
   opacity: 0.55;
 }
 /* Fixed layout (after a resize): col widths govern; cells clip with ellipsis. */
@@ -127,10 +170,10 @@ table.grid th.sortable {
   user-select: none;
 }
 table.grid th.sortable:hover {
-  color: var(--accent);
+  color: var(--ds-accent);
 }
 .sort-arrow {
-  color: var(--accent);
+  color: var(--ds-accent);
   font-size: 10px;
 }
 table.grid td.clickable {
@@ -144,10 +187,10 @@ table.grid td.clickable {
   font-size: 12px;
   font-weight: 400;
   padding: 2px 5px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--ds-border-subtle);
   border-radius: 4px;
-  background: var(--panel);
-  color: var(--text);
+  background: var(--ds-surface-0);
+  color: var(--ds-text);
 }
 
 /* Data-tab body: grid on the left, contextual panel (viewer/editor/approval) on right. */
@@ -171,7 +214,7 @@ table.grid td.clickable {
 .grid-toolbar .tb-sep {
   width: 1px;
   align-self: stretch;
-  background: var(--border);
+  background: var(--ds-border-subtle);
   margin: 0 4px;
 }
 .toolbar-menu {
@@ -193,10 +236,10 @@ table.grid td.clickable {
   display: grid;
   gap: 6px;
   padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  background: var(--panel);
-  box-shadow: var(--shadow);
+  border: 1px solid var(--ds-border-subtle);
+  border-radius: var(--ds-radius-sm);
+  background: var(--ds-surface-0);
+  box-shadow: var(--ds-shadow-panel);
 }
 .toolbar-menu-panel .btn {
   justify-content: flex-start;
@@ -207,9 +250,9 @@ table.grid td.clickable {
   max-width: 46%;
   flex-shrink: 0;
   overflow: auto;
-  border: 1px solid var(--border);
+  border: 1px solid var(--ds-border-subtle);
   border-radius: 8px;
-  background: var(--panel);
+  background: var(--ds-surface-0);
   padding: 10px;
 }
 .grid-panel .approval {
@@ -270,14 +313,14 @@ table.grid td.clickable {
   white-space: nowrap;
 }
 .row-field.changed {
-  border-left: 2px solid var(--accent);
+  border-left: 2px solid var(--ds-accent);
   padding-left: 8px;
 }
 .changed-badge {
   font-size: 9px;
   font-weight: 700;
-  color: var(--accent);
-  background: var(--accent-soft);
+  color: var(--ds-accent);
+  background: var(--ds-accent-soft);
   border-radius: 4px;
   padding: 1px 4px;
   text-transform: uppercase;
@@ -285,8 +328,8 @@ table.grid td.clickable {
 .pk-badge {
   font-size: 9px;
   font-weight: 700;
-  color: var(--accent);
-  border: 1px solid var(--accent);
+  color: var(--ds-accent);
+  border: 1px solid var(--ds-accent);
   border-radius: 3px;
   padding: 0 3px;
 }
@@ -301,10 +344,10 @@ table.grid td.clickable {
   min-width: 0;
   font: inherit;
   padding: 4px 7px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--ds-border-subtle);
   border-radius: 6px;
-  background: var(--panel);
-  color: var(--text);
+  background: var(--ds-surface-0);
+  color: var(--ds-text);
 }
 .null-toggle {
   position: relative;
@@ -313,10 +356,10 @@ table.grid td.clickable {
   justify-content: center;
   width: 28px;
   height: 28px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  color: var(--muted);
-  background: var(--panel-2);
+  border: 1px solid var(--ds-border-subtle);
+  border-radius: var(--ds-radius-sm);
+  color: var(--ds-text-muted);
+  background: var(--ds-surface-1);
   cursor: pointer;
 }
 .null-toggle input {
@@ -326,16 +369,16 @@ table.grid td.clickable {
   cursor: inherit;
 }
 .null-toggle.active {
-  color: var(--accent);
-  border-color: var(--accent);
-  background: var(--accent-soft);
+  color: var(--ds-accent);
+  border-color: var(--ds-accent);
+  background: var(--ds-accent-soft);
 }
 .null-toggle.disabled {
   opacity: 0.35;
   cursor: not-allowed;
 }
 .null-toggle:focus-within {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--ds-accent);
   outline-offset: 2px;
 }
 .row-editor-actions {
@@ -345,8 +388,8 @@ table.grid td.clickable {
   flex-wrap: wrap;
   position: sticky;
   bottom: -10px;
-  background: var(--panel);
-  border-top: 1px solid var(--border);
+  background: var(--ds-surface-0);
+  border-top: 1px solid var(--ds-border-subtle);
   margin: 8px -10px -10px;
   padding: 10px;
 }

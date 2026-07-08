@@ -17,6 +17,7 @@ import { errMessage } from "../../ipc/types";
 import ConfirmButton from "../../components/ConfirmButton";
 import { useToast } from "../../components/Toast";
 import { useI18n } from "../../lib/i18n";
+import "./mcp.css";
 
 interface Result {
   ok: boolean;

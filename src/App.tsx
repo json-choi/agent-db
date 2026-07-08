@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { getSafety, listConnections, setSafety as ipcSetSafety } from "./ipc/commands";
 import type { CatalogTable, ConnectionProfile, SafetySettings } from "./ipc/types";
 import { errMessage } from "./ipc/types";
-import { tableKey } from "./lib/tableRef";
+import { tableKey, tableLabel } from "./lib/tableRef";
 import { ConnectionForm, DatabaseExplorer } from "./screens/Connections";
 import TableData from "./screens/Tables";
 import SchemaExplorer from "./screens/Schema";
@@ -290,13 +290,23 @@ function Shell() {
     return (
       <>
         {selected && (
-          <header className="main-head">
-            <div>
-              <strong>{selected.name || t("app.unnamed")}</strong>
-              <span className="muted">
-                {" "}
-                {selected.engine} · {selected.database}
-              </span>
+          <header className="main-head ds-workbench-head">
+            <div className="ds-workbench-title">
+              <div className="ds-title-line">
+                <strong>{selected.name || t("app.unnamed")}</strong>
+                <span className="ds-context-badge">{selected.engine}</span>
+              </div>
+              <div className="ds-meta-row">
+                <span>{selected.database}</span>
+                {selectedTable && (
+                  <>
+                    <span className="ds-meta-dot" />
+                    <span>{tableLabel(selected.engine, selectedTable)}</span>
+                  </>
+                )}
+              </div>
+            </div>
+            <div className="main-policy ds-command-group">
               {safety && (
                 <button
                   className={
@@ -317,10 +327,20 @@ function Shell() {
                       : t("app.writeReadOnly")}
                 </button>
               )}
+              {safety?.autoRunReads && (
+                <span className="ds-badge">{t("safety.autoRunReads")}</span>
+              )}
+              {unseen > 0 ? (
+                <button className="btn small agent-jump" onClick={() => setTab("agent")}>
+                  {t("app.agentUnseen", { count: unseen })}
+                </button>
+              ) : (
+                <span className="ds-badge">{t("app.agentQuiet")}</span>
+              )}
+              <button className="btn small" onClick={() => setEditing(selected)}>
+                {t("app.edit")}
+              </button>
             </div>
-            <button className="btn small" onClick={() => setEditing(selected)}>
-              {t("app.edit")}
-            </button>
           </header>
         )}
 
@@ -360,7 +380,7 @@ function Shell() {
         </nav>
 
         <section className="tab-body" role="tabpanel">
-          {tab === "agent" && <AgentResultView onOpenMcpSettings={openMcpSettings} />}
+          {tab === "agent" && <AgentResultView />}
           {tab === "data" &&
             (!selected ? (
               needsConn

@@ -23,10 +23,10 @@
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--muted);
+  color: var(--ds-text-muted);
   font-weight: 600;
   padding: 6px 10px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--ds-border-subtle);
 }
 .history-table th.num,
 .history-table td.num {
@@ -34,14 +34,14 @@
 }
 .history-row td {
   padding: 6px 10px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--ds-border-subtle);
   vertical-align: middle;
 }
 .history-row {
   cursor: pointer;
 }
 .history-row:hover {
-  background: var(--panel-2);
+  background: var(--ds-surface-1);
 }
 .history-table td.nowrap {
   white-space: nowrap;
@@ -74,28 +74,28 @@
 
 /* Keyboard focus for the click-to-load rows (role=button). */
 .history-row:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--ds-accent);
   outline-offset: -2px;
 }
 
 /* Origin + status badges (reuse the shared .badge base from styles.css). */
 .badge.origin {
-  color: var(--muted);
+  color: var(--ds-text-muted);
 }
 .badge.origin-agent {
-  color: var(--accent);
-  border-color: var(--accent);
+  color: var(--ds-accent);
+  border-color: var(--ds-accent);
 }
 .badge.origin-migration {
-  color: var(--risk-medium);
-  border-color: var(--risk-medium);
+  color: var(--ds-warning);
+  border-color: var(--ds-warning);
 }
 .badge.status-ok {
-  color: var(--risk-low);
-  border-color: var(--risk-low);
+  color: var(--ds-success);
+  border-color: var(--ds-success);
 }
 .badge.status-error,
 .badge.status-blocked {
-  color: var(--danger);
-  border-color: var(--danger);
+  color: var(--ds-danger);
+  border-color: var(--ds-danger);
 }

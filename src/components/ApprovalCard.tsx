@@ -23,6 +23,7 @@ import type {
 import { errMessage } from "../ipc/types";
 import { Icon } from "./Icon";
 import LazySqlViewer from "./LazySqlViewer";
+import "./ApprovalCard.css";
 
 const ENGINE_LABEL: Record<Engine, string> = {
   postgres: "PostgreSQL",

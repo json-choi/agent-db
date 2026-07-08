@@ -1,0 +1,151 @@
+/*
+ * dopedb design tokens
+ *
+ * Goals from the DataGrip analysis:
+ * - keep dense database work readable
+ * - keep connection, schema, execution, and agent safety context visible
+ * - support a trust-ledger UI without turning the client into a full IDE clone
+ */
+
+:root {
+  color-scheme: light dark;
+
+  /* Typography */
+  --ds-font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue",
+    Arial, sans-serif;
+  --ds-font-mono: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  --ds-font-size-2xs: 10px;
+  --ds-font-size-xs: 11px;
+  --ds-font-size-sm: 12px;
+  --ds-font-size-ui: 13px;
+  --ds-font-size-body: 14px;
+  --ds-font-size-title: 16px;
+  --ds-font-size-heading: 20px;
+  --ds-line-tight: 1.2;
+  --ds-line-ui: 1.35;
+  --ds-line-body: 1.55;
+
+  /* Spacing: compact 4px grid for database desktop UI. */
+  --ds-space-0: 0;
+  --ds-space-1: 4px;
+  --ds-space-2: 8px;
+  --ds-space-3: 12px;
+  --ds-space-4: 16px;
+  --ds-space-5: 20px;
+  --ds-space-6: 24px;
+  --ds-space-8: 32px;
+
+  /* Shape and depth */
+  --ds-radius-xs: 4px;
+  --ds-radius-sm: 6px;
+  --ds-radius-md: 8px;
+  --ds-radius-lg: 10px;
+  --ds-radius-pill: 999px;
+  --ds-shadow-panel: 0 1px 2px rgba(16, 24, 40, 0.07);
+  --ds-shadow-popover: 0 10px 30px rgba(16, 24, 40, 0.16);
+
+  /* Sizing */
+  --ds-control-xs: 22px;
+  --ds-control-sm: 26px;
+  --ds-control-md: 30px;
+  --ds-control-lg: 36px;
+  --ds-sidebar-min: 180px;
+  --ds-sidebar-default: 240px;
+  --ds-sidebar-max: 520px;
+  --ds-pane-pad: 20px;
+  --ds-line: 1px solid var(--ds-border-subtle);
+
+  /* Neutral surfaces */
+  --ds-bg-app: #f4f5f7;
+  --ds-bg-sidebar: #eef0f3;
+  --ds-surface-0: #ffffff;
+  --ds-surface-1: #f8f9fb;
+  --ds-surface-2: #eef1f5;
+  --ds-surface-elevated: #ffffff;
+  --ds-border-subtle: #dde1e7;
+  --ds-border-strong: #c6ccd5;
+  --ds-text: #1d232f;
+  --ds-text-muted: #687386;
+  --ds-text-subtle: #8a94a5;
+  --ds-text-inverse: #ffffff;
+
+  /* Brand and intent */
+  --ds-accent: #1769d2;
+  --ds-accent-hover: #0f5dbd;
+  --ds-accent-active: #0a4f9e;
+  --ds-accent-soft: rgba(23, 105, 210, 0.12);
+  --ds-info: #087990;
+  --ds-success: #237a4b;
+  --ds-warning: #98640a;
+  --ds-danger: #c33131;
+
+  /* Trust/risk surfaces for agent-native workflows. */
+  --ds-trust-bg: #eef9f4;
+  --ds-trust-border: #b8e0cd;
+  --ds-risk-bg: #fff7e8;
+  --ds-risk-border: #e9c36a;
+  --ds-danger-bg: #fff0f0;
+  --ds-danger-border: #eeabab;
+
+  /* Data source colors: use sparingly as context accents. */
+  --ds-source-blue: #1769d2;
+  --ds-source-teal: #087990;
+  --ds-source-green: #237a4b;
+  --ds-source-amber: #98640a;
+  --ds-source-red: #c33131;
+
+  /* Interaction */
+  --ds-hover: rgba(82, 96, 120, 0.1);
+  --ds-hover-strong: rgba(82, 96, 120, 0.16);
+  --ds-focus: #1769d2;
+  --ds-focus-ring: 0 0 0 2px color-mix(in srgb, var(--ds-focus) 28%, transparent);
+
+  font-family: var(--ds-font-sans);
+  font-size: var(--ds-font-size-ui);
+  color: var(--ds-text);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ds-bg-app: #17191c;
+    --ds-bg-sidebar: #202226;
+    --ds-surface-0: #24272c;
+    --ds-surface-1: #2b2f35;
+    --ds-surface-2: #343942;
+    --ds-surface-elevated: #2b2f35;
+    --ds-border-subtle: #3f4650;
+    --ds-border-strong: #596271;
+    --ds-text: #f1f4f8;
+    --ds-text-muted: #b0b8c4;
+    --ds-text-subtle: #8f98a6;
+    --ds-text-inverse: #ffffff;
+
+    --ds-accent: #5aa2ff;
+    --ds-accent-hover: #7ab5ff;
+    --ds-accent-active: #2d83f4;
+    --ds-accent-soft: rgba(90, 162, 255, 0.18);
+    --ds-info: #58c7d8;
+    --ds-success: #70c891;
+    --ds-warning: #e2b85e;
+    --ds-danger: #ff7a7a;
+
+    --ds-trust-bg: rgba(112, 200, 145, 0.1);
+    --ds-trust-border: rgba(112, 200, 145, 0.34);
+    --ds-risk-bg: rgba(226, 184, 94, 0.1);
+    --ds-risk-border: rgba(226, 184, 94, 0.4);
+    --ds-danger-bg: rgba(255, 122, 122, 0.1);
+    --ds-danger-border: rgba(255, 122, 122, 0.4);
+
+    --ds-source-blue: #5aa2ff;
+    --ds-source-teal: #58c7d8;
+    --ds-source-green: #70c891;
+    --ds-source-amber: #e2b85e;
+    --ds-source-red: #ff7a7a;
+
+    --ds-hover: rgba(169, 181, 197, 0.1);
+    --ds-hover-strong: rgba(169, 181, 197, 0.17);
+    --ds-focus: #7ab5ff;
+    --ds-shadow-panel: none;
+    --ds-shadow-popover: 0 14px 34px rgba(0, 0, 0, 0.36);
+  }
+}

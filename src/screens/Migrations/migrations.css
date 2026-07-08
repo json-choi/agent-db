@@ -14,15 +14,15 @@
 
 /* Applied-state badges */
 .badge.applied {
-  color: var(--risk-low);
-  border-color: var(--risk-low);
+  color: var(--ds-success);
+  border-color: var(--ds-success);
 }
 .badge.pending {
-  color: var(--risk-medium);
-  border-color: var(--risk-medium);
+  color: var(--ds-warning);
+  border-color: var(--ds-warning);
 }
 .badge.unknown {
-  color: var(--muted);
+  color: var(--ds-text-muted);
 }
 
 .mig-tracker {
@@ -34,24 +34,24 @@
 .mig-note,
 .mig-warn-banner,
 .mig-drift-unavailable {
-  border: 1px solid var(--border);
+  border: 1px solid var(--ds-border-subtle);
   border-radius: 8px;
   padding: 8px 12px;
   margin-bottom: 12px;
   font-size: 13px;
-  background: var(--panel);
+  background: var(--ds-surface-0);
 }
 .mig-note,
 .mig-drift-unavailable {
-  color: var(--risk-medium);
-  border-color: var(--risk-medium);
+  color: var(--ds-warning);
+  border-color: var(--ds-warning);
 }
 .mig-warn-banner {
   display: flex;
   align-items: center;
   gap: 10px;
-  color: var(--danger);
-  border-color: var(--danger);
+  color: var(--ds-danger);
+  border-color: var(--ds-danger);
 }
 .mig-warn-banner button {
   margin-left: auto;
@@ -63,8 +63,8 @@
   line-height: 1;
 }
 .mig-ok {
-  border: 1px solid var(--risk-low);
-  color: var(--risk-low);
+  border: 1px solid var(--ds-success);
+  color: var(--ds-success);
   border-radius: 8px;
   padding: 8px 12px;
   margin-bottom: 12px;
@@ -80,17 +80,17 @@
 
 .mig-confirm {
   margin-top: 10px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--ds-border-subtle);
   border-radius: 8px;
   padding: 12px;
-  background: var(--panel-2);
+  background: var(--ds-surface-1);
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
 .mig-script {
-  background: var(--panel);
-  border: 1px solid var(--border);
+  background: var(--ds-surface-0);
+  border: 1px solid var(--ds-border-subtle);
   border-radius: 6px;
   padding: 10px;
   overflow: auto;
@@ -101,14 +101,14 @@
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
 }
 .mig-manual-line {
-  color: var(--risk-medium);
+  color: var(--ds-warning);
   font-weight: 600;
 }
 .mig-warn {
-  border: 1px solid var(--danger);
+  border: 1px solid var(--ds-danger);
   border-radius: 6px;
   padding: 8px 10px;
-  color: var(--danger);
+  color: var(--ds-danger);
   font-size: 12px;
 }
 .mig-warn ul {
@@ -129,5 +129,49 @@
 }
 .mig-hint {
   font-size: 12px;
-  color: var(--muted);
+  color: var(--ds-text-muted);
 }
+
+/* Migration change-log */
+.migrations { max-width: 900px; }
+.mig-bar { display: flex; gap: 8px; margin-bottom: 12px; }
+.mig-dir {
+  flex: 1; padding: 7px 9px; border: 1px solid var(--ds-border-subtle); border-radius: var(--ds-radius-sm);
+  background: var(--ds-surface-0); color: var(--ds-text); font: inherit;
+}
+.drift {
+  border: 1px solid var(--ds-border-subtle); border-radius: var(--ds-radius-lg); padding: 10px 12px; margin-bottom: 12px;
+  background: var(--ds-surface-0); display: flex; flex-direction: column; gap: 4px; font-size: 13px;
+}
+.drift.ok { color: var(--ds-success); }
+.drift code {
+  background: var(--ds-hover-strong); padding: 1px 6px; border-radius: var(--ds-radius-sm); margin: 0 3px;
+  font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 12px;
+}
+.mig-meta { margin-bottom: 8px; font-size: 12px; }
+.mig-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.mig-item { border: 1px solid var(--ds-border-subtle); border-radius: var(--ds-radius-lg); overflow: hidden; background: var(--ds-surface-0); }
+.mig-head {
+  width: 100%; display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+  background: transparent; border: none; cursor: pointer; font: inherit; color: var(--ds-text); text-align: left;
+}
+.mig-head:hover { background: var(--ds-hover); }
+.mig-head .tw { color: var(--ds-text-muted); font-size: 10px; }
+.mig-ver { font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 12px; color: var(--ds-text-muted); }
+.mig-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mig-badges { margin-left: auto; display: flex; gap: 6px; flex-shrink: 0; }
+.mig-body { padding: 4px 12px 12px; border-top: 1px solid var(--ds-border-subtle); }
+.mig-changes { list-style: none; margin: 8px 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.chg {
+  display: flex; align-items: baseline; gap: 8px; font-size: 13px;
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+}
+.chg-flag { font-size: 11px; color: var(--ds-warning); font-family: -apple-system, sans-serif; }
+.mig-down { margin-top: 8px; }
+.mig-down-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+.mig-down pre {
+  background: var(--ds-surface-1); border: 1px solid var(--ds-border-subtle); border-radius: var(--ds-radius-sm); padding: 10px;
+  overflow: auto; font-size: 12px; margin: 0; max-height: 240px;
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+}
+

@@ -1,0 +1,67 @@
+
+
+/* Table data view (Data tab) — fills the pane; the grid scrolls inside it. */
+.table-data {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  gap: var(--ds-space-2);
+}
+.table-data-head {
+  flex-shrink: 0;
+}
+.table-data-head .ds-title-line {
+  max-width: 100%;
+}
+.table-data .grid-scroll {
+  max-height: none;
+  flex: 1;
+}
+.table-query-strip {
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+.table-query-strip .ds-filter-token.active {
+  color: var(--ds-accent);
+  border-color: color-mix(in srgb, var(--ds-accent) 42%, var(--ds-border-subtle));
+  background: var(--ds-accent-soft);
+}
+.table-query-strip .ds-filter-token.risk {
+  color: var(--ds-warning);
+  border-color: color-mix(in srgb, var(--ds-warning) 48%, var(--ds-border-subtle));
+}
+.table-query-strip .column-policy {
+  max-width: 260px;
+}
+/* Dim the grid while a query is in flight. */
+.table-data-body.busy .grid-scroll {
+  opacity: 0.55;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+/* Table data pager + wide-cell handling */
+.table-data-head .table-pager {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.table-pager .page-ind { font-size: 12px; white-space: nowrap; }
+/* Cap very wide cells with an ellipsis; the row still scrolls horizontally for many columns. */
+.grid td {
+  max-width: 480px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 920px) {
+  .table-data-head {
+    flex-direction: column;
+  }
+  .table-data-head .table-pager {
+    justify-content: flex-start;
+  }
+}

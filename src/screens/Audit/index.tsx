@@ -7,6 +7,7 @@ import { errMessage } from "../../ipc/types";
 import { Icon } from "../../components/Icon";
 import { relTime, fullTime } from "../../lib/relTime";
 import { useI18n } from "../../lib/i18n";
+import "./audit.css";
 
 function short(h: string | null): string {
   if (!h) return "∅";

@@ -9,7 +9,7 @@
   font-size: 12px;
 }
 .sql-actions .script-count {
-  color: var(--muted);
+  color: var(--ds-text-muted);
 }
 
 .script-approval .script-note {
@@ -29,8 +29,8 @@
 .script-approval .stmt {
   margin: 2px 0;
   padding: 6px 8px;
-  background: var(--panel);
-  border: 1px solid var(--border);
+  background: var(--ds-surface-0);
+  border: 1px solid var(--ds-border-subtle);
   border-radius: 6px;
   font-size: 12px;
   white-space: pre-wrap;
@@ -64,8 +64,8 @@
 .explain-plan pre {
   margin: 8px 0 0;
   padding: 8px;
-  background: var(--panel);
-  border: 1px solid var(--border);
+  background: var(--ds-surface-0);
+  border: 1px solid var(--ds-border-subtle);
   border-radius: 6px;
   font-size: 12px;
   overflow-x: auto;
@@ -76,13 +76,13 @@
 .script-results .stmt-result {
   margin-top: 14px;
   padding-top: 10px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--ds-border-subtle);
 }
 .script-results .stmt-num {
   display: inline-block;
   min-width: 18px;
   font-weight: 600;
-  color: var(--muted);
+  color: var(--ds-text-muted);
 }
 .script-results .stmt-rowmeta {
   margin: 4px 0;

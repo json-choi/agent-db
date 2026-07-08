@@ -6,6 +6,7 @@ import { useI18n } from "../../lib/i18n";
 import Mcp from "../Mcp";
 import Safety from "../Safety";
 import Updates from "../Updates";
+import "./settings.css";
 
 type Section = "mcp" | "safety" | "updates" | "language";
 

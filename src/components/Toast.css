@@ -14,10 +14,10 @@
   max-width: 360px;
   padding: 10px 14px;
   border-radius: 8px;
-  background: var(--panel);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--risk-low);
+  background: var(--ds-surface-0);
+  color: var(--ds-text);
+  border: 1px solid var(--ds-border-subtle);
+  border-left: 3px solid var(--ds-success);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
   font-size: 13px;
   animation: toast-in 0.15s ease-out;
@@ -26,7 +26,7 @@
 }
 
 .toast.error {
-  border-left-color: var(--danger);
+  border-left-color: var(--ds-danger);
 }
 
 @keyframes toast-in {
