@@ -10,6 +10,7 @@
     "beforeBuildCommand": "pnpm build:bridge && pnpm build"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
         "title": "DopeDB",
@@ -17,7 +18,14 @@
         "height": 800,
         "minWidth": 900,
         "minHeight": 560,
-        "backgroundColor": "#1d1d1f",
+        "backgroundColor": "#00000000",
+        "transparent": true,
+        "windowEffects": {
+          "effects": ["windowBackground", "mica", "blur"],
+          "state": "followsWindowActiveState",
+          "radius": 10,
+          "color": "#11130fcc"
+        },
         "resizable": true,
         "fullscreen": false
       }

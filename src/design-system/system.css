@@ -10,7 +10,7 @@
 
 body {
   margin: 0;
-  background: var(--ds-bg-app);
+  background: transparent;
   color: var(--ds-text);
   font-family: var(--ds-font-sans);
   -webkit-font-smoothing: antialiased;
@@ -58,10 +58,13 @@ h3,
 
 .app {
   background: var(--ds-bg-app);
+  isolation: isolate;
 }
 
 .sidebar {
   background: var(--ds-bg-sidebar);
+  backdrop-filter: var(--ds-glass-filter);
+  -webkit-backdrop-filter: var(--ds-glass-filter);
 }
 
 .tab-body,
@@ -151,6 +154,8 @@ h3,
   background: var(--ds-surface-0);
   color: var(--ds-text);
   box-shadow: var(--ds-shadow-panel);
+  backdrop-filter: var(--ds-glass-filter-soft);
+  -webkit-backdrop-filter: var(--ds-glass-filter-soft);
   cursor: pointer;
   font: inherit;
   font-size: var(--ds-font-size-ui);
@@ -220,6 +225,8 @@ h3,
   border: 1px solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-md);
   box-shadow: var(--ds-shadow-panel);
+  backdrop-filter: var(--ds-glass-filter);
+  -webkit-backdrop-filter: var(--ds-glass-filter);
 }
 
 .card,
@@ -237,6 +244,9 @@ h3,
   background: var(--ds-surface-0);
   border: 1px solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-md);
+  box-shadow: var(--ds-shadow-panel);
+  backdrop-filter: var(--ds-glass-filter);
+  -webkit-backdrop-filter: var(--ds-glass-filter);
 }
 
 .badge,
@@ -379,6 +389,9 @@ h3,
   border: 1px solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-md);
   background: var(--ds-surface-0);
+  box-shadow: var(--ds-glass-edge);
+  backdrop-filter: var(--ds-glass-filter-soft);
+  -webkit-backdrop-filter: var(--ds-glass-filter-soft);
 }
 
 .ds-toolbar-group {
@@ -408,6 +421,8 @@ h3,
   border-radius: var(--ds-radius-md);
   background: var(--ds-surface-0);
   box-shadow: var(--ds-shadow-panel);
+  backdrop-filter: var(--ds-glass-filter);
+  -webkit-backdrop-filter: var(--ds-glass-filter);
 }
 
 .ds-ledger-card-header {
@@ -490,6 +505,8 @@ h3,
   border: 1px solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-md);
   background: var(--ds-surface-1);
+  backdrop-filter: var(--ds-glass-filter-soft);
+  -webkit-backdrop-filter: var(--ds-glass-filter-soft);
 }
 
 .ds-filter-token {
@@ -521,6 +538,8 @@ h3,
   background: var(--ds-surface-0);
   color: var(--ds-text);
   font: inherit;
+  backdrop-filter: var(--ds-glass-filter-soft);
+  -webkit-backdrop-filter: var(--ds-glass-filter-soft);
 }
 
 .form input,
@@ -551,6 +570,8 @@ textarea.ds-input {
 
 .tabs {
   background: var(--ds-surface-0);
+  backdrop-filter: var(--ds-glass-filter);
+  -webkit-backdrop-filter: var(--ds-glass-filter);
 }
 
 .tab {
@@ -574,6 +595,8 @@ textarea.ds-input {
   border: 1px solid var(--ds-trust-border);
   border-radius: var(--ds-radius-md);
   background: var(--ds-trust-bg);
+  backdrop-filter: var(--ds-glass-filter-soft);
+  -webkit-backdrop-filter: var(--ds-glass-filter-soft);
 }
 
 .ds-risk-surface {
@@ -583,6 +606,8 @@ textarea.ds-input {
   border: 1px solid var(--ds-risk-border);
   border-radius: var(--ds-radius-md);
   background: var(--ds-risk-bg);
+  backdrop-filter: var(--ds-glass-filter-soft);
+  -webkit-backdrop-filter: var(--ds-glass-filter-soft);
 }
 
 .ds-danger-surface {
@@ -592,6 +617,8 @@ textarea.ds-input {
   border: 1px solid var(--ds-danger-border);
   border-radius: var(--ds-radius-md);
   background: var(--ds-danger-bg);
+  backdrop-filter: var(--ds-glass-filter-soft);
+  -webkit-backdrop-filter: var(--ds-glass-filter-soft);
 }
 
 .ds-policy-grid {
@@ -610,6 +637,9 @@ textarea.ds-input {
   border: 1px solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-md);
   background: var(--ds-surface-0);
+  box-shadow: var(--ds-glass-edge);
+  backdrop-filter: var(--ds-glass-filter-soft);
+  -webkit-backdrop-filter: var(--ds-glass-filter-soft);
 }
 
 .ds-object-row {
@@ -645,6 +675,9 @@ textarea.ds-input {
   border: 1px solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-md);
   background: var(--ds-surface-0);
+  box-shadow: var(--ds-shadow-panel);
+  backdrop-filter: var(--ds-glass-filter);
+  -webkit-backdrop-filter: var(--ds-glass-filter);
 }
 
 .loading::before {
@@ -689,6 +722,53 @@ textarea.ds-input {
   font-size: var(--ds-font-size-xs);
   font-weight: 700;
   line-height: 1;
+}
+
+.main-head,
+.tab-body,
+.settings,
+.settings-nav,
+.main-view,
+.editor-pane,
+.placeholder,
+.explorer-toolbar,
+.view-options-panel,
+.ddl-modal,
+.toast,
+.agent-primary,
+.agent-secondary,
+.agent-stats span,
+.agent-view-tabs,
+.seg,
+.context-sql,
+.context-grid,
+.review-status,
+.generated-sql,
+.safety-details,
+.plan pre,
+.audit-row,
+.mcp-field pre,
+.mcp-token code,
+.plat,
+.step-card,
+.safety-control-panel,
+.mig-note,
+.mig-warn-banner,
+.mig-drift-unavailable,
+.mig-confirm,
+.mig-script,
+.drift,
+.mig-item,
+.mig-down pre,
+.schema-map,
+.schema-table-node,
+.schema-inspector,
+.schema-detail-list,
+.schema-detail-row,
+.update-card,
+.bar {
+  backdrop-filter: var(--ds-glass-filter);
+  -webkit-backdrop-filter: var(--ds-glass-filter);
 }
 
 .ui-help:hover {

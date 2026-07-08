@@ -35,14 +35,22 @@
   --ds-space-6: 24px;
   --ds-space-8: 32px;
 
-  /* Shape and depth */
+  /* Shape and glass depth */
   --ds-radius-xs: 4px;
   --ds-radius-sm: 6px;
   --ds-radius-md: 8px;
   --ds-radius-lg: 10px;
   --ds-radius-pill: 999px;
-  --ds-shadow-panel: 0 1px 2px rgba(16, 24, 40, 0.07);
-  --ds-shadow-popover: 0 10px 30px rgba(16, 24, 40, 0.16);
+  --ds-glass-filter: saturate(1.45) blur(22px);
+  --ds-glass-filter-soft: saturate(1.24) blur(14px);
+  --ds-glass-edge: inset 0 1px 0 rgba(255, 255, 255, 0.48);
+  --ds-shadow-panel:
+    0 18px 42px rgba(31, 45, 62, 0.11),
+    0 1px 2px rgba(16, 24, 40, 0.08),
+    var(--ds-glass-edge);
+  --ds-shadow-popover:
+    0 24px 70px rgba(16, 24, 40, 0.22),
+    0 1px 1px rgba(255, 255, 255, 0.5) inset;
 
   /* Sizing */
   --ds-control-xs: 22px;
@@ -55,15 +63,17 @@
   --ds-pane-pad: 20px;
   --ds-line: 1px solid var(--ds-border-subtle);
 
-  /* Neutral surfaces */
-  --ds-bg-app: #f4f5f7;
-  --ds-bg-sidebar: #eef0f3;
-  --ds-surface-0: #ffffff;
-  --ds-surface-1: #f8f9fb;
-  --ds-surface-2: #eef1f5;
-  --ds-surface-elevated: #ffffff;
-  --ds-border-subtle: #dde1e7;
-  --ds-border-strong: #c6ccd5;
+  /* Neutral glass surfaces */
+  --ds-bg-app:
+    linear-gradient(135deg, rgba(247, 249, 247, 0.72), rgba(232, 237, 241, 0.5)),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.44), rgba(226, 232, 238, 0.5));
+  --ds-bg-sidebar: rgba(246, 249, 247, 0.46);
+  --ds-surface-0: rgba(255, 255, 255, 0.62);
+  --ds-surface-1: rgba(247, 250, 248, 0.44);
+  --ds-surface-2: rgba(236, 242, 241, 0.38);
+  --ds-surface-elevated: rgba(255, 255, 255, 0.76);
+  --ds-border-subtle: rgba(130, 145, 160, 0.28);
+  --ds-border-strong: rgba(101, 116, 132, 0.42);
   --ds-text: #1d232f;
   --ds-text-muted: #687386;
   --ds-text-subtle: #8a94a5;
@@ -73,18 +83,18 @@
   --ds-accent: #1769d2;
   --ds-accent-hover: #0f5dbd;
   --ds-accent-active: #0a4f9e;
-  --ds-accent-soft: rgba(23, 105, 210, 0.12);
+  --ds-accent-soft: rgba(23, 105, 210, 0.14);
   --ds-info: #087990;
   --ds-success: #237a4b;
   --ds-warning: #98640a;
   --ds-danger: #c33131;
 
   /* Trust/risk surfaces for agent-native workflows. */
-  --ds-trust-bg: #eef9f4;
+  --ds-trust-bg: rgba(229, 249, 240, 0.54);
   --ds-trust-border: #b8e0cd;
-  --ds-risk-bg: #fff7e8;
+  --ds-risk-bg: rgba(255, 246, 226, 0.58);
   --ds-risk-border: #e9c36a;
-  --ds-danger-bg: #fff0f0;
+  --ds-danger-bg: rgba(255, 236, 236, 0.58);
   --ds-danger-border: #eeabab;
 
   /* Data source colors: use sparingly as context accents. */
@@ -107,14 +117,16 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --ds-bg-app: #17191c;
-    --ds-bg-sidebar: #202226;
-    --ds-surface-0: #24272c;
-    --ds-surface-1: #2b2f35;
-    --ds-surface-2: #343942;
-    --ds-surface-elevated: #2b2f35;
-    --ds-border-subtle: #3f4650;
-    --ds-border-strong: #596271;
+    --ds-bg-app:
+      linear-gradient(135deg, rgba(16, 22, 19, 0.78), rgba(22, 27, 32, 0.64)),
+      linear-gradient(180deg, rgba(27, 34, 31, 0.56), rgba(12, 15, 17, 0.68));
+    --ds-bg-sidebar: rgba(25, 30, 31, 0.48);
+    --ds-surface-0: rgba(35, 40, 42, 0.58);
+    --ds-surface-1: rgba(43, 49, 52, 0.44);
+    --ds-surface-2: rgba(55, 63, 67, 0.42);
+    --ds-surface-elevated: rgba(46, 54, 56, 0.72);
+    --ds-border-subtle: rgba(169, 181, 197, 0.18);
+    --ds-border-strong: rgba(187, 198, 210, 0.32);
     --ds-text: #f1f4f8;
     --ds-text-muted: #b0b8c4;
     --ds-text-subtle: #8f98a6;
@@ -145,7 +157,12 @@
     --ds-hover: rgba(169, 181, 197, 0.1);
     --ds-hover-strong: rgba(169, 181, 197, 0.17);
     --ds-focus: #7ab5ff;
-    --ds-shadow-panel: none;
-    --ds-shadow-popover: 0 14px 34px rgba(0, 0, 0, 0.36);
+    --ds-glass-edge: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    --ds-shadow-panel:
+      0 18px 50px rgba(0, 0, 0, 0.22),
+      0 1px 1px rgba(255, 255, 255, 0.06) inset;
+    --ds-shadow-popover:
+      0 24px 76px rgba(0, 0, 0, 0.44),
+      0 1px 1px rgba(255, 255, 255, 0.08) inset;
   }
 }

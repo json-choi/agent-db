@@ -32,6 +32,26 @@
 
 예전 전역 변수명인 `--bg`, `--panel`, `--accent`, `--risk-low` 등은 사용하지 않는다. 모든 CSS는 `--ds-*` 토큰만 사용한다. 새 스타일을 추가할 때 이전 변수명을 되살리지 말고 필요한 의미가 없으면 `tokens.css`에 정식 `--ds-*` 토큰을 추가한다.
 
+## 글래스모피즘 표면
+
+앱의 기본 질감은 native window blur 위에 translucent CSS surface를 올리는 방식이다. Tauri window material은 `src-tauri/tauri.conf.json`의 `windowEffects`에서 정의하고, 앱 내부 표면은 `tokens.css`의 `--ds-surface-*`, `--ds-bg-*`, `--ds-glass-*` 토큰으로만 만든다.
+
+```css
+.my-panel {
+  background: var(--ds-surface-0);
+  border: 1px solid var(--ds-border-subtle);
+  box-shadow: var(--ds-shadow-panel);
+  backdrop-filter: var(--ds-glass-filter);
+  -webkit-backdrop-filter: var(--ds-glass-filter);
+}
+```
+
+- App shell, sidebar, header, tab body, toolbar, inspector, modal, toast는 glass surface를 기본값으로 쓴다.
+- 반복 카드나 control처럼 작은 표면은 `--ds-glass-filter-soft`를 써서 텍스트 대비를 우선한다.
+- 데이터 grid는 shell에만 glass를 주고 cell마다 강한 blur를 반복하지 않는다.
+- 새 화면은 `ds-panel`, `ds-card`, `ds-toolbar`, `ds-filter-strip`, `ds-grid-shell` 같은 공통 클래스를 먼저 사용한다.
+- 불투명 배경색이 필요하면 하드코딩하지 말고 `tokens.css`에 의미 기반 `--ds-*` 토큰을 추가한다.
+
 ## 공통 클래스
 
 Layout:

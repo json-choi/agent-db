@@ -14,11 +14,13 @@
 .sidebar-resizer:hover,
 .sidebar-resizer:active {
   background: var(--ds-hover-strong);
+  backdrop-filter: var(--ds-glass-filter-soft);
+  -webkit-backdrop-filter: var(--ds-glass-filter-soft);
 }
 
 /* Sidebar */
 .sidebar {
-  background: var(--ds-surface-1);
+  background: var(--ds-bg-sidebar);
   border-right: 1px solid var(--ds-border-subtle);
   display: flex;
   flex-direction: column;
@@ -52,6 +54,9 @@
   padding: 12px 16px;
   border-bottom: 1px solid var(--ds-border-subtle);
   background: var(--ds-surface-0);
+  box-shadow: var(--ds-glass-edge);
+  backdrop-filter: var(--ds-glass-filter);
+  -webkit-backdrop-filter: var(--ds-glass-filter);
 }
 .main-policy {
   flex-shrink: 0;
@@ -67,6 +72,8 @@
   border-radius: 999px;
   border: 1px solid var(--ds-border-subtle);
   background: transparent;
+  backdrop-filter: var(--ds-glass-filter-soft);
+  -webkit-backdrop-filter: var(--ds-glass-filter-soft);
   cursor: pointer;
   color: var(--ds-text-muted);
 }
@@ -102,6 +109,10 @@
   gap: 2px;
   padding: var(--ds-space-2) var(--ds-space-3) 0;
   border-bottom: 1px solid var(--ds-border-subtle);
+  background: var(--ds-surface-0);
+  box-shadow: var(--ds-glass-edge);
+  backdrop-filter: var(--ds-glass-filter);
+  -webkit-backdrop-filter: var(--ds-glass-filter);
 }
 .tab {
   border: none;
@@ -150,6 +161,9 @@
   min-height: 0; /* allow inner panes to scroll within the flex column */
   overflow: auto;
   padding: var(--ds-pane-pad);
+  background: var(--ds-surface-1);
+  backdrop-filter: var(--ds-glass-filter-soft);
+  -webkit-backdrop-filter: var(--ds-glass-filter-soft);
 }
 /* Screens are full-width by default so results/tables grids use the whole pane.
    Reading-oriented screens cap their own width below. */
