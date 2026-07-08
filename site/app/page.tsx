@@ -25,6 +25,7 @@ type Lang = "en" | "ko";
 const copy = {
   en: {
     nav: {
+      why: "Why dopedb",
       safety: "Safety",
       download: "Download",
       docs: "Docs",
@@ -32,21 +33,44 @@ const copy = {
       home: "dopedb home",
     },
     hero: {
-      eyebrow: "Open-source local AI database client",
-      tag: "The AI database client for coding agents",
+      eyebrow: "Free, open-source MCP database client",
+      tag: "Give your AI agent a safe path to your database",
       text:
-        "dopedb is a local-first AI database client: talk to your database through an AI agent while credentials, write approvals, rollback previews, and audit logs stay inside a native macOS app.",
+        "dopedb is a free local database client with a built-in MCP server. Keep using your favorite agent for questions and analysis, while credentials, read tools, write approvals, rollback previews, and audit logs stay inside a native macOS app.",
       download: "Download for macOS",
       github: "View on GitHub",
-      signals: ["Tauri native", "Read-only first", "Local audit trail"],
+      signals: ["Free to use", "MCP-ready", "Local safety gate"],
       imageAlt:
         "dopedb desktop app showing a SQL result, safety gate, and audit timeline",
+    },
+    positioning: {
+      eyebrow: "Why it feels different",
+      title: "Not another AI SQL box. A database client your agent can actually use.",
+      body:
+        "The market already has great database clients and plenty of text-to-SQL assistants. dopedb is the missing bridge: a free local client that exposes database context to MCP-capable agents without handing them raw credentials or silent write access.",
+      items: [
+        {
+          title: "Your agent stays your agent",
+          body:
+            "Use the AI tool you already live in. dopedb provides the guarded database surface through MCP.",
+        },
+        {
+          title: "Free client, real guardrails",
+          body:
+            "Connect Postgres, MySQL, or SQLite, browse data, and let reads flow while risky paths stay gated.",
+        },
+        {
+          title: "Results land where humans review them",
+          body:
+            "Agent queries show up in the app with history, audit logs, approvals, and rollback context.",
+        },
+      ],
     },
     principles: {
       eyebrow: "Safety boundary",
       title: "The agent can suggest. The app enforces.",
       body:
-        "dopedb is built for the uncomfortable middle ground: powerful AI help, production database caution, and a human who still needs the final say.",
+        "dopedb is built for the uncomfortable middle ground: powerful agent workflows, production database caution, and a human who still needs the final say.",
       items: [
         {
           icon: ShieldCheck,
@@ -69,13 +93,14 @@ const copy = {
       ],
     },
     workflow: {
-      eyebrow: "Daily flow",
-      title: "Built for database work that needs judgment.",
+      eyebrow: "Agent-ready flow",
+      title: "Open your database to an agent without opening the floodgates.",
       steps: [
         "Connect a local, staging, or production database profile.",
-        "Ask your agent to inspect schemas, draft SQL, or explain a result.",
+        "Connect your MCP-capable agent to dopedb.",
+        "Ask it to inspect schemas, draft SQL, or explain a result.",
         "Let dopedb enforce read/write policy before anything runs.",
-        "Approve writes only after rollback preview and risk classification.",
+        "Review writes only after rollback preview and risk classification.",
       ],
       terminal: `agent -> proposed write
 
@@ -123,10 +148,11 @@ dopedb safety:
       ],
     },
     jsonDescription:
-      "dopedb is a local-first AI database client for coding agents. Agents draft SQL while credentials, write approvals, rollback previews, and audit logs stay in a native macOS app.",
+      "dopedb is a free local MCP database client for AI agents. Agents can inspect and query databases while credentials, write approvals, rollback previews, and audit logs stay in a native macOS app.",
   },
   ko: {
     nav: {
+      why: "왜 dopedb인가",
       safety: "안전",
       download: "다운로드",
       docs: "문서",
@@ -134,21 +160,44 @@ dopedb safety:
       home: "dopedb 홈",
     },
     hero: {
-      eyebrow: "오픈소스 로컬 AI 데이터베이스 클라이언트",
-      tag: "코딩 에이전트를 위한 AI 데이터베이스 클라이언트",
+      eyebrow: "무료 오픈소스 MCP 데이터베이스 클라이언트",
+      tag: "AI 에이전트에게 안전한 데이터베이스 통로를 열어주세요",
       text:
-        "dopedb는 로컬 우선 AI 데이터베이스 클라이언트입니다. AI 에이전트와 대화하듯 데이터베이스를 다루면서도 연결 정보, 쓰기 승인, 롤백 미리보기, 감사 로그는 네이티브 macOS 앱 안에 둡니다.",
+        "dopedb는 MCP 서버가 내장된 무료 로컬 데이터베이스 클라이언트입니다. 질문과 분석은 좋아하는 에이전트에게 맡기고, 연결 정보, 읽기 도구, 쓰기 승인, 롤백 미리보기, 감사 로그는 네이티브 macOS 앱 안에 둡니다.",
       download: "macOS용 다운로드",
       github: "GitHub에서 보기",
-      signals: ["Tauri 네이티브", "읽기 전용 우선", "로컬 감사 로그"],
+      signals: ["무료 사용", "MCP 지원", "로컬 안전 게이트"],
       imageAlt:
         "SQL 결과, 안전 게이트, 감사 타임라인을 보여주는 dopedb 데스크톱 앱",
+    },
+    positioning: {
+      eyebrow: "무엇이 다른가",
+      title: "또 하나의 AI SQL 입력창이 아니라, 에이전트가 실제로 쓸 수 있는 DB 클라이언트.",
+      body:
+        "시장에는 좋은 데이터베이스 클라이언트도 많고 text-to-SQL 도구도 많습니다. dopedb의 빈자리는 그 사이입니다. MCP 지원 에이전트가 데이터베이스 맥락을 읽고 쿼리할 수 있게 하되, 원본 인증 정보와 조용한 쓰기 권한은 넘기지 않는 무료 로컬 클라이언트입니다.",
+      items: [
+        {
+          title: "에이전트는 그대로",
+          body:
+            "이미 쓰는 AI 도구를 계속 쓰세요. dopedb가 MCP를 통해 안전한 데이터베이스 표면을 제공합니다.",
+        },
+        {
+          title: "무료 클라이언트, 실제 가드레일",
+          body:
+            "Postgres, MySQL, SQLite를 연결하고 데이터를 탐색하세요. 읽기는 흐르게 두고 위험한 경로는 게이트 뒤에 둡니다.",
+        },
+        {
+          title: "결과는 사람이 검토하는 곳으로",
+          body:
+            "에이전트 쿼리는 앱에 실시간으로 나타나고 히스토리, 감사 로그, 승인, 롤백 맥락과 함께 남습니다.",
+        },
+      ],
     },
     principles: {
       eyebrow: "안전 경계",
       title: "에이전트는 제안하고, 앱은 집행합니다.",
       body:
-        "dopedb는 강력한 AI 도움, 프로덕션 데이터베이스에 대한 조심스러움, 그리고 최종 결정을 내려야 하는 사람 사이의 불편하지만 중요한 지점을 위해 만들어졌습니다.",
+        "dopedb는 강력한 에이전트 워크플로우, 프로덕션 데이터베이스에 대한 조심스러움, 그리고 최종 결정을 내려야 하는 사람 사이의 불편하지만 중요한 지점을 위해 만들어졌습니다.",
       items: [
         {
           icon: ShieldCheck,
@@ -171,13 +220,14 @@ dopedb safety:
       ],
     },
     workflow: {
-      eyebrow: "일상 흐름",
-      title: "판단이 필요한 데이터베이스 작업을 위해 만들었습니다.",
+      eyebrow: "에이전트 준비 흐름",
+      title: "데이터베이스를 에이전트에게 열되, 수문까지 열지는 않습니다.",
       steps: [
         "로컬, 스테이징, 프로덕션 데이터베이스 프로필을 연결합니다.",
-        "에이전트에게 스키마 확인, SQL 초안 작성, 결과 설명을 요청합니다.",
+        "MCP 지원 에이전트를 dopedb에 연결합니다.",
+        "스키마 확인, SQL 초안 작성, 결과 설명을 요청합니다.",
         "무엇이든 실행되기 전에 dopedb가 읽기/쓰기 정책을 적용합니다.",
-        "롤백 미리보기와 위험 분류를 확인한 뒤에만 쓰기를 승인합니다.",
+        "롤백 미리보기와 위험 분류를 확인한 뒤에만 쓰기를 검토합니다.",
       ],
       terminal: `agent -> proposed write
 
@@ -225,7 +275,7 @@ dopedb safety:
       ],
     },
     jsonDescription:
-      "dopedb는 코딩 에이전트를 위한 로컬 우선 AI 데이터베이스 클라이언트입니다. 에이전트는 SQL을 제안하고, 인증 정보, 쓰기 승인, 롤백 미리보기, 감사 로그는 네이티브 macOS 앱에 남습니다.",
+      "dopedb는 AI 에이전트를 위한 무료 로컬 MCP 데이터베이스 클라이언트입니다. 에이전트는 데이터베이스를 확인하고 쿼리할 수 있고, 인증 정보, 쓰기 승인, 롤백 미리보기, 감사 로그는 네이티브 macOS 앱에 남습니다.",
   },
 };
 
@@ -278,6 +328,7 @@ export default async function Home({
           <span>dopedb</span>
         </a>
         <nav className="nav-links" aria-label="Primary navigation">
+          <a href="#why">{c.nav.why}</a>
           <a href="#safety">{c.nav.safety}</a>
           <a href="#download">{c.nav.download}</a>
           <a href="#docs">{c.nav.docs}</a>
@@ -343,6 +394,25 @@ export default async function Home({
               priority
             />
           </div>
+        </div>
+      </section>
+
+      <section className="positioning" id="why">
+        <div className="section-head">
+          <p className="eyebrow">
+            <Sparkles size={15} />
+            {c.positioning.eyebrow}
+          </p>
+          <h2>{c.positioning.title}</h2>
+          <p>{c.positioning.body}</p>
+        </div>
+        <div className="positioning-grid">
+          {c.positioning.items.map((item) => (
+            <article className="positioning-item" key={item.title}>
+              <h3>{item.title}</h3>
+              <p>{item.body}</p>
+            </article>
+          ))}
         </div>
       </section>
 

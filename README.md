@@ -1,6 +1,6 @@
 # dopedb
 
-로컬에서 실행되는 오픈소스 macOS 데이터베이스 클라이언트입니다. AI 도구는 MCP로 dopedb에 연결하고, dopedb는 연결 정보, 읽기 전용 실행, 승인 게이트, 감사 로그를 앱 안에서 관리합니다.
+dopedb는 **MCP를 지원하는 AI 에이전트를 위한 무료 오픈소스 macOS 데이터베이스 클라이언트**입니다. 에이전트는 dopedb를 통해 데이터베이스를 읽고 이해하고 쿼리할 수 있고, dopedb는 연결 정보, 읽기 전용 실행, 쓰기 승인 게이트, 롤백 미리보기, 감사 로그를 로컬 앱 안에서 관리합니다.
 
 - 웹사이트: https://dopedb.dev (English: https://dopedb.dev/?lang=en)
 - 다운로드: https://github.com/json-choi/dopedb/releases/latest
@@ -10,12 +10,22 @@
 ## 주요 기능
 
 - PostgreSQL, MySQL/MariaDB, SQLite 연결 관리
+- 내장 MCP 서버: MCP 지원 에이전트에 안전한 데이터베이스 도구 제공
 - 기본 읽기 전용 실행과 SQL 분류
 - 쓰기/DDL 실행 전 승인 카드와 `allow_writes` 게이트
 - 쿼리 히스토리와 hash-chain 감사 로그
-- 로컬 MCP 서버: Claude Code, Claude Desktop, Codex 등에서 읽기 도구 사용
+- 에이전트 쿼리 결과를 앱 안에서 실시간 확인
 - 한국어/영어 지원: 소개 사이트, 데스크톱 클라이언트 UI, GitHub README
 - GitHub Releases 기반 macOS 다운로드와 Tauri updater
+
+## 왜 dopedb인가
+
+좋은 무료 DB 클라이언트도 있고, AI SQL 생성기도 많습니다. dopedb가 노리는 지점은 조금 다릅니다.
+
+- AI 기능이 붙은 SQL 편집기가 아니라, **기존 에이전트가 MCP로 사용할 수 있는 무료 DB 클라이언트**입니다.
+- 에이전트에게 원본 인증 정보를 넘기지 않고, 로컬 앱이 연결과 비밀값을 관리합니다.
+- 현재 MCP 도구는 읽기 전용으로 제공하고, 쓰기/DDL은 앱의 승인 게이트 뒤에서만 실행합니다.
+- 에이전트가 실행한 쿼리 결과, 히스토리, 승인 흐름, 감사 로그를 사람이 볼 수 있는 UI에 남깁니다.
 
 ## 언어 지원
 

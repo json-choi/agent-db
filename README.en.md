@@ -1,6 +1,6 @@
 # dopedb
 
-dopedb is an open-source macOS database client that runs locally. AI tools connect to dopedb over MCP, while dopedb keeps database connections, read-only execution, approval gates, and audit logs inside the desktop app.
+dopedb is a **free, open-source macOS database client for AI agents that support MCP**. Agents can use dopedb to inspect, understand, and query your databases, while dopedb keeps connections, read-only execution, write approval gates, rollback previews, and audit logs inside the local desktop app.
 
 - Website: https://dopedb.dev (Korean: https://dopedb.dev/?lang=ko)
 - Download: https://github.com/json-choi/dopedb/releases/latest
@@ -10,12 +10,22 @@ dopedb is an open-source macOS database client that runs locally. AI tools conne
 ## Features
 
 - PostgreSQL, MySQL/MariaDB, and SQLite connection management
+- Built-in MCP server that gives MCP-capable agents a guarded database surface
 - Read-only defaults and SQL classification
 - Approval card plus `allow_writes` gate for writes and DDL
 - Query history and hash-chained audit log
-- Local MCP server for read tools from Claude Code, Claude Desktop, Codex, and similar clients
+- Live in-app view of agent query results
 - Korean/English support across the marketing site, desktop client UI, and GitHub README
 - macOS downloads and Tauri updater metadata through GitHub Releases
+
+## Why dopedb
+
+There are great free database clients, and there are plenty of AI SQL generators. dopedb is aimed at a different gap.
+
+- It is not an AI feature bolted onto a SQL editor. It is a **free database client your existing agent can use through MCP**.
+- The agent does not receive raw database credentials; the local app owns connections and secrets.
+- The MCP tool surface is read-only today, while writes and DDL remain behind the app approval gate.
+- Agent query results, history, approvals, and audit logs land in a UI humans can review.
 
 ## Language Support
 

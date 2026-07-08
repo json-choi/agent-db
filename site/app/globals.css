@@ -339,14 +339,20 @@ h3 {
 }
 
 .principles,
+.positioning,
 .workflow,
 .download-band,
 .docs {
   padding: clamp(64px, 9vw, 118px) clamp(18px, 4vw, 56px);
 }
 
-.principles {
+.positioning {
+  border-bottom: 1px solid var(--line);
   background: var(--white);
+}
+
+.principles {
+  background: var(--paper);
 }
 
 .section-head {
@@ -363,6 +369,34 @@ h3 {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
   margin-top: 38px;
+}
+
+.positioning-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin-top: 38px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--line);
+}
+
+.positioning-item {
+  min-height: 220px;
+  padding: 24px;
+  background: var(--paper);
+}
+
+.positioning-item h3 {
+  max-width: 280px;
+}
+
+.positioning-item p {
+  margin-top: 14px;
+  color: var(--ink-soft);
+  font-size: 16px;
+  line-height: 1.6;
 }
 
 .feature-card,
@@ -624,11 +658,13 @@ code {
   }
 
   .feature-grid,
+  .positioning-grid,
   .docs-grid {
     grid-template-columns: 1fr;
   }
 
   .feature-card,
+  .positioning-item,
   .doc-card {
     min-height: auto;
   }
