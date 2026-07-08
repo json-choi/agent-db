@@ -41,16 +41,27 @@
   --ds-radius-md: 8px;
   --ds-radius-lg: 10px;
   --ds-radius-pill: 999px;
-  --ds-glass-filter: saturate(1.45) blur(22px);
-  --ds-glass-filter-soft: saturate(1.24) blur(14px);
-  --ds-glass-edge: inset 0 1px 0 rgba(255, 255, 255, 0.48);
+  --ds-glass-window-filter: saturate(1.75) blur(36px);
+  --ds-glass-filter: saturate(1.72) blur(30px);
+  --ds-glass-filter-soft: saturate(1.42) blur(18px);
+  --ds-glass-sheen:
+    linear-gradient(
+      145deg,
+      rgba(255, 255, 255, 0.62) 0%,
+      rgba(255, 255, 255, 0.24) 38%,
+      rgba(255, 255, 255, 0.07) 62%,
+      rgba(255, 255, 255, 0) 100%
+    );
+  --ds-glass-edge:
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.2);
   --ds-shadow-panel:
-    0 18px 42px rgba(31, 45, 62, 0.11),
-    0 1px 2px rgba(16, 24, 40, 0.08),
+    0 24px 70px rgba(31, 45, 62, 0.16),
+    0 2px 10px rgba(16, 24, 40, 0.1),
     var(--ds-glass-edge);
   --ds-shadow-popover:
-    0 24px 70px rgba(16, 24, 40, 0.22),
-    0 1px 1px rgba(255, 255, 255, 0.5) inset;
+    0 30px 90px rgba(16, 24, 40, 0.28),
+    0 1px 1px rgba(255, 255, 255, 0.72) inset;
 
   /* Sizing */
   --ds-control-xs: 22px;
@@ -65,15 +76,17 @@
 
   /* Neutral glass surfaces */
   --ds-bg-app:
-    linear-gradient(135deg, rgba(247, 249, 247, 0.72), rgba(232, 237, 241, 0.5)),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.44), rgba(226, 232, 238, 0.5));
-  --ds-bg-sidebar: rgba(246, 249, 247, 0.46);
-  --ds-surface-0: rgba(255, 255, 255, 0.62);
-  --ds-surface-1: rgba(247, 250, 248, 0.44);
-  --ds-surface-2: rgba(236, 242, 241, 0.38);
-  --ds-surface-elevated: rgba(255, 255, 255, 0.76);
-  --ds-border-subtle: rgba(130, 145, 160, 0.28);
-  --ds-border-strong: rgba(101, 116, 132, 0.42);
+    linear-gradient(115deg, rgba(41, 118, 204, 0.22) 0%, rgba(41, 118, 204, 0) 34%),
+    linear-gradient(205deg, rgba(26, 154, 121, 0.18) 5%, rgba(26, 154, 121, 0) 38%),
+    linear-gradient(315deg, rgba(223, 181, 76, 0.13) 8%, rgba(223, 181, 76, 0) 40%),
+    rgba(245, 248, 249, 0.14);
+  --ds-bg-sidebar: rgba(255, 255, 255, 0.28);
+  --ds-surface-0: rgba(255, 255, 255, 0.36);
+  --ds-surface-1: rgba(255, 255, 255, 0.24);
+  --ds-surface-2: rgba(236, 243, 244, 0.2);
+  --ds-surface-elevated: rgba(255, 255, 255, 0.48);
+  --ds-border-subtle: rgba(255, 255, 255, 0.42);
+  --ds-border-strong: rgba(255, 255, 255, 0.62);
   --ds-text: #1d232f;
   --ds-text-muted: #687386;
   --ds-text-subtle: #8a94a5;
@@ -90,12 +103,12 @@
   --ds-danger: #c33131;
 
   /* Trust/risk surfaces for agent-native workflows. */
-  --ds-trust-bg: rgba(229, 249, 240, 0.54);
-  --ds-trust-border: #b8e0cd;
-  --ds-risk-bg: rgba(255, 246, 226, 0.58);
-  --ds-risk-border: #e9c36a;
-  --ds-danger-bg: rgba(255, 236, 236, 0.58);
-  --ds-danger-border: #eeabab;
+  --ds-trust-bg: rgba(218, 251, 236, 0.34);
+  --ds-trust-border: rgba(104, 194, 145, 0.5);
+  --ds-risk-bg: rgba(255, 243, 211, 0.36);
+  --ds-risk-border: rgba(196, 148, 28, 0.52);
+  --ds-danger-bg: rgba(255, 226, 226, 0.36);
+  --ds-danger-border: rgba(210, 88, 88, 0.52);
 
   /* Data source colors: use sparingly as context accents. */
   --ds-source-blue: #1769d2;
@@ -118,15 +131,17 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --ds-bg-app:
-      linear-gradient(135deg, rgba(16, 22, 19, 0.78), rgba(22, 27, 32, 0.64)),
-      linear-gradient(180deg, rgba(27, 34, 31, 0.56), rgba(12, 15, 17, 0.68));
-    --ds-bg-sidebar: rgba(25, 30, 31, 0.48);
-    --ds-surface-0: rgba(35, 40, 42, 0.58);
-    --ds-surface-1: rgba(43, 49, 52, 0.44);
-    --ds-surface-2: rgba(55, 63, 67, 0.42);
-    --ds-surface-elevated: rgba(46, 54, 56, 0.72);
-    --ds-border-subtle: rgba(169, 181, 197, 0.18);
-    --ds-border-strong: rgba(187, 198, 210, 0.32);
+      linear-gradient(115deg, rgba(68, 128, 214, 0.2) 0%, rgba(68, 128, 214, 0) 36%),
+      linear-gradient(210deg, rgba(37, 168, 132, 0.17) 6%, rgba(37, 168, 132, 0) 42%),
+      linear-gradient(315deg, rgba(224, 181, 82, 0.1) 8%, rgba(224, 181, 82, 0) 38%),
+      rgba(9, 13, 15, 0.18);
+    --ds-bg-sidebar: rgba(25, 31, 33, 0.32);
+    --ds-surface-0: rgba(27, 34, 37, 0.38);
+    --ds-surface-1: rgba(35, 43, 46, 0.28);
+    --ds-surface-2: rgba(47, 57, 61, 0.24);
+    --ds-surface-elevated: rgba(38, 47, 51, 0.5);
+    --ds-border-subtle: rgba(255, 255, 255, 0.16);
+    --ds-border-strong: rgba(255, 255, 255, 0.28);
     --ds-text: #f1f4f8;
     --ds-text-muted: #b0b8c4;
     --ds-text-subtle: #8f98a6;
@@ -141,11 +156,11 @@
     --ds-warning: #e2b85e;
     --ds-danger: #ff7a7a;
 
-    --ds-trust-bg: rgba(112, 200, 145, 0.1);
+    --ds-trust-bg: rgba(112, 200, 145, 0.16);
     --ds-trust-border: rgba(112, 200, 145, 0.34);
-    --ds-risk-bg: rgba(226, 184, 94, 0.1);
+    --ds-risk-bg: rgba(226, 184, 94, 0.16);
     --ds-risk-border: rgba(226, 184, 94, 0.4);
-    --ds-danger-bg: rgba(255, 122, 122, 0.1);
+    --ds-danger-bg: rgba(255, 122, 122, 0.16);
     --ds-danger-border: rgba(255, 122, 122, 0.4);
 
     --ds-source-blue: #5aa2ff;
@@ -157,12 +172,22 @@
     --ds-hover: rgba(169, 181, 197, 0.1);
     --ds-hover-strong: rgba(169, 181, 197, 0.17);
     --ds-focus: #7ab5ff;
-    --ds-glass-edge: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    --ds-glass-sheen:
+      linear-gradient(
+        145deg,
+        rgba(255, 255, 255, 0.18) 0%,
+        rgba(255, 255, 255, 0.08) 36%,
+        rgba(255, 255, 255, 0.03) 62%,
+        rgba(255, 255, 255, 0) 100%
+      );
+    --ds-glass-edge:
+      inset 0 1px 0 rgba(255, 255, 255, 0.24),
+      inset 0 -1px 0 rgba(255, 255, 255, 0.06);
     --ds-shadow-panel:
-      0 18px 50px rgba(0, 0, 0, 0.22),
-      0 1px 1px rgba(255, 255, 255, 0.06) inset;
+      0 26px 80px rgba(0, 0, 0, 0.34),
+      var(--ds-glass-edge);
     --ds-shadow-popover:
-      0 24px 76px rgba(0, 0, 0, 0.44),
-      0 1px 1px rgba(255, 255, 255, 0.08) inset;
+      0 34px 96px rgba(0, 0, 0, 0.52),
+      var(--ds-glass-edge);
   }
 }

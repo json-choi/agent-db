@@ -21,10 +21,10 @@
         "backgroundColor": "#00000000",
         "transparent": true,
         "windowEffects": {
-          "effects": ["windowBackground", "mica", "blur"],
+          "effects": ["hudWindow", "underWindowBackground", "windowBackground", "acrylic", "mica", "blur"],
           "state": "followsWindowActiveState",
           "radius": 10,
-          "color": "#11130fcc"
+          "color": "#10141888"
         },
         "resizable": true,
         "fullscreen": false

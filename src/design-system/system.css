@@ -8,12 +8,22 @@
   box-sizing: border-box;
 }
 
+html,
 body {
+  min-height: 100%;
   margin: 0;
   background: transparent;
+}
+
+body {
   color: var(--ds-text);
   font-family: var(--ds-font-sans);
   -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100vh;
+  background: transparent;
 }
 
 h1,
@@ -57,12 +67,32 @@ h3,
 }
 
 .app {
-  background: var(--ds-bg-app);
+  position: relative;
+  background: transparent;
   isolation: isolate;
+}
+
+.app::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: var(--ds-bg-app);
+  backdrop-filter: var(--ds-glass-window-filter);
+  -webkit-backdrop-filter: var(--ds-glass-window-filter);
+  pointer-events: none;
+}
+
+.app > * {
+  position: relative;
+  z-index: 1;
 }
 
 .sidebar {
   background: var(--ds-bg-sidebar);
+  box-shadow:
+    inset -1px 0 0 var(--ds-border-subtle),
+    var(--ds-glass-edge);
   backdrop-filter: var(--ds-glass-filter);
   -webkit-backdrop-filter: var(--ds-glass-filter);
 }
@@ -769,6 +799,84 @@ textarea.ds-input {
 .bar {
   backdrop-filter: var(--ds-glass-filter);
   -webkit-backdrop-filter: var(--ds-glass-filter);
+}
+
+.btn,
+.ds-button,
+.card,
+.ds-card,
+.ds-panel,
+.ds-inspector,
+.grid-panel,
+.schema-inspector,
+.ds-data-toolbar,
+.ds-ledger-card,
+.ds-filter-strip,
+.ds-filter-token,
+.form input,
+.form select,
+.form textarea,
+.table-filter,
+.filter-input,
+.ds-input,
+.tabs,
+.ds-trust-surface,
+.ds-risk-surface,
+.ds-danger-surface,
+.ds-policy-card,
+.ds-grid-shell,
+.grid-scroll,
+.ui-help,
+.main-head,
+.tab-body,
+.settings,
+.settings-nav,
+.main-view,
+.editor-pane,
+.placeholder,
+.explorer-toolbar,
+.view-options-panel,
+.ddl-modal,
+.toast,
+.agent-primary,
+.agent-secondary,
+.agent-stats span,
+.agent-view-tabs,
+.seg,
+.context-sql,
+.context-grid,
+.review-status,
+.generated-sql,
+.safety-details,
+.plan pre,
+.audit-row,
+.mcp-field pre,
+.mcp-token code,
+.plat,
+.step-card,
+.safety-control-panel,
+.mig-note,
+.mig-warn-banner,
+.mig-drift-unavailable,
+.mig-confirm,
+.mig-script,
+.drift,
+.mig-item,
+.mig-down pre,
+.schema-map,
+.schema-table-node,
+.schema-detail-list,
+.schema-detail-row,
+.update-card,
+.bar {
+  background-image: var(--ds-glass-sheen);
+  background-clip: padding-box;
+}
+
+.ddl-overlay {
+  background: rgba(5, 9, 13, 0.32);
+  backdrop-filter: var(--ds-glass-filter-soft);
+  -webkit-backdrop-filter: var(--ds-glass-filter-soft);
 }
 
 .ui-help:hover {
