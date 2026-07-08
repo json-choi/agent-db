@@ -14,6 +14,7 @@ import {
   TerminalSquare,
   Waypoints,
 } from "lucide-react";
+import { TrackedLink } from "./TrackedLink";
 
 const repoUrl = "https://github.com/json-choi/dopedb";
 const releasesUrl = `${repoUrl}/releases/latest`;
@@ -124,10 +125,15 @@ export default function Home() {
             stay inside a native macOS app.
           </p>
           <div className="hero-actions" aria-label="Primary actions">
-            <a className="button primary" href={releasesUrl}>
+            <TrackedLink
+              className="button primary"
+              href={releasesUrl}
+              event="Download Clicked"
+              properties={{ source: "hero", target: "github_releases_latest" }}
+            >
               <Download size={18} />
               Download for macOS
-            </a>
+            </TrackedLink>
             <a className="button secondary" href={repoUrl}>
               <GitBranch size={18} />
               View on GitHub
@@ -245,10 +251,15 @@ dopedb safety:
           </div>
         </div>
         <div className="release-actions">
-          <a className="button primary" href={releasesUrl}>
+          <TrackedLink
+            className="button primary"
+            href={releasesUrl}
+            event="Download Clicked"
+            properties={{ source: "download_section", target: "github_releases_latest" }}
+          >
             <Download size={18} />
             Latest release
-          </a>
+          </TrackedLink>
           <a className="button secondary" href={`${repoUrl}/blob/main/docs/PROJECT.md#development`}>
             <TerminalSquare size={18} />
             Build from source
@@ -265,13 +276,35 @@ dopedb safety:
           <h2>Open the internals, not just the binary.</h2>
         </div>
         <div className="docs-grid">
-          {docs.map((doc) => (
-            <a className="doc-card" href={doc.href} key={doc.title}>
-              <span>{doc.title}</span>
-              <p>{doc.body}</p>
-              <ArrowRight size={18} />
-            </a>
-          ))}
+          {docs.map((doc) => {
+            const content = (
+              <>
+                <span>{doc.title}</span>
+                <p>{doc.body}</p>
+                <ArrowRight size={18} />
+              </>
+            );
+
+            if (doc.href === releasesUrl) {
+              return (
+                <TrackedLink
+                  className="doc-card"
+                  href={doc.href}
+                  key={doc.title}
+                  event="Download Clicked"
+                  properties={{ source: "docs_card", target: "github_releases_latest" }}
+                >
+                  {content}
+                </TrackedLink>
+              );
+            }
+
+            return (
+              <a className="doc-card" href={doc.href} key={doc.title}>
+                {content}
+              </a>
+            );
+          })}
         </div>
       </section>
     </main>
