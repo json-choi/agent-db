@@ -91,10 +91,10 @@
   --ds-text-inverse: #ffffff;
 
   /* Three chromatic hues, derived from the DopeDB icon. */
-  --ds-primary: #1d7b45;
-  --ds-primary-hover: #17683a;
-  --ds-primary-active: #11562f;
-  --ds-primary-soft: rgba(29, 123, 69, 0.14);
+  --ds-primary: #2f6f4d;
+  --ds-primary-hover: #285f42;
+  --ds-primary-active: #214f38;
+  --ds-primary-soft: rgba(47, 111, 77, 0.13);
   --ds-caution: #9a6511;
   --ds-caution-soft: rgba(154, 101, 17, 0.14);
   --ds-critical: #bd574d;
@@ -111,8 +111,8 @@
   --ds-danger: var(--ds-critical);
 
   /* Trust/risk surfaces for agent-native workflows. */
-  --ds-trust-bg: rgba(29, 123, 69, 0.12);
-  --ds-trust-border: rgba(29, 123, 69, 0.38);
+  --ds-trust-bg: rgba(47, 111, 77, 0.11);
+  --ds-trust-border: rgba(47, 111, 77, 0.34);
   --ds-risk-bg: rgba(154, 101, 17, 0.13);
   --ds-risk-border: rgba(154, 101, 17, 0.4);
   --ds-danger-bg: rgba(189, 87, 77, 0.13);
@@ -153,10 +153,10 @@
     --ds-text-subtle: #8f98a6;
     --ds-text-inverse: #ffffff;
 
-    --ds-primary: #6fd26c;
-    --ds-primary-hover: #91f285;
-    --ds-primary-active: #3fca60;
-    --ds-primary-soft: rgba(111, 210, 108, 0.18);
+    --ds-primary: #368454;
+    --ds-primary-hover: #388256;
+    --ds-primary-active: #2f724a;
+    --ds-primary-soft: rgba(54, 132, 84, 0.18);
     --ds-caution: #f2b84b;
     --ds-caution-soft: rgba(242, 184, 75, 0.16);
     --ds-critical: #ff6b5c;
@@ -171,8 +171,8 @@
     --ds-warning: var(--ds-caution);
     --ds-danger: var(--ds-critical);
 
-    --ds-trust-bg: rgba(111, 210, 108, 0.14);
-    --ds-trust-border: rgba(111, 210, 108, 0.34);
+    --ds-trust-bg: rgba(54, 132, 84, 0.16);
+    --ds-trust-border: rgba(54, 132, 84, 0.36);
     --ds-risk-bg: rgba(242, 184, 75, 0.14);
     --ds-risk-border: rgba(242, 184, 75, 0.36);
     --ds-danger-bg: rgba(255, 107, 92, 0.14);
