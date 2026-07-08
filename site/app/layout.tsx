@@ -12,7 +12,7 @@ export const metadata: Metadata = {
     template: "%s - DopeDB",
   },
   description:
-    "An open-source macOS database client where AI agents can help with SQL while credentials, approvals, and audit logs stay local.",
+    "An open-source desktop database client where AI agents can help with SQL while credentials, approvals, and audit logs stay local.",
   keywords: [
     "DopeDB",
     "AI database client",

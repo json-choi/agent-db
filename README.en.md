@@ -1,6 +1,6 @@
 # DopeDB
 
-DopeDB is a **free, open-source macOS app that gives AI agents a safe path to your databases**. Through MCP, agents can inspect schemas, run read queries, and understand results, while raw credentials, read-only enforcement, write approvals, rollback previews, and audit logs stay under the control of the local app.
+DopeDB is a **free, open-source desktop app that gives AI agents a safe path to your databases**. Through MCP, agents can inspect schemas, run read queries, and understand results, while raw credentials, read-only enforcement, write approvals, rollback previews, and audit logs stay under the control of the local app.
 
 - Website: https://dopedb.dev (Korean: https://dopedb.dev/?lang=ko)
 - Download: https://github.com/json-choi/dopedb/releases/latest
@@ -16,7 +16,7 @@ DopeDB is a **free, open-source macOS app that gives AI agents a safe path to yo
 - Query history and hash-chained audit log
 - Live in-app view of agent query results
 - Korean/English support across the marketing site, desktop client UI, and GitHub README
-- macOS downloads and Tauri updater metadata through GitHub Releases
+- macOS/Windows downloads and Tauri updater metadata through GitHub Releases
 
 ## Why DopeDB
 
@@ -60,7 +60,7 @@ cargo check --workspace
 
 ## Releases
 
-Pushing an `app-v*` tag starts the GitHub Actions release workflow. It builds Apple Silicon and Intel macOS artifacts and uploads updater metadata to GitHub Releases.
+Pushing an `app-v*` tag starts the GitHub Actions release workflow. It builds Apple Silicon and Intel macOS artifacts, a Windows x64 NSIS installer, and uploads updater metadata to GitHub Releases.
 
 ```sh
 git tag app-v0.1.1

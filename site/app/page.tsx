@@ -36,8 +36,8 @@ const copy = {
       eyebrow: "Free local MCP database gateway",
       tag: "Let your agent query data without handing over the keys",
       text:
-        "DopeDB gives MCP-capable agents a guarded path into Postgres, MySQL, and SQLite. Keep using your favorite agent for questions and analysis while credentials, read-only enforcement, write approvals, rollback previews, and audit logs stay inside a native macOS app.",
-      download: "Download for macOS",
+        "DopeDB gives MCP-capable agents a guarded path into Postgres, MySQL, and SQLite. Keep using your favorite agent for questions and analysis while credentials, read-only enforcement, write approvals, rollback previews, and audit logs stay inside a native desktop app.",
+      download: "Download for macOS or Windows",
       github: "View on GitHub",
       signals: ["Agent-ready", "Credentials stay local", "Writes stay gated"],
       imageAlt:
@@ -116,9 +116,9 @@ DopeDB safety:
     },
     download: {
       eyebrow: "Download",
-      title: "Install the latest macOS build from GitHub Releases.",
+      title: "Install the latest macOS or Windows build from GitHub Releases.",
       body:
-        "The first public channel is macOS through GitHub Releases. The app checks the signed release feed and enables updates from Settings when a newer version is available.",
+        "The public release channel ships through GitHub Releases. The app checks the signed release feed and enables updates from Settings when a newer version is available.",
       warningTitle: "macOS may show a developer warning.",
       warningBody:
         "Until DopeDB is notarized with an Apple Developer ID, approve it from System Settings, Privacy & Security, Open Anyway after confirming the file came from GitHub Releases.",
@@ -143,12 +143,12 @@ DopeDB safety:
         {
           title: "Releases",
           href: releasesUrl,
-          body: "Latest macOS downloads and updater metadata.",
+          body: "Latest macOS/Windows downloads and updater metadata.",
         },
       ],
     },
     jsonDescription:
-      "DopeDB is a free local MCP database gateway for AI agents. Agents can inspect schemas and run read queries while credentials, write approvals, rollback previews, and audit logs stay in a native macOS app.",
+      "DopeDB is a free local MCP database gateway for AI agents. Agents can inspect schemas and run read queries while credentials, write approvals, rollback previews, and audit logs stay in a native desktop app.",
   },
   ko: {
     nav: {
@@ -163,8 +163,8 @@ DopeDB safety:
       eyebrow: "무료 로컬 MCP 데이터베이스 게이트웨이",
       tag: "키를 넘기지 않고 에이전트에게 데이터 통로를 열어주세요",
       text:
-        "DopeDB는 MCP 지원 에이전트가 Postgres, MySQL, SQLite를 안전하게 읽고 이해할 수 있게 합니다. 질문과 분석은 좋아하는 에이전트에게 맡기고, 인증 정보, 읽기 전용 실행, 쓰기 승인, 롤백 미리보기, 감사 로그는 네이티브 macOS 앱 안에 둡니다.",
-      download: "macOS용 다운로드",
+        "DopeDB는 MCP 지원 에이전트가 Postgres, MySQL, SQLite를 안전하게 읽고 이해할 수 있게 합니다. 질문과 분석은 좋아하는 에이전트에게 맡기고, 인증 정보, 읽기 전용 실행, 쓰기 승인, 롤백 미리보기, 감사 로그는 네이티브 데스크톱 앱 안에 둡니다.",
+      download: "macOS/Windows 다운로드",
       github: "GitHub에서 보기",
       signals: ["에이전트 준비 완료", "인증 정보는 로컬에", "쓰기는 승인 뒤에"],
       imageAlt:
@@ -243,9 +243,9 @@ DopeDB safety:
     },
     download: {
       eyebrow: "다운로드",
-      title: "최신 macOS 빌드를 GitHub Releases에서 설치하세요.",
+      title: "최신 macOS 또는 Windows 빌드를 GitHub Releases에서 설치하세요.",
       body:
-        "첫 공개 채널은 GitHub Releases를 통한 macOS 빌드입니다. 앱은 서명된 릴리스 피드를 확인하고, 새 버전이 있으면 Settings에서 업데이트할 수 있게 합니다.",
+        "공개 릴리스 채널은 GitHub Releases입니다. 앱은 서명된 릴리스 피드를 확인하고, 새 버전이 있으면 Settings에서 업데이트할 수 있게 합니다.",
       warningTitle: "macOS 개발자 확인 경고가 표시될 수 있습니다.",
       warningBody:
         "Apple Developer ID로 공증되기 전까지는 GitHub Releases에서 받은 파일인지 확인한 뒤 System Settings, Privacy & Security, Open Anyway에서 실행을 허용하세요.",
@@ -270,12 +270,12 @@ DopeDB safety:
         {
           title: "릴리스",
           href: releasesUrl,
-          body: "최신 macOS 다운로드와 updater metadata.",
+          body: "최신 macOS/Windows 다운로드와 updater metadata.",
         },
       ],
     },
     jsonDescription:
-      "DopeDB는 AI 에이전트를 위한 무료 로컬 MCP 데이터베이스 게이트웨이입니다. 에이전트는 스키마를 확인하고 읽기 쿼리를 실행할 수 있고, 인증 정보, 쓰기 승인, 롤백 미리보기, 감사 로그는 네이티브 macOS 앱에 남습니다.",
+      "DopeDB는 AI 에이전트를 위한 무료 로컬 MCP 데이터베이스 게이트웨이입니다. 에이전트는 스키마를 확인하고 읽기 쿼리를 실행할 수 있고, 인증 정보, 쓰기 승인, 롤백 미리보기, 감사 로그는 네이티브 데스크톱 앱에 남습니다.",
   },
 };
 
@@ -299,7 +299,7 @@ export default async function Home({
     "@type": "SoftwareApplication",
     name: "DopeDB",
     applicationCategory: "DeveloperApplication",
-    operatingSystem: "macOS",
+    operatingSystem: "macOS, Windows",
     description: c.jsonDescription,
     url: siteUrl,
     downloadUrl: releasesUrl,

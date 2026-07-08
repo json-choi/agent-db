@@ -21,10 +21,16 @@ jobs:
         include:
           - platform: macos-15
             target: aarch64-apple-darwin
+            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
             args: --target aarch64-apple-darwin
           - platform: macos-15
             target: x86_64-apple-darwin
+            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
             args: --target x86_64-apple-darwin
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            rust-targets: x86_64-pc-windows-msvc
+            args: --target x86_64-pc-windows-msvc
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v7
@@ -45,7 +51,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          targets: ${{ matrix.rust-targets }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -67,7 +73,7 @@ jobs:
           tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'app-v__VERSION__' }}
           releaseName: dopedb v__VERSION__
           releaseBody: |
-            Download the macOS installer from the assets below.
+            Download the macOS or Windows installer from the assets below.
 
             The Tauri updater uses `latest.json` from this release to detect and install signed updates.
           releaseDraft: false

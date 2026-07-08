@@ -4,7 +4,7 @@ This is the single maintained project document for DopeDB. Keep the root README 
 
 ## Product
 
-DopeDB is a local-first macOS database client built with Tauri. It lets a user inspect and operate databases manually, and it exposes a local MCP server so AI tools can safely inspect connected databases without receiving raw credentials.
+DopeDB is a local-first desktop database client built with Tauri. It lets a user inspect and operate databases manually, and it exposes a local MCP server so AI tools can safely inspect connected databases without receiving raw credentials.
 
 Current scope:
 
@@ -121,6 +121,7 @@ Release runs on `app-v*` tags or manual dispatch:
 
 - build macOS Apple Silicon artifact
 - build macOS Intel artifact
+- build Windows x64 NSIS installer
 - upload installers, updater archives, signatures, and `latest.json`
 
 Required GitHub secret:
