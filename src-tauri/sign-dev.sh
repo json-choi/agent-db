@@ -4,7 +4,7 @@
 # Why: `cargo build` output is *ad-hoc* signed, so its code hash changes on every
 # rebuild. macOS records the Keychain "Always Allow" grant against the app's code
 # identity — an ad-hoc identity is the per-build hash, so the grant never sticks and
-# you get the "dopedb wants to use confidential information" prompt every launch.
+# you get the "DopeDB wants to use confidential information" prompt every launch.
 # Signing with a stable identity (the same cert across rebuilds) makes the designated
 # requirement stable, so "Always Allow" persists and the prompt stops.
 #

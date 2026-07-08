@@ -1,5 +1,5 @@
 /*
- * Shared UI classes for dopedb.
+ * Shared UI classes for DopeDB.
  * Prefer ds-* classes for new surfaces. Existing app class names that describe
  * shared primitives live here too, so components use one tokenized system.
  */

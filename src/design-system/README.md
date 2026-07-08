@@ -1,10 +1,10 @@
-# dopedb 클라이언트 디자인 시스템
+# DopeDB 클라이언트 디자인 시스템
 
-이 디자인 시스템은 DataGrip 분석 문서의 결론을 dopedb 클라이언트에서 바로 사용할 수 있는 토큰과 공통 클래스로 내린 것이다.
+이 디자인 시스템은 DataGrip 분석 문서의 결론을 DopeDB 클라이언트에서 바로 사용할 수 있는 토큰과 공통 클래스로 내린 것이다.
 
 핵심 방향:
 
-- dopedb는 DataGrip 전체 IDE를 복제하지 않는다.
+- DopeDB는 DataGrip 전체 IDE를 복제하지 않는다.
 - 공간 규칙은 `explorer -> workbench -> inspector/trust ledger`로 유지한다.
 - 모든 데이터 작업은 connection, schema, 실행 주체, safety state를 드러낸다.
 - 밀도는 높게 유지하되, agent safety와 audit 정보는 더 명확하게 보이게 한다.

@@ -240,7 +240,7 @@ export default function Migrations({
 
       {!connection.projectDir && !report && (
         <p className="muted">
-          Tip: set a <strong>Project folder</strong> on this connection (Edit) and dopedb
+          Tip: set a <strong>Project folder</strong> on this connection (Edit) and DopeDB
           will auto-detect its migrations folder.
         </p>
       )}

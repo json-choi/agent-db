@@ -2,7 +2,7 @@
 name = "dopedb-mcp-stdio"
 version = "0.1.1"
 edition = "2021"
-description = "stdio<->TCP bridge so stdio-only MCP clients (Claude Desktop) reach the running dopedb app"
+description = "stdio<->TCP bridge so stdio-only MCP clients (Claude Desktop) reach the running DopeDB app"
 license = "MIT"
 
 [[bin]]

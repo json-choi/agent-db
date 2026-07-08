@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="dopedb">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="DopeDB">
   <rect width="64" height="64" rx="14" fill="#11130f"/>
   <ellipse cx="32" cy="20" rx="18" ry="8" fill="#6fd26c"/>
   <path d="M14 20v24c0 4.4 8.1 8 18 8s18-3.6 18-8V20" fill="none" stroke="#6fd26c" stroke-width="6" stroke-linejoin="round"/>

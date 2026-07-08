@@ -31,7 +31,7 @@ const messages = {
     "agent.contextEmpty": "No MCP context has been exposed in this session yet.",
     "agent.contextExposed": "Context exposed to the agent",
     "agent.contextHelp":
-      "This ledger shows what dopedb exposed through MCP: tools called, SQL, tables, columns, row counts, and errors. It does not include hidden reasoning from the external agent.",
+      "This ledger shows what DopeDB exposed through MCP: tools called, SQL, tables, columns, row counts, and errors. It does not include hidden reasoning from the external agent.",
     "agent.contextSummaryDefault": "MCP tool metadata.",
     "agent.contextSummaryDescribeTable":
       "Column names, data types, nullability, primary keys, foreign keys, and row estimate.",
@@ -217,7 +217,7 @@ const messages = {
     "mcp.platformDetectFailed": "Could not detect AI platforms: {error}",
     "mcp.reconnect": "Reconnect",
     "mcp.remove": "Remove",
-    "mcp.removeConfirm": "Remove dopedb?",
+    "mcp.removeConfirm": "Remove DopeDB?",
     "mcp.removedToast": "Removed from {name}",
     "mcp.server": "MCP server",
     "mcp.stdioBridge": "stdio bridge",
@@ -225,7 +225,7 @@ const messages = {
     "mcp.working": "Working...",
     "onboarding.addConnection": "Add connection",
     "onboarding.agentBody":
-      "dopedb runs a local MCP server. Point Claude Code, Cursor, or Codex at it - the chat stays in your platform, while this app shows and controls the data.",
+      "DopeDB runs a local MCP server. Point Claude Code, Cursor, or Codex at it - the chat stays in your platform, while this app shows and controls the data.",
     "onboarding.agentTitle": "Connect your AI agent",
     "onboarding.databaseBody":
       "Add a PostgreSQL, MySQL, or SQLite connection. Credentials are stored in your macOS Keychain - never in plain text.",
@@ -233,9 +233,9 @@ const messages = {
     "onboarding.foot":
       "You can do both, or start with just a database and add the agent later.",
     "onboarding.lead":
-      "A safe database client for the AI era. Your agent queries and edits databases through dopedb, which keeps everything read-only by default, requires a human click for writes, and audits every statement.",
+      "A safe database client for the AI era. Your agent queries and edits databases through DopeDB, which keeps everything read-only by default, requires a human click for writes, and audits every statement.",
     "onboarding.setupMcp": "Set up MCP",
-    "onboarding.title": "Welcome to dopedb",
+    "onboarding.title": "Welcome to DopeDB",
     "safety.allowWrites": "Allow writes",
     "safety.allowWritesHint": "Master gate for the write path (off by default).",
     "safety.autoRunReads": "Auto-run reads",
@@ -300,7 +300,7 @@ const messages = {
     "updates.checking": "checking...",
     "updates.current": "up to date",
     "updates.description":
-      "Checks GitHub Releases for a signed dopedb update package.",
+      "Checks GitHub Releases for a signed DopeDB update package.",
     "updates.downloadingFallback": "Downloading",
     "updates.installedVersion": "Installed version",
     "updates.installing": "Installing...",
@@ -443,7 +443,7 @@ const messages = {
     "agent.contextEmpty": "아직 이 세션에서 MCP 컨텍스트가 노출되지 않았습니다.",
     "agent.contextExposed": "에이전트에게 노출된 컨텍스트",
     "agent.contextHelp":
-      "이 ledger는 dopedb가 MCP로 노출한 내용을 보여줍니다: 호출된 도구, SQL, 테이블, 컬럼, 행 수, 오류. 외부 에이전트의 숨은 reasoning은 포함하지 않습니다.",
+      "이 ledger는 DopeDB가 MCP로 노출한 내용을 보여줍니다: 호출된 도구, SQL, 테이블, 컬럼, 행 수, 오류. 외부 에이전트의 숨은 reasoning은 포함하지 않습니다.",
     "agent.contextSummaryDefault": "MCP 도구 메타데이터.",
     "agent.contextSummaryDescribeTable":
       "컬럼 이름, 데이터 타입, NULL 허용 여부, 기본 키, 외래 키, 행 추정치.",
@@ -629,7 +629,7 @@ const messages = {
     "mcp.platformDetectFailed": "AI 플랫폼을 감지하지 못했습니다: {error}",
     "mcp.reconnect": "다시 연결",
     "mcp.remove": "제거",
-    "mcp.removeConfirm": "dopedb를 제거할까요?",
+    "mcp.removeConfirm": "DopeDB를 제거할까요?",
     "mcp.removedToast": "{name}에서 제거했습니다",
     "mcp.server": "MCP 서버",
     "mcp.stdioBridge": "stdio 브리지",
@@ -637,7 +637,7 @@ const messages = {
     "mcp.working": "처리 중...",
     "onboarding.addConnection": "연결 추가",
     "onboarding.agentBody":
-      "dopedb는 로컬 MCP 서버를 실행합니다. Claude Code, Cursor, Codex를 연결하면 채팅은 기존 플랫폼에 남고, 이 앱이 데이터를 표시하고 제어합니다.",
+      "DopeDB는 로컬 MCP 서버를 실행합니다. Claude Code, Cursor, Codex를 연결하면 채팅은 기존 플랫폼에 남고, 이 앱이 데이터를 표시하고 제어합니다.",
     "onboarding.agentTitle": "AI 에이전트 연결",
     "onboarding.databaseBody":
       "PostgreSQL, MySQL, SQLite 연결을 추가하세요. 인증 정보는 macOS Keychain에 저장되며 평문으로 남지 않습니다.",
@@ -645,9 +645,9 @@ const messages = {
     "onboarding.foot":
       "둘 다 설정해도 좋고, 데이터베이스부터 연결한 뒤 에이전트를 나중에 추가해도 됩니다.",
     "onboarding.lead":
-      "AI 시대를 위한 안전한 데이터베이스 클라이언트입니다. 에이전트는 dopedb를 통해 데이터베이스를 조회하고 수정하며, 기본은 읽기 전용이고 쓰기는 사람이 클릭으로 승인하며 모든 문장을 감사 로그로 남깁니다.",
+      "AI 시대를 위한 안전한 데이터베이스 클라이언트입니다. 에이전트는 DopeDB를 통해 데이터베이스를 조회하고 수정하며, 기본은 읽기 전용이고 쓰기는 사람이 클릭으로 승인하며 모든 문장을 감사 로그로 남깁니다.",
     "onboarding.setupMcp": "MCP 설정",
-    "onboarding.title": "dopedb에 오신 것을 환영합니다",
+    "onboarding.title": "DopeDB에 오신 것을 환영합니다",
     "safety.allowWrites": "쓰기 허용",
     "safety.allowWritesHint": "쓰기 경로의 마스터 게이트입니다. 기본값은 꺼짐입니다.",
     "safety.autoRunReads": "읽기 자동 실행",
@@ -710,7 +710,7 @@ const messages = {
     "updates.checking": "확인 중...",
     "updates.current": "최신 상태",
     "updates.description":
-      "GitHub Releases에서 서명된 dopedb 업데이트 패키지를 확인합니다.",
+      "GitHub Releases에서 서명된 DopeDB 업데이트 패키지를 확인합니다.",
     "updates.downloadingFallback": "다운로드 중",
     "updates.installedVersion": "설치된 버전",
     "updates.installing": "설치 중...",

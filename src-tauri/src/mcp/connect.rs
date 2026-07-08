@@ -158,12 +158,12 @@ pub fn disconnect(id: &str) -> Result<String, String> {
             // No -s flag: removes from whichever scope holds it (we add at user scope,
             // but this also cleans up legacy local-scope entries).
             run(&bin, &["mcp", "remove", "dopedb"])?;
-            Ok("Removed dopedb from Claude Code.".into())
+            Ok("Removed DopeDB from Claude Code.".into())
         }
         "codex" => {
             let bin = which("codex").ok_or("Codex (`codex`) not found")?;
             run(&bin, &["mcp", "remove", "dopedb"])?;
-            Ok("Removed dopedb from Codex.".into())
+            Ok("Removed DopeDB from Codex.".into())
         }
         "claude-desktop" => disconnect_claude_desktop(),
         other => Err(format!("unknown platform '{other}'")),

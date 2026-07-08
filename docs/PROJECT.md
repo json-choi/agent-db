@@ -1,10 +1,10 @@
-# dopedb Project Guide
+# DopeDB Project Guide
 
-This is the single maintained project document for dopedb. Keep the root README files short and update this file when architecture, release, or safety behavior changes.
+This is the single maintained project document for DopeDB. Keep the root README files short and update this file when architecture, release, or safety behavior changes.
 
 ## Product
 
-dopedb is a local-first macOS database client built with Tauri. It lets a user inspect and operate databases manually, and it exposes a local MCP server so AI tools can safely inspect connected databases without receiving raw credentials.
+DopeDB is a local-first macOS database client built with Tauri. It lets a user inspect and operate databases manually, and it exposes a local MCP server so AI tools can safely inspect connected databases without receiving raw credentials.
 
 Current scope:
 
@@ -149,16 +149,16 @@ The app is currently distributed outside the Mac App Store. Until Developer ID s
 
 User-facing bypass path:
 
-1. Try opening dopedb once.
+1. Try opening DopeDB once.
 2. Open System Settings -> Privacy & Security.
-3. Choose Open Anyway for dopedb.
+3. Choose Open Anyway for DopeDB.
 4. Confirm Open.
 
 Terminal alternative after copying the app to Applications:
 
 ```sh
-sudo xattr -dr com.apple.quarantine /Applications/dopedb.app
-open /Applications/dopedb.app
+sudo xattr -dr com.apple.quarantine /Applications/DopeDB.app
+open /Applications/DopeDB.app
 ```
 
 Only document this command with the release-origin warning. It removes the macOS quarantine flag from the downloaded app and should not be presented as a general bypass for untrusted binaries.

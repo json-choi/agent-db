@@ -51,7 +51,7 @@ rr(draw, (margin, margin, W - margin, margin + 76), 26, "#e9eee4")
 draw.rectangle((margin, margin + 40, W - margin, margin + 76), fill="#e9eee4")
 for idx, color in enumerate(["#ff6b5c", "#f2b84b", "#6fd26c"]):
     draw.ellipse((margin + 28 + idx * 28, margin + 28, margin + 42 + idx * 28, margin + 42), fill=color)
-text(draw, (margin + 130, margin + 24), "dopedb", "#11130f", 26, "bold")
+text(draw, (margin + 130, margin + 24), "DopeDB", "#11130f", 26, "bold")
 text(draw, (W - margin - 318, margin + 24), "Local audit enabled", "#1d7b45", 24, "bold")
 
 content_top = margin + 76
@@ -94,7 +94,7 @@ for tab in tabs:
     tx += tw + 12
 
 text(draw, (main_x + 36, main_y + 94), "Ask your database", "#11130f", 38, "bold")
-text(draw, (main_x + 36, main_y + 142), "Codex proposes SQL. dopedb keeps the keys and gates execution.", "#697064", 23)
+text(draw, (main_x + 36, main_y + 142), "Codex proposes SQL. DopeDB keeps the keys and gates execution.", "#697064", 23)
 
 panel_x = main_x + 36
 panel_y = main_y + 204

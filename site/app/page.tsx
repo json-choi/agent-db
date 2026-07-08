@@ -25,34 +25,34 @@ type Lang = "en" | "ko";
 const copy = {
   en: {
     nav: {
-      why: "Why dopedb",
+      why: "Why DopeDB",
       safety: "Safety",
       download: "Download",
       docs: "Docs",
       github: "Open GitHub repository",
-      home: "dopedb home",
+      home: "DopeDB home",
     },
     hero: {
       eyebrow: "Free local MCP database gateway",
       tag: "Let your agent query data without handing over the keys",
       text:
-        "dopedb gives MCP-capable agents a guarded path into Postgres, MySQL, and SQLite. Keep using your favorite agent for questions and analysis while credentials, read-only enforcement, write approvals, rollback previews, and audit logs stay inside a native macOS app.",
+        "DopeDB gives MCP-capable agents a guarded path into Postgres, MySQL, and SQLite. Keep using your favorite agent for questions and analysis while credentials, read-only enforcement, write approvals, rollback previews, and audit logs stay inside a native macOS app.",
       download: "Download for macOS",
       github: "View on GitHub",
       signals: ["Agent-ready", "Credentials stay local", "Writes stay gated"],
       imageAlt:
-        "dopedb desktop app showing a SQL result, safety gate, and audit timeline",
+        "DopeDB desktop app showing a SQL result, safety gate, and audit timeline",
     },
     positioning: {
-      eyebrow: "The gap dopedb fills",
+      eyebrow: "The gap DopeDB fills",
       title: "Your agent needs database context. It does not need your database keys.",
       body:
-        "Database clients help humans operate data. Text-to-SQL tools help generate queries. dopedb sits between them: a local MCP gateway that lets agents inspect and query databases without raw credentials or silent write access.",
+        "Database clients help humans operate data. Text-to-SQL tools help generate queries. DopeDB sits between them: a local MCP gateway that lets agents inspect and query databases without raw credentials or silent write access.",
       items: [
         {
           title: "Use the agent you already trust",
           body:
-            "Claude Code, Codex, Claude Desktop, or another MCP client can ask dopedb for schema and read-query context.",
+            "Claude Code, Codex, Claude Desktop, or another MCP client can ask DopeDB for schema and read-query context.",
         },
         {
           title: "Expose context, not credentials",
@@ -70,13 +70,13 @@ const copy = {
       eyebrow: "Safety boundary",
       title: "The agent can suggest. The app enforces.",
       body:
-        "dopedb is built for the uncomfortable middle ground: powerful agent workflows, production database caution, and a human who still needs the final say.",
+        "DopeDB is built for the uncomfortable middle ground: powerful agent workflows, production database caution, and a human who still needs the final say.",
       items: [
         {
           icon: ShieldCheck,
           title: "Read-only first",
           body:
-            "Agent-written SQL is treated as a proposal until dopedb parses, classifies, and enforces the safety policy.",
+            "Agent-written SQL is treated as a proposal until DopeDB parses, classifies, and enforces the safety policy.",
         },
         {
           icon: KeyRound,
@@ -97,9 +97,9 @@ const copy = {
       title: "Open your database to an agent without opening the floodgates.",
       steps: [
         "Connect a local, staging, or production database profile.",
-        "Connect your MCP-capable agent to dopedb.",
+        "Connect your MCP-capable agent to DopeDB.",
         "Ask it to inspect schemas, draft SQL, or explain a result.",
-        "Let dopedb enforce read/write policy before anything runs.",
+        "Let DopeDB enforce read/write policy before anything runs.",
         "Review writes only after rollback preview and risk classification.",
       ],
       terminal: `agent -> proposed write
@@ -108,7 +108,7 @@ UPDATE customers
 SET plan = 'pro'
 WHERE id = 1842;
 
-dopedb safety:
+DopeDB safety:
   classification: write
   rows estimated: 1
   preview: rollback transaction ready
@@ -121,7 +121,7 @@ dopedb safety:
         "The first public channel is macOS through GitHub Releases. The app checks the signed release feed and enables updates from Settings when a newer version is available.",
       warningTitle: "macOS may show a developer warning.",
       warningBody:
-        "Until dopedb is notarized with an Apple Developer ID, approve it from System Settings, Privacy & Security, Open Anyway after confirming the file came from GitHub Releases.",
+        "Until DopeDB is notarized with an Apple Developer ID, approve it from System Settings, Privacy & Security, Open Anyway after confirming the file came from GitHub Releases.",
       terminalPrefix: "Terminal alternative after copying to Applications:",
       latest: "Latest release",
       source: "Build from source",
@@ -148,38 +148,38 @@ dopedb safety:
       ],
     },
     jsonDescription:
-      "dopedb is a free local MCP database gateway for AI agents. Agents can inspect schemas and run read queries while credentials, write approvals, rollback previews, and audit logs stay in a native macOS app.",
+      "DopeDB is a free local MCP database gateway for AI agents. Agents can inspect schemas and run read queries while credentials, write approvals, rollback previews, and audit logs stay in a native macOS app.",
   },
   ko: {
     nav: {
-      why: "왜 dopedb인가",
+      why: "왜 DopeDB인가",
       safety: "안전",
       download: "다운로드",
       docs: "문서",
       github: "GitHub 저장소 열기",
-      home: "dopedb 홈",
+      home: "DopeDB 홈",
     },
     hero: {
       eyebrow: "무료 로컬 MCP 데이터베이스 게이트웨이",
       tag: "키를 넘기지 않고 에이전트에게 데이터 통로를 열어주세요",
       text:
-        "dopedb는 MCP 지원 에이전트가 Postgres, MySQL, SQLite를 안전하게 읽고 이해할 수 있게 합니다. 질문과 분석은 좋아하는 에이전트에게 맡기고, 인증 정보, 읽기 전용 실행, 쓰기 승인, 롤백 미리보기, 감사 로그는 네이티브 macOS 앱 안에 둡니다.",
+        "DopeDB는 MCP 지원 에이전트가 Postgres, MySQL, SQLite를 안전하게 읽고 이해할 수 있게 합니다. 질문과 분석은 좋아하는 에이전트에게 맡기고, 인증 정보, 읽기 전용 실행, 쓰기 승인, 롤백 미리보기, 감사 로그는 네이티브 macOS 앱 안에 둡니다.",
       download: "macOS용 다운로드",
       github: "GitHub에서 보기",
       signals: ["에이전트 준비 완료", "인증 정보는 로컬에", "쓰기는 승인 뒤에"],
       imageAlt:
-        "SQL 결과, 안전 게이트, 감사 타임라인을 보여주는 dopedb 데스크톱 앱",
+        "SQL 결과, 안전 게이트, 감사 타임라인을 보여주는 DopeDB 데스크톱 앱",
     },
     positioning: {
-      eyebrow: "dopedb가 메우는 빈틈",
+      eyebrow: "DopeDB가 메우는 빈틈",
       title: "에이전트에게 필요한 건 DB 맥락이지, DB 키가 아닙니다.",
       body:
-        "데이터베이스 클라이언트는 사람이 데이터를 다루게 해주고, text-to-SQL 도구는 쿼리를 만들어줍니다. dopedb는 그 사이에 있습니다. 에이전트가 데이터베이스를 읽고 쿼리할 수 있게 하되, 원본 인증 정보와 조용한 쓰기 권한은 넘기지 않는 로컬 MCP 게이트웨이입니다.",
+        "데이터베이스 클라이언트는 사람이 데이터를 다루게 해주고, text-to-SQL 도구는 쿼리를 만들어줍니다. DopeDB는 그 사이에 있습니다. 에이전트가 데이터베이스를 읽고 쿼리할 수 있게 하되, 원본 인증 정보와 조용한 쓰기 권한은 넘기지 않는 로컬 MCP 게이트웨이입니다.",
       items: [
         {
           title: "이미 믿는 에이전트를 그대로",
           body:
-            "Claude Code, Codex, Claude Desktop 같은 MCP 클라이언트가 dopedb를 통해 스키마와 읽기 쿼리 맥락을 요청할 수 있습니다.",
+            "Claude Code, Codex, Claude Desktop 같은 MCP 클라이언트가 DopeDB를 통해 스키마와 읽기 쿼리 맥락을 요청할 수 있습니다.",
         },
         {
           title: "인증 정보가 아닌 맥락만 노출",
@@ -197,13 +197,13 @@ dopedb safety:
       eyebrow: "안전 경계",
       title: "에이전트는 제안하고, 앱은 집행합니다.",
       body:
-        "dopedb는 강력한 에이전트 워크플로우, 프로덕션 데이터베이스에 대한 조심스러움, 그리고 최종 결정을 내려야 하는 사람 사이의 불편하지만 중요한 지점을 위해 만들어졌습니다.",
+        "DopeDB는 강력한 에이전트 워크플로우, 프로덕션 데이터베이스에 대한 조심스러움, 그리고 최종 결정을 내려야 하는 사람 사이의 불편하지만 중요한 지점을 위해 만들어졌습니다.",
       items: [
         {
           icon: ShieldCheck,
           title: "읽기 전용 우선",
           body:
-            "에이전트가 작성한 SQL은 dopedb가 파싱하고 분류하고 안전 정책을 적용하기 전까지 제안으로 취급됩니다.",
+            "에이전트가 작성한 SQL은 DopeDB가 파싱하고 분류하고 안전 정책을 적용하기 전까지 제안으로 취급됩니다.",
         },
         {
           icon: KeyRound,
@@ -224,9 +224,9 @@ dopedb safety:
       title: "데이터베이스를 에이전트에게 열되, 수문까지 열지는 않습니다.",
       steps: [
         "로컬, 스테이징, 프로덕션 데이터베이스 프로필을 연결합니다.",
-        "MCP 지원 에이전트를 dopedb에 연결합니다.",
+        "MCP 지원 에이전트를 DopeDB에 연결합니다.",
         "스키마 확인, SQL 초안 작성, 결과 설명을 요청합니다.",
-        "무엇이든 실행되기 전에 dopedb가 읽기/쓰기 정책을 적용합니다.",
+        "무엇이든 실행되기 전에 DopeDB가 읽기/쓰기 정책을 적용합니다.",
         "롤백 미리보기와 위험 분류를 확인한 뒤에만 쓰기를 검토합니다.",
       ],
       terminal: `agent -> proposed write
@@ -235,7 +235,7 @@ UPDATE customers
 SET plan = 'pro'
 WHERE id = 1842;
 
-dopedb safety:
+DopeDB safety:
   classification: write
   rows estimated: 1
   preview: rollback transaction ready
@@ -275,7 +275,7 @@ dopedb safety:
       ],
     },
     jsonDescription:
-      "dopedb는 AI 에이전트를 위한 무료 로컬 MCP 데이터베이스 게이트웨이입니다. 에이전트는 스키마를 확인하고 읽기 쿼리를 실행할 수 있고, 인증 정보, 쓰기 승인, 롤백 미리보기, 감사 로그는 네이티브 macOS 앱에 남습니다.",
+      "DopeDB는 AI 에이전트를 위한 무료 로컬 MCP 데이터베이스 게이트웨이입니다. 에이전트는 스키마를 확인하고 읽기 쿼리를 실행할 수 있고, 인증 정보, 쓰기 승인, 롤백 미리보기, 감사 로그는 네이티브 macOS 앱에 남습니다.",
   },
 };
 
@@ -297,7 +297,7 @@ export default async function Home({
   const jsonLd = {
     "@context": "https://schema.org",
     "@type": "SoftwareApplication",
-    name: "dopedb",
+    name: "DopeDB",
     applicationCategory: "DeveloperApplication",
     operatingSystem: "macOS",
     description: c.jsonDescription,
@@ -325,7 +325,7 @@ export default async function Home({
           <span className="brand-mark" aria-hidden="true">
             <Database size={18} />
           </span>
-          <span>dopedb</span>
+          <span>DopeDB</span>
         </a>
         <nav className="nav-links" aria-label="Primary navigation">
           <a href="#why">{c.nav.why}</a>
@@ -355,7 +355,7 @@ export default async function Home({
             {c.hero.eyebrow}
           </p>
           <h1>
-            dopedb
+            DopeDB
             <span className="hero-title-tag">{c.hero.tag}</span>
           </h1>
           <p className="hero-text">{c.hero.text}</p>
@@ -384,7 +384,7 @@ export default async function Home({
           </div>
         </div>
 
-        <div className="hero-visual" aria-label="dopedb product preview">
+        <div className="hero-visual" aria-label="DopeDB product preview">
           <div className="preview-shell">
             <Image
               src="/dopedb-dashboard.png"
@@ -476,7 +476,7 @@ export default async function Home({
               <p>{c.download.warningBody}</p>
               <p>
                 {c.download.terminalPrefix}{" "}
-                <code>sudo xattr -dr com.apple.quarantine /Applications/dopedb.app</code>
+                <code>sudo xattr -dr com.apple.quarantine /Applications/DopeDB.app</code>
               </p>
             </div>
           </div>

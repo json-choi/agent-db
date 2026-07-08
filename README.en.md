@@ -1,6 +1,6 @@
-# dopedb
+# DopeDB
 
-dopedb is a **free, open-source macOS app that gives AI agents a safe path to your databases**. Through MCP, agents can inspect schemas, run read queries, and understand results, while raw credentials, read-only enforcement, write approvals, rollback previews, and audit logs stay under the control of the local app.
+DopeDB is a **free, open-source macOS app that gives AI agents a safe path to your databases**. Through MCP, agents can inspect schemas, run read queries, and understand results, while raw credentials, read-only enforcement, write approvals, rollback previews, and audit logs stay under the control of the local app.
 
 - Website: https://dopedb.dev (Korean: https://dopedb.dev/?lang=ko)
 - Download: https://github.com/json-choi/dopedb/releases/latest
@@ -18,9 +18,9 @@ dopedb is a **free, open-source macOS app that gives AI agents a safe path to yo
 - Korean/English support across the marketing site, desktop client UI, and GitHub README
 - macOS downloads and Tauri updater metadata through GitHub Releases
 
-## Why dopedb
+## Why DopeDB
 
-There are great free database clients, and there are plenty of AI SQL generators. dopedb closes the risky gap between them.
+There are great free database clients, and there are plenty of AI SQL generators. DopeDB closes the risky gap between them.
 
 - It is not an AI feature bolted onto a SQL editor. It is a **local database gateway your existing agent can use through MCP**.
 - The agent does not receive raw database credentials; the local app owns connections and secrets.
@@ -73,14 +73,14 @@ The release workflow requires the `TAURI_SIGNING_PRIVATE_KEY` repository secret.
 
 Until the app is signed and notarized with an Apple Developer ID, macOS can show an unidentified developer warning. After confirming the file came from GitHub Releases, open System Settings -> Privacy & Security -> Open Anyway.
 
-If you need to remove the quarantine flag from Terminal, copy dopedb to Applications first, then run:
+If you need to remove the quarantine flag from Terminal, copy DopeDB to Applications first, then run:
 
 ```sh
-sudo xattr -dr com.apple.quarantine /Applications/dopedb.app
-open /Applications/dopedb.app
+sudo xattr -dr com.apple.quarantine /Applications/DopeDB.app
+open /Applications/DopeDB.app
 ```
 
-Replace `/Applications/dopedb.app` if the app lives somewhere else. This command removes the macOS quarantine flag from the downloaded app, so only use it for files you verified came from the official GitHub Release.
+Replace `/Applications/DopeDB.app` if the app lives somewhere else. This command removes the macOS quarantine flag from the downloaded app, so only use it for files you verified came from the official GitHub Release.
 
 ## License
 
