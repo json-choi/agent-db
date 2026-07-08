@@ -21,7 +21,7 @@ import { errMessage } from "../../ipc/types";
 import { tableKey, tableLabel } from "../../lib/tableRef";
 import ConfirmButton from "../../components/ConfirmButton";
 import { Icon } from "../../components/Icon";
-import SqlViewer from "../../components/SqlViewer";
+import LazySqlViewer from "../../components/LazySqlViewer";
 import { useToast } from "../../components/Toast";
 import "./connections.css";
 
@@ -117,7 +117,7 @@ function DdlModal({
         </div>
         {err && <div className="error">{err}</div>}
         {!err && text == null && <div className="muted small-pad loading">Loading…</div>}
-        {text != null && <SqlViewer value={text} minHeight="240px" />}
+        {text != null && <LazySqlViewer value={text} minHeight="240px" />}
       </div>
     </div>
   );

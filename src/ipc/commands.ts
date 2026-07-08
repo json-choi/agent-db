@@ -10,8 +10,11 @@ import type {
   ConnectionProfile,
   ExecOutcome,
   HistoryEntry,
+  MigrationReport,
   PreviewReport,
+  ScriptOutcome,
   SafetySettings,
+  PlatformInfo,
 } from "./types";
 
 export function listConnections(): Promise<ConnectionProfile[]> {
@@ -33,10 +36,6 @@ export function deleteConnection(id: string): Promise<void> {
   return invoke("delete_connection", { id });
 }
 
-export function testConnection(id: string): Promise<void> {
-  return invoke("test_connection", { id });
-}
-
 // Reachability check for an ad-hoc (possibly unsaved) profile. Persists nothing.
 export function testConnectionProfile(
   profile: ConnectionProfile,
@@ -45,7 +44,7 @@ export function testConnectionProfile(
   return invoke("test_connection_profile", { profile, password });
 }
 
-export function getSchema(id: string): Promise<string> {
+function getSchema(id: string): Promise<string> {
   return invoke("get_schema", { id });
 }
 
@@ -99,7 +98,7 @@ export function runScript(
   approved: boolean,
   queryId?: string,
   origin?: string,
-): Promise<import("./types").ScriptOutcome> {
+): Promise<ScriptOutcome> {
   return invoke("run_script", {
     id,
     sql,
@@ -158,7 +157,7 @@ export function mcpRuntimeStatus(): Promise<McpRuntimeStatus> {
 }
 
 // Detect installed AI platforms for the one-click connect buttons.
-export function mcpPlatforms(): Promise<import("./types").PlatformInfo[]> {
+export function mcpPlatforms(): Promise<PlatformInfo[]> {
   return invoke("mcp_platforms");
 }
 
@@ -184,7 +183,7 @@ export function pickFile(): Promise<string | null> {
 export function analyzeMigrations(
   dir: string,
   connectionId?: string,
-): Promise<import("./types").MigrationReport> {
+): Promise<MigrationReport> {
   return invoke("analyze_migrations", { dir, connectionId: connectionId ?? null });
 }
 

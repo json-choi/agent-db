@@ -1,7 +1,7 @@
 // Query-history browser. Lists past statements for the selected connection (newest
 // first); clicking a row pushes its SQL back into the editor via onLoadSql (App
 // switches to the SQL tab and sets the draft).
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { listHistory } from "../../ipc/commands";
 import type { ConnectionProfile, HistoryEntry } from "../../ipc/types";
 import { errMessage } from "../../ipc/types";
@@ -36,19 +36,18 @@ export default function History({
   const [originF, setOriginF] = useState("");
   const toast = useToast();
 
-  function refresh() {
+  const refresh = useCallback(() => {
     setLoading(true);
     setErr(null);
     listHistory(connection.id)
       .then(setRows)
       .catch((e) => setErr(errMessage(e)))
       .finally(() => setLoading(false));
-  }
+  }, [connection.id]);
 
   useEffect(() => {
     refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connection.id]);
+  }, [refresh]);
 
   // Distinct values for the filter selects (from the loaded rows only).
   const statuses = useMemo(

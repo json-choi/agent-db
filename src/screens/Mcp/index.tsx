@@ -33,10 +33,20 @@ export default function Mcp({ onOpenAgent }: { onOpenAgent?: () => void }) {
   const [connecting, setConnecting] = useState<string | null>(null);
 
   const refreshPlatforms = () =>
-    mcpPlatforms().then(setPlatforms).catch((e) => setPlatErr(errMessage(e)));
+    mcpPlatforms()
+      .then((ps) => {
+        setPlatforms(ps);
+        setPlatErr(null);
+      })
+      .catch((e) => setPlatErr(errMessage(e)));
 
   useEffect(() => {
-    mcpStatus().then(setStatus).catch((e) => setStatusErr(errMessage(e)));
+    mcpStatus()
+      .then((s) => {
+        setStatus(s);
+        setStatusErr(null);
+      })
+      .catch((e) => setStatusErr(errMessage(e)));
     void refreshPlatforms();
     // The server binds in a spawned setup task; if our first read wins the race we'd show a
     // false "not running" banner. Poll until it reports running, then stop.
@@ -53,12 +63,16 @@ export default function Mcp({ onOpenAgent }: { onOpenAgent?: () => void }) {
     return () => clearInterval(iv);
   }, []);
 
-  async function connect(id: string) {
+  async function runPlatformAction(
+    id: string,
+    action: (platform: string) => Promise<string>,
+    toastLabel: (name: string) => string,
+  ) {
     setConnecting(id);
     try {
-      const msg = await connectPlatform(id);
+      const msg = await action(id);
       setResults((r) => ({ ...r, [id]: { ok: true, msg } }));
-      toast(`Connected ${platforms.find((p) => p.id === id)?.name ?? id}`);
+      toast(toastLabel(platforms.find((p) => p.id === id)?.name ?? id));
       await refreshPlatforms();
     } catch (e) {
       const msg = errMessage(e);
@@ -69,20 +83,11 @@ export default function Mcp({ onOpenAgent }: { onOpenAgent?: () => void }) {
     }
   }
 
+  const connect = (id: string) =>
+    runPlatformAction(id, connectPlatform, (name) => `Connected ${name}`);
+
   async function disconnect(id: string) {
-    setConnecting(id);
-    try {
-      const msg = await disconnectPlatform(id);
-      setResults((r) => ({ ...r, [id]: { ok: true, msg } }));
-      toast(`Removed from ${platforms.find((p) => p.id === id)?.name ?? id}`);
-      await refreshPlatforms();
-    } catch (e) {
-      const msg = errMessage(e);
-      setResults((r) => ({ ...r, [id]: { ok: false, msg } }));
-      toast(msg, "error");
-    } finally {
-      setConnecting(null);
-    }
+    await runPlatformAction(id, disconnectPlatform, (name) => `Removed from ${name}`);
   }
 
   const copy = (text: string, label: string) => {

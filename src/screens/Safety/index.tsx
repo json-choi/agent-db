@@ -25,11 +25,19 @@ export default function Safety({ connectionId }: { connectionId: string }) {
   const toast = useToast();
 
   useEffect(() => {
+    let alive = true;
     setSettings(null);
     setMsg(null);
     getSafety(connectionId)
-      .then(setSettings)
-      .catch((e) => setMsg(errMessage(e)));
+      .then((s) => {
+        if (alive) setSettings(s);
+      })
+      .catch((e) => {
+        if (alive) setMsg(errMessage(e));
+      });
+    return () => {
+      alive = false;
+    };
   }, [connectionId]);
 
   if (!settings) {

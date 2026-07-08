@@ -24,6 +24,15 @@ function buildSchema(catalog: Catalog): SQLNamespace {
   return ns;
 }
 
+export interface SqlViewerProps {
+  value: string;
+  editable?: boolean;
+  onChange?: (v: string) => void;
+  onRun?: (selectedSql?: string) => void;
+  catalog?: Catalog;
+  minHeight?: string;
+}
+
 export default function SqlViewer({
   value,
   editable = false,
@@ -31,14 +40,7 @@ export default function SqlViewer({
   onRun,
   catalog,
   minHeight = "80px",
-}: {
-  value: string;
-  editable?: boolean;
-  onChange?: (v: string) => void;
-  onRun?: (selectedSql?: string) => void;
-  catalog?: Catalog;
-  minHeight?: string;
-}) {
+}: SqlViewerProps) {
   // Match CodeMirror's built-in theme to the OS scheme so it isn't a bright white
   // slab inside dark panels. No new dependency — 'light'/'dark' ship with the lib.
   const [dark, setDark] = useState(

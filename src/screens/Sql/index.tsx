@@ -3,7 +3,7 @@
 // switches to script mode: an up-front confirm panel (list + one checkbox + Execute),
 // then per-statement results stacked below. ⌘↩ runs the current draft. The draft lives
 // in App so it survives switching tabs.
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   Catalog,
   ConnectionProfile,
@@ -18,9 +18,7 @@ import type { PreviewReport } from "../../ipc/types";
 import { splitStatements } from "../../lib/sqlStatements";
 import ApprovalCard from "../../components/ApprovalCard";
 import { Icon } from "../../components/Icon";
-// #11: code-split the ~640K CodeMirror stack out of the initial chunk — it's only
-// needed once the SQL tab mounts this editable console.
-const SqlViewer = lazy(() => import("../../components/SqlViewer"));
+import LazySqlViewer from "../../components/LazySqlViewer";
 import DataGrid from "../../components/DataGrid";
 import ResultToolbar from "../../components/ResultToolbar";
 import { stamp } from "../../lib/export";
@@ -151,16 +149,14 @@ export default function Sql({
   return (
     <div className="screen sqlconsole">
       <div className="editor-box">
-        <Suspense fallback={<div className="muted small-pad">Loading editor…</div>}>
-          <SqlViewer
-            value={draft}
-            editable
-            onChange={setDraft}
-            onRun={armRun}
-            catalog={catalog}
-            minHeight="140px"
-          />
-        </Suspense>
+        <LazySqlViewer
+          value={draft}
+          editable
+          onChange={setDraft}
+          onRun={armRun}
+          catalog={catalog}
+          minHeight="140px"
+        />
       </div>
       <div className="form-actions sql-actions">
         <button className="btn primary" disabled={!draft.trim()} onClick={() => armRun()}>

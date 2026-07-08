@@ -1,6 +1,6 @@
 // Append-only, hash-chained audit log viewer. Shows each transition and its chain
 // link (prevHash → hash); the chain is verified server-side (real SHA-256 recompute).
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { listAudit, auditVerify } from "../../ipc/commands";
 import type { AuditEntry } from "../../ipc/types";
 import { errMessage } from "../../ipc/types";
@@ -20,8 +20,9 @@ export default function Audit({ connectionId }: { connectionId: string }) {
   const [msg, setMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  function refresh() {
+  const refresh = useCallback(() => {
     setLoading(true);
+    setMsg(null);
     // Fetch the log and its verification together so the verdict matches the rows shown.
     // Verification runs on the backend (rowid order + hash recompute) — a client link-only
     // check would mis-order same-timestamp rows and miss in-place field edits.
@@ -32,13 +33,11 @@ export default function Audit({ connectionId }: { connectionId: string }) {
       })
       .catch((e) => setMsg(errMessage(e)))
       .finally(() => setLoading(false));
-  }
+  }, [connectionId]);
 
   useEffect(() => {
-    setMsg(null);
     refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connectionId]);
+  }, [refresh]);
 
   // firstBadIndex is an insertion-order (oldest-first) position; entries are newest-first.
   const tamperedId =

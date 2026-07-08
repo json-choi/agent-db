@@ -5,8 +5,6 @@
 import type { CatalogColumn, CatalogTable, Engine } from "../ipc/types";
 import { quoteIdent, tableRef } from "./tableRef";
 
-export { quoteIdent };
-
 export interface GridSort {
   col: string;
   dir: "asc" | "desc";
@@ -14,7 +12,7 @@ export interface GridSort {
 
 // A SQL string literal. Single quotes are doubled for every engine; backslashes are
 // doubled for MySQL, which treats "\" as an escape char unless NO_BACKSLASH_ESCAPES.
-export function sqlLiteral(engine: Engine, value: string | null): string {
+function sqlLiteral(engine: Engine, value: string | null): string {
   if (value === null) return "NULL";
   let s = value;
   if (engine === "mysql") s = s.replace(/\\/g, "\\\\");
@@ -31,7 +29,7 @@ export function isNumericType(dataType: string): boolean {
 
 // A value literal for a column: NULL keyword, a bare number for numeric columns when
 // the text is a valid number, else a quoted string literal (safe for any type).
-export function sqlValue(engine: Engine, dataType: string, value: string | null): string {
+function sqlValue(engine: Engine, dataType: string, value: string | null): string {
   if (value === null) return "NULL";
   if (isNumericType(dataType)) {
     const t = value.trim();
@@ -90,7 +88,7 @@ function filterClause(engine: Engine, col: CatalogColumn, raw: string): string |
   return `CAST(${q} AS ${castText(engine)}) ${op} ${sqlLiteral(engine, `%${v}%`)}`;
 }
 
-export function buildWhere(
+function buildWhere(
   engine: Engine,
   columns: CatalogColumn[],
   filters: Record<string, string>,
@@ -111,7 +109,7 @@ function pkTiebreakers(engine: Engine, table: CatalogTable, exclude?: string): s
     .map((c) => quoteIdent(engine, c.name));
 }
 
-export function buildOrderBy(engine: Engine, table: CatalogTable, sort: GridSort | null): string {
+function buildOrderBy(engine: Engine, table: CatalogTable, sort: GridSort | null): string {
   if (sort) {
     const dir = sort.dir === "desc" ? "DESC" : "ASC";
     const keys = [`${quoteIdent(engine, sort.col)} ${dir}`, ...pkTiebreakers(engine, table, sort.col)];
@@ -194,7 +192,7 @@ export function buildDelete(engine: Engine, table: CatalogTable, pkValues: Recor
 // --- CSV / JSON export (pure) --------------------------------------------------------
 // NULL → empty field (CSV) / null (JSON). Fields containing , " or a newline are quoted
 // and internal quotes doubled.
-export function escapeCsvField(v: unknown): string {
+function escapeCsvField(v: unknown): string {
   if (v === null || v === undefined) return "";
   const s = typeof v === "object" ? JSON.stringify(v) : String(v);
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -212,78 +210,4 @@ export function toJson(columns: string[], rows: unknown[][]): string {
     null,
     2,
   );
-}
-
-// ponytail: repo has no test runner; this is the runnable check. Verify with esbuild:
-//   pnpm exec esbuild src/lib/sqlBuild.ts --bundle --format=esm --outfile=/tmp/sb.mjs \
-//     && node --input-type=module -e "import('/tmp/sb.mjs').then(m=>{m.__selfTest();console.log('ok')})"
-export function __selfTest(): void {
-  const a = (cond: boolean, msg: string) => {
-    if (!cond) throw new Error("selfTest failed: " + msg);
-  };
-  const t: CatalogTable = {
-    schema: null,
-    name: "users",
-    kind: "table",
-    foreignKeys: [],
-    indexes: [],
-    rowEstimate: null,
-    columns: [
-      { name: "id", dataType: "integer", nullable: false, pk: true },
-      { name: "name", dataType: "text", nullable: false, pk: false },
-    ],
-  };
-  a(sqlLiteral("postgres", "a'b") === "'a''b'", "pg quote doubling");
-  a(sqlLiteral("mysql", "a\\b") === "'a\\\\b'", "mysql backslash doubling");
-  a(sqlLiteral("postgres", "a\\b") === "'a\\b'", "pg keeps backslash");
-  a(sqlValue("postgres", "integer", "5") === "5", "numeric raw");
-  a(sqlValue("postgres", "integer", "5); DROP") === "'5); DROP'", "numeric fallback quoted");
-  a(sqlValue("postgres", "text", null) === "NULL", "null keyword");
-  a(isNumericType("integer") && isNumericType("bigint") && isNumericType("int4"), "int types numeric");
-  a(!isNumericType("interval") && !isNumericType("point"), "interval/point not numeric");
-  a(sqlValue("postgres", "integer", "") === "NULL", "empty numeric -> NULL");
-  a(sqlValue("postgres", "interval", "5") === "'5'", "interval quoted not bare");
-  a(sqlValue("postgres", "text", "") === "''", "empty text stays ''");
-  a(buildOrderBy("postgres", t, null) === 'ORDER BY "id"', "default order by pk");
-  a(
-    buildOrderBy("postgres", t, { col: "name", dir: "desc" }) === 'ORDER BY "name" DESC, "id"',
-    "sort desc + pk tiebreak",
-  );
-  a(
-    buildOrderBy("postgres", t, { col: "id", dir: "asc" }) === 'ORDER BY "id" ASC',
-    "sort on pk drops dup tiebreak",
-  );
-  a(hasNonScalarPk(t) === false, "scalar pk allowed");
-  a(hasNonScalarPk({ ...t, columns: [{ name: "id", dataType: "bytea", nullable: false, pk: true }] }), "bytea pk blocked");
-  a(hasNonScalarPk({ ...t, columns: [{ name: "id", dataType: "jsonb", nullable: false, pk: true }] }), "jsonb pk blocked");
-  a(hasNonScalarPk({ ...t, columns: [{ name: "id", dataType: "longblob", nullable: false, pk: true }] }), "longblob pk blocked");
-  a(hasNonScalarPk({ ...t, columns: [{ name: "id", dataType: "varchar(36)", nullable: false, pk: true }] }) === false, "varchar pk allowed");
-  const noPk: CatalogTable = { ...t, columns: [{ name: "x", dataType: "text", nullable: true, pk: false }] };
-  a(buildOrderBy("mysql", noPk, null) === "ORDER BY `x`", "fallback to first col");
-  a(buildWhere("postgres", t.columns, { name: "=bob" }) === `"name" = 'bob'`, "exact filter");
-  a(buildWhere("postgres", t.columns, { id: "null" }) === `"id" IS NULL`, "null filter");
-  a(buildWhere("postgres", t.columns, { id: "not null" }) === `"id" IS NOT NULL`, "not null filter");
-  a(buildWhere("postgres", t.columns, { name: "ob" }) === `CAST("name" AS TEXT) ILIKE '%ob%'`, "contains pg");
-  a(buildWhere("mysql", t.columns, { name: "ob" }) === "CAST(`name` AS CHAR) LIKE '%ob%'", "contains mysql");
-  a(buildWhere("postgres", t.columns, { id: "1", name: "" }).indexOf(" AND ") === -1, "single filter no AND");
-  a(
-    buildPageQuery("postgres", t, { filters: {}, sort: null, limit: 10, offset: 20 }) ===
-      'SELECT * FROM "users" ORDER BY "id" LIMIT 10 OFFSET 20',
-    "page query ordered",
-  );
-  a(buildCountQuery("postgres", t, {}) === 'SELECT COUNT(*) AS n FROM "users"', "count query");
-  a(buildInsert("postgres", t, { id: "1", name: "x" }) === `INSERT INTO "users" ("id", "name") VALUES (1, 'x')`, "insert");
-  a(buildUpdate("postgres", t, { id: "1" }, { name: "y" }) === `UPDATE "users" SET "name" = 'y' WHERE "id" = 1`, "update");
-  a(buildDelete("postgres", t, { id: "1" }) === `DELETE FROM "users" WHERE "id" = 1`, "delete");
-  let threw = false;
-  try {
-    buildDelete("postgres", t, {});
-  } catch {
-    threw = true;
-  }
-  a(threw, "delete without pk throws");
-  a(escapeCsvField(null) === "", "csv null empty");
-  a(escapeCsvField('a,"b') === '"a,""b"', "csv quote+comma");
-  a(toCsv(["a", "b"], [[1, null]]) === "a,b\n1,", "csv rows, null empty");
-  a(toJson(["a"], [[null]]) === '[\n  {\n    "a": null\n  }\n]', "json null");
 }

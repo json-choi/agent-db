@@ -1,8 +1,6 @@
 // TS mirrors of the Rust `model.rs` serde types. All shapes serialize camelCase.
 // Keep this file in lockstep with src-tauri/src/model.rs — it is the data contract.
 
-export type AuthMode = "subscription";
-
 export type Engine = "postgres" | "mysql" | "sqlite";
 
 export interface ConnectionProfile {
@@ -32,7 +30,7 @@ export interface SafetySettings {
   execPreviewRowLimit: number;
 }
 
-export type QueryKind = "read" | "write" | "ddl" | "privilege";
+type QueryKind = "read" | "write" | "ddl" | "privilege";
 
 export type RiskLevel = "low" | "medium" | "high";
 
@@ -45,7 +43,7 @@ export interface Classification {
   notes: string[];
 }
 
-export type PreviewMode = "explain" | "execRollback" | "skipped";
+type PreviewMode = "explain" | "execRollback" | "skipped";
 
 export interface PreviewReport {
   mode: PreviewMode;
@@ -71,7 +69,7 @@ export interface ExecOutcome {
 
 // One statement's outcome inside a run_script run. A read carries `result`, a write
 // carries `affected`, a failed/skipped statement carries `error`.
-export interface ScriptStatement {
+interface ScriptStatement {
   sql: string;
   result: QueryResult | null;
   affected: number | null;
@@ -121,14 +119,14 @@ export interface CatalogColumn {
   pk: boolean;
 }
 
-export interface CatalogForeignKey {
+interface CatalogForeignKey {
   column: string;
   referencesTable: string;
   referencesColumn: string;
   referencesSchema: string | null;
 }
 
-export interface CatalogIndex {
+interface CatalogIndex {
   name: string;
   columns: string[];
   unique: boolean;
@@ -159,7 +157,7 @@ export interface PlatformInfo {
 }
 
 // Migration change-log (mirrors src-tauri/src/migrations/mod.rs).
-export interface ChangeView {
+interface ChangeView {
   kind: string;
   summary: string;
   down: string | null;
@@ -179,12 +177,12 @@ export interface MigrationView {
   applyScript: string | null; // up SQL + tracking mark (always populated)
   rollbackScript: string | null; // down SQL + tracking un-mark (always populated)
 }
-export interface ColumnDiff {
+interface ColumnDiff {
   table: string;
   missingInDb: string[];
   extraInDb: string[];
 }
-export interface Drift {
+interface Drift {
   pendingTables: string[];
   extraTables: string[];
   columnDiffs: ColumnDiff[];
@@ -199,7 +197,7 @@ export interface MigrationReport {
 }
 
 // The `{ kind, message }` object AppError serializes to.
-export interface AppErrorShape {
+interface AppErrorShape {
   kind: string;
   message: string;
 }

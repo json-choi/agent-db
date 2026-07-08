@@ -22,7 +22,7 @@ import type {
 } from "../ipc/types";
 import { errMessage } from "../ipc/types";
 import { Icon } from "./Icon";
-import SqlViewer from "./SqlViewer";
+import LazySqlViewer from "./LazySqlViewer";
 
 const ENGINE_LABEL: Record<Engine, string> = {
   postgres: "PostgreSQL",
@@ -169,7 +169,7 @@ export default function ApprovalCard({
         )}
       </div>
 
-      <SqlViewer value={sql} />
+      <LazySqlViewer value={sql} />
 
       {rationale && (
         <div className="restatement">

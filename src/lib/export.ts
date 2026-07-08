@@ -2,7 +2,7 @@
 // this file owns the browser side: clipboard text and file downloads.
 import { toCsv, toJson } from "./sqlBuild";
 
-export function download(name: string, text: string, mime: string) {
+function download(name: string, text: string, mime: string) {
   const url = URL.createObjectURL(new Blob([text], { type: mime }));
   const a = document.createElement("a");
   a.href = url;
