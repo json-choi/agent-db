@@ -104,7 +104,7 @@ table.grid tbody tr:hover td {
 table.grid tbody tr.selected td {
   background: var(--ds-surface-1);
 }
-@supports (background: color-mix(in srgb, red, blue)) {
+@supports (background: color-mix(in srgb, white, black)) {
   table.grid tbody tr:hover td {
     background: color-mix(in srgb, var(--ds-accent) 8%, var(--ds-surface-0));
   }

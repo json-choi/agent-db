@@ -327,7 +327,7 @@ h3,
 .ds-badge-danger-fill {
   background: var(--ds-danger);
   border-color: var(--ds-danger);
-  color: #240b0d;
+  color: var(--ds-text-inverse);
 }
 
 .ds-context-badge {

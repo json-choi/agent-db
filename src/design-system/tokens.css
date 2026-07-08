@@ -90,35 +90,45 @@
   --ds-text-subtle: #8a94a5;
   --ds-text-inverse: #ffffff;
 
-  /* Brand and intent */
-  --ds-accent: #1769d2;
-  --ds-accent-hover: #0f5dbd;
-  --ds-accent-active: #0a4f9e;
-  --ds-accent-soft: rgba(23, 105, 210, 0.14);
-  --ds-info: #087990;
-  --ds-success: #237a4b;
-  --ds-warning: #98640a;
-  --ds-danger: #c33131;
+  /* Three chromatic hues, derived from the DopeDB icon. */
+  --ds-primary: #1d7b45;
+  --ds-primary-hover: #17683a;
+  --ds-primary-active: #11562f;
+  --ds-primary-soft: rgba(29, 123, 69, 0.14);
+  --ds-caution: #9a6511;
+  --ds-caution-soft: rgba(154, 101, 17, 0.14);
+  --ds-critical: #bd574d;
+  --ds-critical-soft: rgba(189, 87, 77, 0.14);
+
+  /* Intent aliases: keep UI semantics while limiting the palette. */
+  --ds-accent: var(--ds-primary);
+  --ds-accent-hover: var(--ds-primary-hover);
+  --ds-accent-active: var(--ds-primary-active);
+  --ds-accent-soft: var(--ds-primary-soft);
+  --ds-info: var(--ds-primary);
+  --ds-success: var(--ds-primary);
+  --ds-warning: var(--ds-caution);
+  --ds-danger: var(--ds-critical);
 
   /* Trust/risk surfaces for agent-native workflows. */
-  --ds-trust-bg: rgba(218, 251, 236, 0.34);
-  --ds-trust-border: rgba(104, 194, 145, 0.5);
-  --ds-risk-bg: rgba(255, 243, 211, 0.36);
-  --ds-risk-border: rgba(196, 148, 28, 0.52);
-  --ds-danger-bg: rgba(255, 226, 226, 0.36);
-  --ds-danger-border: rgba(210, 88, 88, 0.52);
+  --ds-trust-bg: rgba(29, 123, 69, 0.12);
+  --ds-trust-border: rgba(29, 123, 69, 0.38);
+  --ds-risk-bg: rgba(154, 101, 17, 0.13);
+  --ds-risk-border: rgba(154, 101, 17, 0.4);
+  --ds-danger-bg: rgba(189, 87, 77, 0.13);
+  --ds-danger-border: rgba(189, 87, 77, 0.42);
 
-  /* Data source colors: use sparingly as context accents. */
-  --ds-source-blue: #1769d2;
-  --ds-source-teal: #087990;
-  --ds-source-green: #237a4b;
-  --ds-source-amber: #98640a;
-  --ds-source-red: #c33131;
+  /* Data source colors collapse into the same three-hue system. */
+  --ds-source-blue: var(--ds-primary);
+  --ds-source-teal: var(--ds-primary);
+  --ds-source-green: var(--ds-primary);
+  --ds-source-amber: var(--ds-caution);
+  --ds-source-red: var(--ds-critical);
 
   /* Interaction */
   --ds-hover: rgba(82, 96, 120, 0.1);
   --ds-hover-strong: rgba(82, 96, 120, 0.16);
-  --ds-focus: #1769d2;
+  --ds-focus: var(--ds-primary);
   --ds-focus-ring: 0 0 0 2px color-mix(in srgb, var(--ds-focus) 28%, transparent);
 
   font-family: var(--ds-font-sans);
@@ -143,31 +153,40 @@
     --ds-text-subtle: #8f98a6;
     --ds-text-inverse: #ffffff;
 
-    --ds-accent: #5aa2ff;
-    --ds-accent-hover: #7ab5ff;
-    --ds-accent-active: #2d83f4;
-    --ds-accent-soft: rgba(90, 162, 255, 0.18);
-    --ds-info: #58c7d8;
-    --ds-success: #70c891;
-    --ds-warning: #e2b85e;
-    --ds-danger: #ff7a7a;
+    --ds-primary: #6fd26c;
+    --ds-primary-hover: #91f285;
+    --ds-primary-active: #3fca60;
+    --ds-primary-soft: rgba(111, 210, 108, 0.18);
+    --ds-caution: #f2b84b;
+    --ds-caution-soft: rgba(242, 184, 75, 0.16);
+    --ds-critical: #ff6b5c;
+    --ds-critical-soft: rgba(255, 107, 92, 0.16);
 
-    --ds-trust-bg: rgba(112, 200, 145, 0.16);
-    --ds-trust-border: rgba(112, 200, 145, 0.34);
-    --ds-risk-bg: rgba(226, 184, 94, 0.16);
-    --ds-risk-border: rgba(226, 184, 94, 0.4);
-    --ds-danger-bg: rgba(255, 122, 122, 0.16);
-    --ds-danger-border: rgba(255, 122, 122, 0.4);
+    --ds-accent: var(--ds-primary);
+    --ds-accent-hover: var(--ds-primary-hover);
+    --ds-accent-active: var(--ds-primary-active);
+    --ds-accent-soft: var(--ds-primary-soft);
+    --ds-info: var(--ds-primary);
+    --ds-success: var(--ds-primary);
+    --ds-warning: var(--ds-caution);
+    --ds-danger: var(--ds-critical);
 
-    --ds-source-blue: #5aa2ff;
-    --ds-source-teal: #58c7d8;
-    --ds-source-green: #70c891;
-    --ds-source-amber: #e2b85e;
-    --ds-source-red: #ff7a7a;
+    --ds-trust-bg: rgba(111, 210, 108, 0.14);
+    --ds-trust-border: rgba(111, 210, 108, 0.34);
+    --ds-risk-bg: rgba(242, 184, 75, 0.14);
+    --ds-risk-border: rgba(242, 184, 75, 0.36);
+    --ds-danger-bg: rgba(255, 107, 92, 0.14);
+    --ds-danger-border: rgba(255, 107, 92, 0.38);
+
+    --ds-source-blue: var(--ds-primary);
+    --ds-source-teal: var(--ds-primary);
+    --ds-source-green: var(--ds-primary);
+    --ds-source-amber: var(--ds-caution);
+    --ds-source-red: var(--ds-critical);
 
     --ds-hover: rgba(169, 181, 197, 0.1);
     --ds-hover-strong: rgba(169, 181, 197, 0.17);
-    --ds-focus: #7ab5ff;
+    --ds-focus: var(--ds-primary);
     --ds-glass-sheen:
       linear-gradient(
         145deg,

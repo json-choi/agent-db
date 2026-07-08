@@ -32,6 +32,16 @@
 
 예전 전역 변수명인 `--bg`, `--panel`, `--accent`, `--risk-low` 등은 사용하지 않는다. 모든 CSS는 `--ds-*` 토큰만 사용한다. 새 스타일을 추가할 때 이전 변수명을 되살리지 말고 필요한 의미가 없으면 `tokens.css`에 정식 `--ds-*` 토큰을 추가한다.
 
+## 컬러 팔레트
+
+아이콘에서 추출한 녹색을 primary hue로 삼고, chromatic color는 세 가지로 제한한다. 중립, 텍스트, border, glass alpha 값은 제외한다.
+
+- Primary Green: 브랜드, 선택 상태, focus, success, info, trust.
+- Caution Amber: review, warning, medium risk.
+- Critical Coral: destructive, error, blocked, high risk.
+
+새 UI에서 파랑, 청록, 보라 등 별도 hue를 추가하지 않는다. 기존 의미 토큰은 유지하되 `--ds-accent`, `--ds-info`, `--ds-success`, `--ds-source-blue`, `--ds-source-teal`, `--ds-source-green`은 모두 primary green으로 alias한다. 경고는 `--ds-caution`, 위험은 `--ds-critical` 계열로만 표현한다.
+
 ## 글래스모피즘 표면
 
 앱의 기본 질감은 native window blur 위에 translucent CSS surface를 올리는 방식이다. Tauri window material은 `src-tauri/tauri.conf.json`의 `windowEffects`에서 정의하고, 앱 내부 표면은 `tokens.css`의 `--ds-surface-*`, `--ds-bg-*`, `--ds-glass-*` 토큰으로만 만든다.
