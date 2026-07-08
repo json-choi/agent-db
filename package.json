@@ -15,6 +15,7 @@
     "site:build": "pnpm --dir site build",
     "site:preview": "pnpm --dir site start",
     "site:preview-image": "python3 site/scripts/generate-preview.py",
+    "icons": "python3 scripts/generate-icons.py",
     "tauri": "tauri"
   },
   "dependencies": {

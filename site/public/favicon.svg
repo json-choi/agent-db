@@ -1,6 +1,29 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="DopeDB">
-  <rect width="64" height="64" rx="14" fill="#11130f"/>
-  <ellipse cx="32" cy="20" rx="18" ry="8" fill="#6fd26c"/>
-  <path d="M14 20v24c0 4.4 8.1 8 18 8s18-3.6 18-8V20" fill="none" stroke="#6fd26c" stroke-width="6" stroke-linejoin="round"/>
-  <path d="M14 32c0 4.4 8.1 8 18 8s18-3.6 18-8" fill="none" stroke="#fbfbf7" stroke-width="4" stroke-linecap="round"/>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1a231c"/>
+      <stop offset="1" stop-color="#0b0f0c"/>
+    </linearGradient>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#62de72"/>
+      <stop offset="1" stop-color="#13883c"/>
+    </linearGradient>
+    <linearGradient id="top" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#91f285"/>
+      <stop offset="1" stop-color="#3fca60"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="170%">
+      <feDropShadow dx="0" dy="4" stdDeviation="3" flood-color="#000" flood-opacity=".45"/>
+    </filter>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#bg)"/>
+  <circle cx="26" cy="20" r="23" fill="#6fd26c" opacity=".18"/>
+  <g filter="url(#shadow)">
+    <path d="M15 21h34v25c0 5-7.6 9-17 9s-17-4-17-9z" fill="url(#body)"/>
+    <ellipse cx="32" cy="21" rx="17" ry="8" fill="url(#top)"/>
+    <path d="M15 21v25c0 5 7.6 9 17 9s17-4 17-9V21" fill="none" stroke="#79f17b" stroke-width="5" stroke-linejoin="round"/>
+    <path d="M15 32c0 5 7.6 9 17 9s17-4 17-9" fill="none" stroke="#fbfbf7" stroke-width="4" stroke-linecap="round"/>
+    <path d="M19 43c2.5 3 7.3 4.8 13 4.8S42.5 46 45 43" fill="none" stroke="#bdf7bd" stroke-width="1.6" stroke-linecap="round" opacity=".65"/>
+    <path d="M39 28v18" stroke="#fff" stroke-width="3" stroke-linecap="round" opacity=".2"/>
+  </g>
 </svg>
