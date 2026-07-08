@@ -170,10 +170,10 @@ table.grid th.sortable {
   user-select: none;
 }
 table.grid th.sortable:hover {
-  color: var(--ds-accent);
+  color: var(--ds-accent-text);
 }
 .sort-arrow {
-  color: var(--ds-accent);
+  color: var(--ds-accent-text);
   font-size: 10px;
 }
 table.grid td.clickable {
@@ -319,7 +319,7 @@ table.grid td.clickable {
 .changed-badge {
   font-size: 9px;
   font-weight: 700;
-  color: var(--ds-accent);
+  color: var(--ds-accent-text);
   background: var(--ds-accent-soft);
   border-radius: 4px;
   padding: 1px 4px;
@@ -328,7 +328,7 @@ table.grid td.clickable {
 .pk-badge {
   font-size: 9px;
   font-weight: 700;
-  color: var(--ds-accent);
+  color: var(--ds-accent-text);
   border: 1px solid var(--ds-accent);
   border-radius: 3px;
   padding: 0 3px;
@@ -369,8 +369,8 @@ table.grid td.clickable {
   cursor: inherit;
 }
 .null-toggle.active {
-  color: var(--ds-accent);
-  border-color: var(--ds-accent);
+  color: var(--ds-accent-text);
+  border-color: var(--ds-accent-text);
   background: var(--ds-accent-soft);
 }
 .null-toggle.disabled {

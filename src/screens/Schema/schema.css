@@ -92,7 +92,7 @@
 
 .schema-node:hover,
 .schema-node.selected {
-  border-color: var(--ds-accent);
+  border-color: var(--ds-accent-text);
 }
 
 .schema-node.selected {
@@ -156,7 +156,7 @@
   padding: 0 4px;
   border-radius: 4px;
   background: var(--ds-accent-soft);
-  color: var(--ds-accent);
+  color: var(--ds-accent-text);
   font-size: 9px;
   line-height: 15px;
 }

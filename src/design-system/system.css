@@ -183,9 +183,7 @@ h3,
   border-radius: var(--ds-radius-sm);
   background: var(--ds-surface-0);
   color: var(--ds-text);
-  box-shadow: var(--ds-shadow-panel);
-  backdrop-filter: var(--ds-glass-filter-soft);
-  -webkit-backdrop-filter: var(--ds-glass-filter-soft);
+  box-shadow: var(--ds-shadow-control);
   cursor: pointer;
   font: inherit;
   font-size: var(--ds-font-size-ui);
@@ -255,8 +253,6 @@ h3,
   border: 1px solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-md);
   box-shadow: var(--ds-shadow-panel);
-  backdrop-filter: var(--ds-glass-filter);
-  -webkit-backdrop-filter: var(--ds-glass-filter);
 }
 
 .card,
@@ -275,8 +271,6 @@ h3,
   border: 1px solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-md);
   box-shadow: var(--ds-shadow-panel);
-  backdrop-filter: var(--ds-glass-filter);
-  -webkit-backdrop-filter: var(--ds-glass-filter);
 }
 
 .badge,
@@ -339,7 +333,7 @@ h3,
   padding: 0 9px;
   border-radius: var(--ds-radius-pill);
   background: var(--ds-accent-soft);
-  color: var(--ds-accent);
+  color: var(--ds-accent-text);
   font-size: var(--ds-font-size-xs);
   font-weight: 650;
 }
@@ -419,9 +413,7 @@ h3,
   border: 1px solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-md);
   background: var(--ds-surface-0);
-  box-shadow: var(--ds-glass-edge);
-  backdrop-filter: var(--ds-glass-filter-soft);
-  -webkit-backdrop-filter: var(--ds-glass-filter-soft);
+  box-shadow: var(--ds-shadow-control);
 }
 
 .ds-toolbar-group {
@@ -451,8 +443,6 @@ h3,
   border-radius: var(--ds-radius-md);
   background: var(--ds-surface-0);
   box-shadow: var(--ds-shadow-panel);
-  backdrop-filter: var(--ds-glass-filter);
-  -webkit-backdrop-filter: var(--ds-glass-filter);
 }
 
 .ds-ledger-card-header {
@@ -464,7 +454,7 @@ h3,
 
 .ds-ledger-card .icon,
 .ds-policy-card .icon {
-  color: var(--ds-accent);
+  color: var(--ds-accent-text);
   font-size: 17px;
 }
 
@@ -535,8 +525,6 @@ h3,
   border: 1px solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-md);
   background: var(--ds-surface-1);
-  backdrop-filter: var(--ds-glass-filter-soft);
-  -webkit-backdrop-filter: var(--ds-glass-filter-soft);
 }
 
 .ds-filter-token {
@@ -568,8 +556,6 @@ h3,
   background: var(--ds-surface-0);
   color: var(--ds-text);
   font: inherit;
-  backdrop-filter: var(--ds-glass-filter-soft);
-  -webkit-backdrop-filter: var(--ds-glass-filter-soft);
 }
 
 .form input,
@@ -600,8 +586,6 @@ textarea.ds-input {
 
 .tabs {
   background: var(--ds-surface-0);
-  backdrop-filter: var(--ds-glass-filter);
-  -webkit-backdrop-filter: var(--ds-glass-filter);
 }
 
 .tab {
@@ -615,7 +599,7 @@ textarea.ds-input {
 
 .tab.active {
   color: var(--ds-text);
-  border-bottom-color: var(--ds-accent);
+  border-bottom-color: var(--ds-accent-text);
 }
 
 .ds-trust-surface {
@@ -625,8 +609,6 @@ textarea.ds-input {
   border: 1px solid var(--ds-trust-border);
   border-radius: var(--ds-radius-md);
   background: var(--ds-trust-bg);
-  backdrop-filter: var(--ds-glass-filter-soft);
-  -webkit-backdrop-filter: var(--ds-glass-filter-soft);
 }
 
 .ds-risk-surface {
@@ -636,8 +618,6 @@ textarea.ds-input {
   border: 1px solid var(--ds-risk-border);
   border-radius: var(--ds-radius-md);
   background: var(--ds-risk-bg);
-  backdrop-filter: var(--ds-glass-filter-soft);
-  -webkit-backdrop-filter: var(--ds-glass-filter-soft);
 }
 
 .ds-danger-surface {
@@ -647,8 +627,6 @@ textarea.ds-input {
   border: 1px solid var(--ds-danger-border);
   border-radius: var(--ds-radius-md);
   background: var(--ds-danger-bg);
-  backdrop-filter: var(--ds-glass-filter-soft);
-  -webkit-backdrop-filter: var(--ds-glass-filter-soft);
 }
 
 .ds-policy-grid {
@@ -667,9 +645,7 @@ textarea.ds-input {
   border: 1px solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-md);
   background: var(--ds-surface-0);
-  box-shadow: var(--ds-glass-edge);
-  backdrop-filter: var(--ds-glass-filter-soft);
-  -webkit-backdrop-filter: var(--ds-glass-filter-soft);
+  box-shadow: var(--ds-shadow-control);
 }
 
 .ds-object-row {
@@ -706,8 +682,6 @@ textarea.ds-input {
   border-radius: var(--ds-radius-md);
   background: var(--ds-surface-0);
   box-shadow: var(--ds-shadow-panel);
-  backdrop-filter: var(--ds-glass-filter);
-  -webkit-backdrop-filter: var(--ds-glass-filter);
 }
 
 .loading::before {
@@ -755,120 +729,25 @@ textarea.ds-input {
 }
 
 .main-head,
-.tab-body,
-.settings,
-.settings-nav,
-.main-view,
-.editor-pane,
-.placeholder,
+.tabs,
+.sidebar-head,
 .explorer-toolbar,
+.placeholder,
 .view-options-panel,
 .ddl-modal,
-.toast,
-.agent-primary,
-.agent-secondary,
-.agent-stats span,
-.agent-view-tabs,
-.seg,
-.context-sql,
-.context-grid,
-.review-status,
-.generated-sql,
-.safety-details,
-.plan pre,
-.audit-row,
-.mcp-field pre,
-.mcp-token code,
-.plat,
-.step-card,
-.safety-control-panel,
-.mig-note,
-.mig-warn-banner,
-.mig-drift-unavailable,
-.mig-confirm,
-.mig-script,
-.drift,
-.mig-item,
-.mig-down pre,
-.schema-map,
-.schema-table-node,
-.schema-inspector,
-.schema-detail-list,
-.schema-detail-row,
-.update-card,
-.bar {
+.toast {
   backdrop-filter: var(--ds-glass-filter);
   -webkit-backdrop-filter: var(--ds-glass-filter);
 }
 
-.btn,
-.ds-button,
-.card,
-.ds-card,
-.ds-panel,
-.ds-inspector,
-.grid-panel,
-.schema-inspector,
-.ds-data-toolbar,
-.ds-ledger-card,
-.ds-filter-strip,
-.ds-filter-token,
-.form input,
-.form select,
-.form textarea,
-.table-filter,
-.filter-input,
-.ds-input,
-.tabs,
-.ds-trust-surface,
-.ds-risk-surface,
-.ds-danger-surface,
-.ds-policy-card,
-.ds-grid-shell,
-.grid-scroll,
-.ui-help,
 .main-head,
-.tab-body,
-.settings,
-.settings-nav,
-.main-view,
-.editor-pane,
+.tabs,
+.sidebar-head,
 .placeholder,
 .explorer-toolbar,
 .view-options-panel,
 .ddl-modal,
-.toast,
-.agent-primary,
-.agent-secondary,
-.agent-stats span,
-.agent-view-tabs,
-.seg,
-.context-sql,
-.context-grid,
-.review-status,
-.generated-sql,
-.safety-details,
-.plan pre,
-.audit-row,
-.mcp-field pre,
-.mcp-token code,
-.plat,
-.step-card,
-.safety-control-panel,
-.mig-note,
-.mig-warn-banner,
-.mig-drift-unavailable,
-.mig-confirm,
-.mig-script,
-.drift,
-.mig-item,
-.mig-down pre,
-.schema-map,
-.schema-table-node,
-.schema-detail-list,
-.schema-detail-row,
-.update-card,
-.bar {
+.toast {
   background-image: var(--ds-glass-sheen);
   background-clip: padding-box;
 }

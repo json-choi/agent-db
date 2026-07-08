@@ -41,27 +41,27 @@
   --ds-radius-md: 8px;
   --ds-radius-lg: 10px;
   --ds-radius-pill: 999px;
-  --ds-glass-window-filter: saturate(1.42) blur(30px);
-  --ds-glass-filter: saturate(1.38) blur(24px);
-  --ds-glass-filter-soft: saturate(1.22) blur(14px);
+  --ds-glass-window-filter: saturate(1.28) blur(22px);
+  --ds-glass-filter: saturate(1.24) blur(18px);
+  --ds-glass-filter-soft: saturate(1.12) blur(10px);
   --ds-glass-sheen:
     linear-gradient(
       145deg,
-      rgba(255, 255, 255, 0.3) 0%,
-      rgba(255, 255, 255, 0.12) 38%,
-      rgba(255, 255, 255, 0.04) 62%,
+      rgba(255, 255, 255, 0.18) 0%,
+      rgba(255, 255, 255, 0.07) 38%,
+      rgba(255, 255, 255, 0.02) 62%,
       rgba(255, 255, 255, 0) 100%
     );
   --ds-glass-edge:
-    inset 0 1px 0 rgba(255, 255, 255, 0.48),
-    inset 0 -1px 0 rgba(255, 255, 255, 0.12);
+    inset 0 1px 0 rgba(255, 255, 255, 0.34),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.08);
+  --ds-shadow-control: 0 1px 2px rgba(16, 24, 40, 0.06);
   --ds-shadow-panel:
-    0 18px 52px rgba(31, 45, 62, 0.12),
-    0 1px 6px rgba(16, 24, 40, 0.08),
-    var(--ds-glass-edge);
+    0 10px 28px rgba(31, 45, 62, 0.1),
+    0 1px 2px rgba(16, 24, 40, 0.06);
   --ds-shadow-popover:
-    0 24px 72px rgba(16, 24, 40, 0.22),
-    0 1px 1px rgba(255, 255, 255, 0.42) inset;
+    0 20px 60px rgba(16, 24, 40, 0.2),
+    var(--ds-glass-edge);
 
   /* Sizing */
   --ds-control-xs: 22px;
@@ -74,17 +74,17 @@
   --ds-pane-pad: 20px;
   --ds-line: 1px solid var(--ds-border-subtle);
 
-  /* Neutral glass surfaces */
+  /* Neutral surfaces and restrained glass shell */
   --ds-bg-app:
-    linear-gradient(135deg, rgba(247, 249, 247, 0.32), rgba(232, 237, 241, 0.2)),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(226, 232, 238, 0.14));
-  --ds-bg-sidebar: rgba(246, 249, 247, 0.3);
-  --ds-surface-0: rgba(255, 255, 255, 0.46);
-  --ds-surface-1: rgba(247, 250, 248, 0.3);
-  --ds-surface-2: rgba(236, 242, 241, 0.24);
-  --ds-surface-elevated: rgba(255, 255, 255, 0.56);
-  --ds-border-subtle: rgba(130, 145, 160, 0.24);
-  --ds-border-strong: rgba(101, 116, 132, 0.38);
+    linear-gradient(135deg, rgba(247, 249, 247, 0.26), rgba(232, 237, 241, 0.16)),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(226, 232, 238, 0.12));
+  --ds-bg-sidebar: rgba(246, 249, 247, 0.36);
+  --ds-surface-0: #ffffff;
+  --ds-surface-1: #f7faf8;
+  --ds-surface-2: #eef3f0;
+  --ds-surface-elevated: #ffffff;
+  --ds-border-subtle: #dde5df;
+  --ds-border-strong: #bdc9c1;
   --ds-text: #1d232f;
   --ds-text-muted: #687386;
   --ds-text-subtle: #8a94a5;
@@ -94,6 +94,7 @@
   --ds-primary: #2f6f4d;
   --ds-primary-hover: #285f42;
   --ds-primary-active: #214f38;
+  --ds-primary-text: var(--ds-primary);
   --ds-primary-soft: rgba(47, 111, 77, 0.13);
   --ds-caution: #9a6511;
   --ds-caution-soft: rgba(154, 101, 17, 0.14);
@@ -102,6 +103,7 @@
 
   /* Intent aliases: keep UI semantics while limiting the palette. */
   --ds-accent: var(--ds-primary);
+  --ds-accent-text: var(--ds-primary-text);
   --ds-accent-hover: var(--ds-primary-hover);
   --ds-accent-active: var(--ds-primary-active);
   --ds-accent-soft: var(--ds-primary-soft);
@@ -139,15 +141,15 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --ds-bg-app:
-      linear-gradient(135deg, rgba(16, 22, 19, 0.34), rgba(22, 27, 32, 0.24)),
-      linear-gradient(180deg, rgba(27, 34, 31, 0.18), rgba(12, 15, 17, 0.26));
-    --ds-bg-sidebar: rgba(25, 30, 31, 0.36);
-    --ds-surface-0: rgba(35, 40, 42, 0.46);
-    --ds-surface-1: rgba(43, 49, 52, 0.34);
-    --ds-surface-2: rgba(55, 63, 67, 0.28);
-    --ds-surface-elevated: rgba(46, 54, 56, 0.58);
-    --ds-border-subtle: rgba(169, 181, 197, 0.16);
-    --ds-border-strong: rgba(187, 198, 210, 0.28);
+      linear-gradient(135deg, rgba(16, 22, 19, 0.28), rgba(22, 27, 32, 0.2)),
+      linear-gradient(180deg, rgba(27, 34, 31, 0.14), rgba(12, 15, 17, 0.22));
+    --ds-bg-sidebar: rgba(25, 30, 31, 0.4);
+    --ds-surface-0: #242a28;
+    --ds-surface-1: #2b322f;
+    --ds-surface-2: #343c38;
+    --ds-surface-elevated: #303835;
+    --ds-border-subtle: #414c47;
+    --ds-border-strong: #5b6862;
     --ds-text: #f1f4f8;
     --ds-text-muted: #b0b8c4;
     --ds-text-subtle: #8f98a6;
@@ -156,6 +158,7 @@
     --ds-primary: #368454;
     --ds-primary-hover: #388256;
     --ds-primary-active: #2f724a;
+    --ds-primary-text: #5aa874;
     --ds-primary-soft: rgba(54, 132, 84, 0.18);
     --ds-caution: #f2b84b;
     --ds-caution-soft: rgba(242, 184, 75, 0.16);
@@ -163,6 +166,7 @@
     --ds-critical-soft: rgba(255, 107, 92, 0.16);
 
     --ds-accent: var(--ds-primary);
+    --ds-accent-text: var(--ds-primary-text);
     --ds-accent-hover: var(--ds-primary-hover);
     --ds-accent-active: var(--ds-primary-active);
     --ds-accent-soft: var(--ds-primary-soft);
@@ -190,19 +194,20 @@
     --ds-glass-sheen:
       linear-gradient(
         145deg,
-        rgba(255, 255, 255, 0.1) 0%,
-        rgba(255, 255, 255, 0.05) 36%,
-        rgba(255, 255, 255, 0.02) 62%,
+        rgba(255, 255, 255, 0.08) 0%,
+        rgba(255, 255, 255, 0.03) 36%,
+        rgba(255, 255, 255, 0.01) 62%,
         rgba(255, 255, 255, 0) 100%
       );
     --ds-glass-edge:
-      inset 0 1px 0 rgba(255, 255, 255, 0.16),
-      inset 0 -1px 0 rgba(255, 255, 255, 0.04);
+      inset 0 1px 0 rgba(255, 255, 255, 0.12),
+      inset 0 -1px 0 rgba(255, 255, 255, 0.03);
+    --ds-shadow-control: 0 1px 2px rgba(0, 0, 0, 0.16);
     --ds-shadow-panel:
-      0 20px 60px rgba(0, 0, 0, 0.24),
-      var(--ds-glass-edge);
+      0 12px 36px rgba(0, 0, 0, 0.2),
+      0 1px 1px rgba(255, 255, 255, 0.04) inset;
     --ds-shadow-popover:
-      0 28px 80px rgba(0, 0, 0, 0.42),
+      0 24px 72px rgba(0, 0, 0, 0.42),
       var(--ds-glass-edge);
   }
 }

@@ -14,8 +14,6 @@
 .sidebar-resizer:hover,
 .sidebar-resizer:active {
   background: var(--ds-hover-strong);
-  backdrop-filter: var(--ds-glass-filter-soft);
-  -webkit-backdrop-filter: var(--ds-glass-filter-soft);
 }
 
 /* Sidebar */
@@ -82,8 +80,6 @@
   border-radius: 999px;
   border: 1px solid var(--ds-border-subtle);
   background: transparent;
-  backdrop-filter: var(--ds-glass-filter-soft);
-  -webkit-backdrop-filter: var(--ds-glass-filter-soft);
   cursor: pointer;
   color: var(--ds-text-muted);
 }
@@ -100,7 +96,7 @@
   background: var(--ds-risk-bg);
 }
 .agent-jump {
-  color: var(--ds-accent);
+  color: var(--ds-accent-text);
   border-color: color-mix(in srgb, var(--ds-accent) 45%, var(--ds-border-subtle));
   background: var(--ds-accent-soft);
 }
@@ -153,7 +149,7 @@
 }
 .tab.active {
   color: var(--ds-text);
-  border-bottom-color: var(--ds-accent);
+  border-bottom-color: var(--ds-accent-text);
 }
 /* Agent tab is connection-independent — push it to the right, set off by a divider. */
 .tabs .tab.agent-tab {
@@ -180,11 +176,8 @@
   min-height: 0; /* allow inner panes to scroll within the flex column */
   overflow: auto;
   padding: var(--ds-pane-pad);
-  background: rgba(255, 255, 255, 0.08);
-  background-image: var(--ds-glass-sheen);
+  background: var(--ds-surface-1);
   box-shadow: inset 0 1px 0 var(--ds-border-subtle);
-  backdrop-filter: var(--ds-glass-window-filter);
-  -webkit-backdrop-filter: var(--ds-glass-window-filter);
 }
 /* Screens are full-width by default so results/tables grids use the whole pane.
    Reading-oriented screens cap their own width below. */

@@ -25,7 +25,7 @@
   overflow-x: auto;
 }
 .table-query-strip .ds-filter-token.active {
-  color: var(--ds-accent);
+  color: var(--ds-accent-text);
   border-color: color-mix(in srgb, var(--ds-accent) 42%, var(--ds-border-subtle));
   background: var(--ds-accent-soft);
 }

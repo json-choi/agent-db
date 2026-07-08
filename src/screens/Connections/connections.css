@@ -38,7 +38,7 @@
 }
 .ddl-btn:hover {
   color: var(--ds-text);
-  border-color: var(--ds-accent);
+  border-color: var(--ds-accent-text);
 }
 .db-table.selected .ddl-btn {
   color: rgba(255, 255, 255, 0.9);
@@ -272,7 +272,7 @@
   flex-shrink: 0;
 }
 .db-refresh:hover {
-  color: var(--ds-accent);
+  color: var(--ds-accent-text);
 }
 .db-conn.selected .db-refresh {
   color: var(--ds-text);

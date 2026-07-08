@@ -41,24 +41,23 @@
 - Critical Coral: destructive, error, blocked, high risk.
 
 새 UI에서 파랑, 청록, 보라 등 별도 hue를 추가하지 않는다. 기존 의미 토큰은 유지하되 `--ds-accent`, `--ds-info`, `--ds-success`, `--ds-source-blue`, `--ds-source-teal`, `--ds-source-green`은 모두 primary green으로 alias한다. 경고는 `--ds-caution`, 위험은 `--ds-critical` 계열로만 표현한다.
+Primary green은 배경 fill에는 `--ds-accent`, 링크/아이콘/강조 텍스트에는 `--ds-accent-text`를 사용한다.
 
 ## 글래스모피즘 표면
 
-앱의 기본 질감은 native window blur 위에 translucent CSS surface를 올리는 방식이다. Tauri window material은 `src-tauri/tauri.conf.json`의 `windowEffects`에서 정의하고, 앱 내부 표면은 `tokens.css`의 `--ds-surface-*`, `--ds-bg-*`, `--ds-glass-*` 토큰으로만 만든다.
+앱의 기본 질감은 단단한 작업 표면 위에 restrained glass shell을 얹는 방식이다. Tauri window material은 `src-tauri/tauri.conf.json`의 `windowEffects`에서 정의하고, 앱 내부 표면은 `tokens.css`의 `--ds-surface-*`, `--ds-bg-*`, `--ds-glass-*` 토큰으로만 만든다.
 
 ```css
 .my-panel {
   background: var(--ds-surface-0);
   border: 1px solid var(--ds-border-subtle);
   box-shadow: var(--ds-shadow-panel);
-  backdrop-filter: var(--ds-glass-filter);
-  -webkit-backdrop-filter: var(--ds-glass-filter);
 }
 ```
 
-- App shell, sidebar, header, tab body, toolbar, inspector, modal, toast는 glass surface를 기본값으로 쓴다.
-- 반복 카드나 control처럼 작은 표면은 `--ds-glass-filter-soft`를 써서 텍스트 대비를 우선한다.
-- 데이터 grid는 shell에만 glass를 주고 cell마다 강한 blur를 반복하지 않는다.
+- Glass는 app shell, sidebar, header, tabs, modal, popover, toast, empty/skeleton state에만 제한한다.
+- 읽고 편집하는 본문, tab body, card, panel, button, form, inspector, data grid는 solid `--ds-surface-*`를 기본값으로 쓴다.
+- 데이터 grid는 shell과 cell 모두 blur를 반복하지 않는다.
 - 새 화면은 `ds-panel`, `ds-card`, `ds-toolbar`, `ds-filter-strip`, `ds-grid-shell` 같은 공통 클래스를 먼저 사용한다.
 - 불투명 배경색이 필요하면 하드코딩하지 말고 `tokens.css`에 의미 기반 `--ds-*` 토큰을 추가한다.
 

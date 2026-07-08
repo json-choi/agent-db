@@ -12,8 +12,8 @@
 }
 
 .badge.action[class*="execute"] {
-  color: var(--ds-accent);
-  border-color: var(--ds-accent);
+  color: var(--ds-accent-text);
+  border-color: var(--ds-accent-text);
 }
 
 .badge.action[class*="reject"],
