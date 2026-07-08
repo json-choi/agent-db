@@ -19,8 +19,8 @@
   --ds-font-size-sm: 12px;
   --ds-font-size-ui: 13px;
   --ds-font-size-body: 14px;
-  --ds-font-size-title: 16px;
-  --ds-font-size-heading: 20px;
+  --ds-font-size-title: 15px;
+  --ds-font-size-heading: 18px;
   --ds-line-tight: 1.2;
   --ds-line-ui: 1.35;
   --ds-line-body: 1.55;
@@ -39,8 +39,14 @@
   --ds-radius-xs: 4px;
   --ds-radius-sm: 6px;
   --ds-radius-md: 8px;
-  --ds-radius-lg: 10px;
+  --ds-radius-lg: 8px;
   --ds-radius-pill: 999px;
+  --ds-z-base: 1;
+  --ds-z-raised: 2;
+  --ds-z-sticky: 6;
+  --ds-z-popover: 8;
+  --ds-z-modal: 50;
+  --ds-z-toast: 1000;
   --ds-glass-window-filter: saturate(1.28) blur(22px);
   --ds-glass-filter: saturate(1.24) blur(18px);
   --ds-glass-filter-soft: saturate(1.12) blur(10px);
@@ -57,21 +63,20 @@
     inset 0 -1px 0 rgba(255, 255, 255, 0.08);
   --ds-shadow-control: 0 1px 2px rgba(16, 24, 40, 0.06);
   --ds-shadow-panel:
-    0 10px 28px rgba(31, 45, 62, 0.1),
-    0 1px 2px rgba(16, 24, 40, 0.06);
+    0 1px 2px rgba(16, 24, 40, 0.07);
   --ds-shadow-popover:
-    0 20px 60px rgba(16, 24, 40, 0.2),
+    0 12px 36px rgba(16, 24, 40, 0.18),
     var(--ds-glass-edge);
 
   /* Sizing */
-  --ds-control-xs: 22px;
-  --ds-control-sm: 26px;
-  --ds-control-md: 30px;
-  --ds-control-lg: 36px;
+  --ds-control-xs: 20px;
+  --ds-control-sm: 24px;
+  --ds-control-md: 28px;
+  --ds-control-lg: 32px;
   --ds-sidebar-min: 180px;
   --ds-sidebar-default: 240px;
   --ds-sidebar-max: 520px;
-  --ds-pane-pad: 20px;
+  --ds-pane-pad: 16px;
   --ds-line: 1px solid var(--ds-border-subtle);
 
   /* Neutral surfaces and restrained glass shell */
@@ -89,6 +94,9 @@
   --ds-text-muted: #687386;
   --ds-text-subtle: #8a94a5;
   --ds-text-inverse: #ffffff;
+  --ds-text-on-accent-muted: rgba(255, 255, 255, 0.82);
+  --ds-border-on-accent: rgba(255, 255, 255, 0.42);
+  --ds-overlay: rgba(5, 9, 13, 0.32);
 
   /* Three chromatic hues, derived from the DopeDB icon. */
   --ds-primary: #2f6f4d;
@@ -154,6 +162,9 @@
     --ds-text-muted: #b0b8c4;
     --ds-text-subtle: #8f98a6;
     --ds-text-inverse: #ffffff;
+    --ds-text-on-accent-muted: rgba(255, 255, 255, 0.82);
+    --ds-border-on-accent: rgba(255, 255, 255, 0.42);
+    --ds-overlay: rgba(5, 9, 13, 0.36);
 
     --ds-primary: #368454;
     --ds-primary-hover: #388256;
@@ -204,10 +215,10 @@
       inset 0 -1px 0 rgba(255, 255, 255, 0.03);
     --ds-shadow-control: 0 1px 2px rgba(0, 0, 0, 0.16);
     --ds-shadow-panel:
-      0 12px 36px rgba(0, 0, 0, 0.2),
+      0 1px 2px rgba(0, 0, 0, 0.24),
       0 1px 1px rgba(255, 255, 255, 0.04) inset;
     --ds-shadow-popover:
-      0 24px 72px rgba(0, 0, 0, 0.42),
+      0 14px 42px rgba(0, 0, 0, 0.36),
       var(--ds-glass-edge);
   }
 }

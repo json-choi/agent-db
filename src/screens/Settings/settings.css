@@ -1,18 +1,56 @@
 
 
 /* Settings menu (Safety + MCP, out of the tab bar) */
-.settings { display: grid; grid-template-columns: 210px 1fr; height: 100%; min-height: 0; }
-.settings-nav {
-  border-right: 1px solid var(--ds-border-subtle); padding: 8px;
-  display: flex; flex-direction: column; gap: 2px;
+.settings {
+  display: grid;
+  grid-template-columns: 192px minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
 }
-.settings-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 8px 10px; }
-.snav {
-  text-align: left; border: none; background: transparent; color: var(--ds-text);
-  padding: 8px 10px; border-radius: var(--ds-radius-sm); cursor: pointer; font: inherit; font-size: 13px;
-}
-.snav:hover:not(:disabled) { background: var(--ds-hover); }
-.snav.active { background: var(--ds-accent); color: var(--ds-text-inverse); }
-.snav:disabled { opacity: 0.5; cursor: default; }
-.settings-body { overflow: auto; padding: var(--ds-pane-pad); min-width: 0; }
 
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--ds-space-2);
+  border-right: 1px solid var(--ds-border-subtle);
+}
+
+.settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--ds-space-2) var(--ds-space-2) var(--ds-space-3);
+}
+
+.snav {
+  padding: var(--ds-space-2) var(--ds-space-3);
+  border: none;
+  border-radius: var(--ds-radius-sm);
+  background: transparent;
+  color: var(--ds-text);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--ds-font-size-ui);
+  text-align: left;
+}
+
+.snav:hover:not(:disabled) {
+  background: var(--ds-hover);
+}
+
+.snav.active {
+  background: var(--ds-accent);
+  color: var(--ds-text-inverse);
+}
+
+.snav:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.settings-body {
+  min-width: 0;
+  overflow: auto;
+  padding: var(--ds-pane-pad);
+}

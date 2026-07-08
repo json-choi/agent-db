@@ -1,8 +1,8 @@
 .history {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 16px;
+  gap: var(--ds-space-3);
+  padding: var(--ds-space-4);
   overflow: auto;
 }
 .history-head {
@@ -16,16 +16,16 @@
 .history-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: var(--ds-font-size-ui);
 }
 .history-table th {
   text-align: left;
-  font-size: 11px;
+  font-size: var(--ds-font-size-xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--ds-text-muted);
   font-weight: 600;
-  padding: 6px 10px;
+  padding: var(--ds-space-2) var(--ds-space-3);
   border-bottom: 1px solid var(--ds-border-subtle);
 }
 .history-table th.num,
@@ -33,7 +33,7 @@
   text-align: right;
 }
 .history-row td {
-  padding: 6px 10px;
+  padding: var(--ds-space-2) var(--ds-space-3);
   border-bottom: 1px solid var(--ds-border-subtle);
   vertical-align: middle;
 }
@@ -51,20 +51,19 @@
   max-width: 0; /* let the cell shrink so ellipsis kicks in */
 }
 .history-sql code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   display: block;
 }
 .history-note {
-  font-size: 12px;
+  font-size: var(--ds-font-size-sm);
 }
 
 /* Client-side filter row over the loaded firehose. */
 .history-filters {
   display: flex;
-  gap: 8px;
+  gap: var(--ds-space-2);
   align-items: center;
 }
 .history-filter-text {

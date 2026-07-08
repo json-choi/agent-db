@@ -23,7 +23,7 @@
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
-  gap: 6px;
+  gap: var(--ds-space-2);
 }
 .agent-stats span,
 .seg {
@@ -43,7 +43,7 @@
   display: inline-flex;
   align-self: flex-start;
   gap: 2px;
-  padding: 3px;
+  padding: var(--ds-space-1);
   border: 1px solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-lg);
   background: var(--ds-surface-1);
@@ -51,7 +51,7 @@
 .seg {
   min-width: 88px;
   min-height: var(--ds-control-md);
-  padding: 0 10px;
+  padding: 0 var(--ds-space-3);
   color: var(--ds-text-muted);
   cursor: pointer;
   font: inherit;
@@ -64,7 +64,7 @@
 }
 .agent-empty-panel {
   display: grid;
-  grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
   gap: var(--ds-space-3);
   align-items: start;
 }
@@ -89,14 +89,14 @@
   gap: var(--ds-space-2);
 }
 .agent-empty-row {
-  min-height: 96px;
+  min-height: 80px;
 }
 .agent-empty-row .icon {
-  font-size: 16px;
+  font-size: var(--ds-font-size-title);
 }
 .agent-split {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+  grid-template-columns: minmax(0, 1fr) minmax(264px, 336px);
   gap: var(--ds-space-3);
   min-height: 0;
   flex: 1;
@@ -118,8 +118,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 10px;
+  gap: var(--ds-space-3);
+  margin-bottom: var(--ds-space-2);
 }
 .agent-section-head h3,
 .agent-secondary h3,
@@ -132,7 +132,7 @@
 }
 .context-card {
   display: grid;
-  gap: 12px;
+  gap: var(--ds-space-3);
 }
 .context-card p {
   margin: 0;
@@ -141,7 +141,7 @@
 }
 .context-sql {
   display: block;
-  padding: 10px;
+  padding: var(--ds-space-3);
   overflow: auto;
   border: 1px solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-sm);
@@ -157,10 +157,10 @@
 .context-row {
   display: grid;
   grid-template-columns: 160px minmax(0, 1fr);
-  gap: 10px;
-  padding: 8px 10px;
+  gap: var(--ds-space-3);
+  padding: var(--ds-space-2) var(--ds-space-3);
   border-bottom: 1px solid var(--ds-border-subtle);
-  font-size: 12px;
+  font-size: var(--ds-font-size-sm);
 }
 .context-row:last-child {
   border-bottom: none;
@@ -175,31 +175,67 @@
 }
 .agent-audit-grid {
   display: grid;
-  gap: 14px;
+  gap: var(--ds-space-3);
 }
 .agent-policy-card {
-  min-height: 70px;
+  min-height: 64px;
 }
 .agent-policy-card.wide {
   grid-column: 1 / -1;
-  min-height: 120px;
+  min-height: 96px;
 }
 .agent-policy-card p {
-  margin: 8px 0 0;
+  margin: var(--ds-space-2) 0 0;
   line-height: 1.48;
 }
-.mcp-result { margin-bottom: 8px; }
-.mcp-result-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
-.mcp-result-sql {
-  font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 12px;
-  background: var(--ds-hover-strong); padding: 2px 6px; border-radius: var(--ds-radius-sm);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 70%;
+.mcp-result {
+  margin-bottom: var(--ds-space-2);
 }
+
+.mcp-result-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ds-space-2);
+  margin-bottom: var(--ds-space-1);
+}
+
+.mcp-result-sql {
+  max-width: 70%;
+  overflow: hidden;
+  padding: 2px 6px;
+  border-radius: var(--ds-radius-sm);
+  background: var(--ds-hover-strong);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-font-size-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Clickable feed rows: pointer + a visible "view result" chevron affordance. */
-.act.has-result { cursor: pointer; position: relative; padding-right: 20px; }
-.act.has-result:hover { background: var(--ds-hover); }
-.act.has-result::after { content: "›"; position: absolute; right: 8px; top: 50%; transform: translateY(-50%); color: var(--ds-text-muted); font-size: 16px; }
-.act.sel { background: var(--ds-accent-soft); }
+.act.has-result {
+  position: relative;
+  padding-right: var(--ds-space-5);
+  cursor: pointer;
+}
+
+.act.has-result:hover {
+  background: var(--ds-hover);
+}
+
+.act.has-result::after {
+  content: "›";
+  position: absolute;
+  top: 50%;
+  right: var(--ds-space-2);
+  color: var(--ds-text-muted);
+  font-size: var(--ds-font-size-title);
+  transform: translateY(-50%);
+}
+
+.act.sel {
+  background: var(--ds-accent-soft);
+}
 
 @media (max-width: 1100px) {
   .agent-split,

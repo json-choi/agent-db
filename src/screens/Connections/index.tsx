@@ -31,6 +31,15 @@ const DEFAULT_PORT: Record<Engine, number> = {
   mysql: 3306,
   sqlite: 0,
 };
+const SCHEMA_LOAD_TIMEOUT_MS = 12_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: number | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = window.setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => window.clearTimeout(timer));
+}
 
 function blank(): ConnectionProfile {
   return {
@@ -176,7 +185,11 @@ export function DatabaseExplorer({
       delete n[id];
       return n;
     });
-    getCatalog(id)
+    withTimeout(
+      getCatalog(id),
+      SCHEMA_LOAD_TIMEOUT_MS,
+      "Schema loading timed out. Check the database connection or retry.",
+    )
       .then((c) => setCatalogs((m) => ({ ...m, [id]: c })))
       .catch((e) => {
         loadedRef.current.delete(id); // allow retry on next expand
@@ -213,7 +226,11 @@ export function DatabaseExplorer({
       return n;
     });
     try {
-      const c = await refreshCatalog(id);
+      const c = await withTimeout(
+        refreshCatalog(id),
+        SCHEMA_LOAD_TIMEOUT_MS,
+        "Schema refresh timed out. Check the database connection or retry.",
+      );
       setCatalogs((m) => ({ ...m, [id]: c }));
       loadedRef.current.add(id);
     } catch (e) {

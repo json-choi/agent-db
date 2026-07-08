@@ -1,23 +1,90 @@
 
 
 /* Onboarding (first run, nothing connected) */
-.onboarding { height: 100%; overflow: auto; display: grid; place-items: center; padding: 32px; }
-.onboarding-inner { max-width: 720px; text-align: center; }
-.onboarding h1 { font-size: 28px; margin: 0 0 10px; }
-.onboarding .lead { font-size: 15px; line-height: 1.55; margin: 0 auto 28px; max-width: 580px; }
-.onboarding-steps { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; text-align: left; }
-.step-card {
-  border: 1px solid var(--ds-border-subtle); border-radius: var(--ds-radius-lg); padding: 20px;
-  background: var(--ds-surface-0); box-shadow: var(--ds-shadow-panel);
-  display: flex; flex-direction: column; gap: 8px;
+.onboarding {
+  height: 100%;
+  overflow: auto;
+  padding: var(--ds-pane-pad);
 }
-.step-num {
-  width: 26px; height: 26px; border-radius: var(--ds-radius-pill); background: var(--ds-accent);
-  color: var(--ds-text-inverse); display: grid; place-items: center; font-weight: 600; font-size: 13px;
-}
-/* Onboarding card titles are headline-style, not the global uppercase h3. */
-.step-card h3 { margin: 4px 0 0; font-size: 16px; text-transform: none; letter-spacing: 0; color: var(--ds-text); }
-.step-card p { margin: 0; flex: 1; font-size: 13px; line-height: 1.5; }
-.step-card .btn { align-self: flex-start; margin-top: 6px; }
-.onboarding-foot { margin-top: 20px; font-size: 13px; }
 
+.onboarding-inner {
+  max-width: 720px;
+  text-align: left;
+}
+
+.onboarding h1 {
+  margin: 0 0 var(--ds-space-2);
+  font-size: var(--ds-font-size-heading);
+  line-height: var(--ds-line-tight);
+}
+
+.onboarding .lead {
+  max-width: 600px;
+  margin: 0 0 var(--ds-space-4);
+  font-size: var(--ds-font-size-body);
+  line-height: var(--ds-line-body);
+}
+
+.onboarding-steps {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(240px, 1fr));
+  gap: var(--ds-space-3);
+}
+
+.step-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-2);
+  min-height: 144px;
+  padding: var(--ds-space-3);
+  border: 1px solid var(--ds-border-subtle);
+  border-radius: var(--ds-radius-md);
+  background: var(--ds-surface-0);
+  box-shadow: var(--ds-shadow-panel);
+}
+
+.step-num {
+  width: var(--ds-control-sm);
+  height: var(--ds-control-sm);
+  display: grid;
+  place-items: center;
+  border-radius: var(--ds-radius-pill);
+  background: var(--ds-accent);
+  color: var(--ds-text-inverse);
+  font-size: var(--ds-font-size-ui);
+  font-weight: 650;
+}
+
+/* Onboarding card titles are headline-style, not the global uppercase h3. */
+.step-card h3 {
+  margin: var(--ds-space-1) 0 0;
+  color: var(--ds-text);
+  font-size: var(--ds-font-size-title);
+  letter-spacing: 0;
+  text-transform: none;
+  overflow-wrap: anywhere;
+}
+
+.step-card p {
+  flex: 1;
+  margin: 0;
+  font-size: var(--ds-font-size-ui);
+  line-height: var(--ds-line-body);
+  overflow-wrap: anywhere;
+}
+
+.step-card .btn {
+  align-self: flex-start;
+  margin-top: var(--ds-space-1);
+}
+
+.onboarding-foot {
+  margin-top: var(--ds-space-4);
+  font-size: var(--ds-font-size-ui);
+}
+
+@media (max-width: 760px) {
+  .onboarding-steps {
+    grid-template-columns: 1fr;
+  }
+}

@@ -27,6 +27,9 @@ use crate::introspect::Catalog;
 pub mod applied;
 pub use applied::Applied;
 
+const MAX_SCAN_DEPTH: usize = 12;
+const MAX_SQL_FILES: usize = 3_000;
+
 // ── serde output types (camelCase for the frontend) ──────────────────────────────
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -492,16 +495,78 @@ struct MigFile {
     down: Option<PathBuf>,
 }
 
-fn collect_sql(dir: &Path, out: &mut Vec<PathBuf>) {
+#[derive(Default)]
+struct ScanState {
+    truncated: bool,
+}
+
+fn is_sql_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("sql"))
+        .unwrap_or(false)
+}
+
+fn should_skip_dir(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+        return false;
+    };
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        ".git"
+            | ".hg"
+            | ".svn"
+            | ".cache"
+            | ".next"
+            | ".nuxt"
+            | ".turbo"
+            | "node_modules"
+            | "target"
+            | "dist"
+            | "build"
+            | "coverage"
+            | "vendor"
+    )
+}
+
+fn collect_sql(dir: &Path, out: &mut Vec<PathBuf>) -> bool {
+    let mut state = ScanState::default();
+    collect_sql_inner(dir, out, 0, &mut state);
+    state.truncated
+}
+
+fn collect_sql_inner(dir: &Path, out: &mut Vec<PathBuf>, depth: usize, state: &mut ScanState) {
+    if depth > MAX_SCAN_DEPTH || out.len() >= MAX_SQL_FILES {
+        state.truncated = true;
+        return;
+    }
     let Ok(rd) = std::fs::read_dir(dir) else { return };
     for entry in rd.flatten() {
+        if out.len() >= MAX_SQL_FILES {
+            state.truncated = true;
+            return;
+        }
+        let Ok(ft) = entry.file_type() else { continue };
         let p = entry.path();
-        if p.is_dir() {
-            collect_sql(&p, out);
-        } else if p.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("sql")).unwrap_or(false) {
+        if ft.is_symlink() {
+            continue;
+        }
+        if ft.is_dir() {
+            if should_skip_dir(&p) {
+                continue;
+            }
+            collect_sql_inner(&p, out, depth + 1, state);
+        } else if ft.is_file() && is_sql_file(&p) {
             out.push(p);
         }
     }
+}
+
+fn has_direct_sql(dir: &Path) -> bool {
+    let Ok(rd) = std::fs::read_dir(dir) else { return false };
+    rd.flatten().any(|entry| {
+        entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) && is_sql_file(&entry.path())
+    })
 }
 
 /// version + name for ordering/labelling; `is_down` marks reverse files.
@@ -586,9 +651,9 @@ fn tokens(s: &str) -> Vec<Tok<'_>> {
     out
 }
 
-fn scan(dir: &Path) -> Vec<MigFile> {
+fn scan(dir: &Path) -> (Vec<MigFile>, bool) {
     let mut files = Vec::new();
-    collect_sql(dir, &mut files);
+    let truncated = collect_sql(dir, &mut files);
 
     // Split ups from downs, key downs by their base identity for pairing.
     let mut downs: BTreeMap<String, PathBuf> = BTreeMap::new();
@@ -602,7 +667,8 @@ fn scan(dir: &Path) -> Vec<MigFile> {
         }
     }
     ups.sort_by(|a, b| natural_cmp(&a.0, &b.0).then_with(|| natural_cmp(&a.1, &b.1)));
-    ups.into_iter()
+    let migrations = ups
+        .into_iter()
         .map(|(version, name, up)| {
             let down = downs.get(&name.to_lowercase()).cloned().or_else(|| {
                 // Prisma "down.sql" sibling in the same folder.
@@ -610,7 +676,8 @@ fn scan(dir: &Path) -> Vec<MigFile> {
             });
             MigFile { version, name, up, down }
         })
-        .collect()
+        .collect();
+    (migrations, truncated)
 }
 
 // ── public entrypoint ────────────────────────────────────────────────────────────
@@ -645,7 +712,21 @@ pub fn analyze(
     let mut migrations = Vec::new();
     let mut prev_version: Option<String> = None;
 
-    for (index, mf) in scan(path).into_iter().enumerate() {
+    let (scanned, truncated) = scan(path);
+    if truncated {
+        return MigrationReport {
+            dir: dir.to_string(),
+            migrations: vec![],
+            drift: None,
+            error: Some(format!(
+                "migration scan was too broad. Choose a narrower folder (max {MAX_SQL_FILES} SQL files, depth {MAX_SCAN_DEPTH})."
+            )),
+            tracker: tracker.map(|a| a.kind.as_str().to_string()),
+            tracker_table: tracker.map(|a| a.table.clone()),
+        };
+    }
+
+    for (index, mf) in scanned.into_iter().enumerate() {
         let sql = std::fs::read_to_string(&mf.up).unwrap_or_default();
         let mut changes = Vec::new();
         let mut parse_error = None;
@@ -750,7 +831,7 @@ pub fn detect_dir(project_dir: &str) -> Option<String> {
     ];
     let has_sql = |p: &Path| {
         let mut v = Vec::new();
-        collect_sql(p, &mut v);
+        let _ = collect_sql(p, &mut v);
         !v.is_empty()
     };
     for c in CANDIDATES {
@@ -759,8 +840,9 @@ pub fn detect_dir(project_dir: &str) -> Option<String> {
             return Some(p.to_string_lossy().into_owned());
         }
     }
-    // Fallback: the project root itself, if it holds .sql anywhere.
-    if has_sql(root) {
+    // Fallback: only a flat SQL-at-root layout. Recursing through the entire project
+    // root can walk node_modules/build outputs and make the migration screen feel hung.
+    if has_direct_sql(root) {
         return Some(project_dir.to_string());
     }
     None

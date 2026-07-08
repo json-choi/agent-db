@@ -32,7 +32,8 @@
 
 .grid th,
 .grid td {
-  padding: 5px 9px;
+  padding: var(--ds-space-1) var(--ds-space-2);
+  line-height: var(--ds-line-ui);
   text-align: left;
   white-space: nowrap;
 }
@@ -63,24 +64,24 @@ table.grid td {
 table.grid thead th {
   position: sticky;
   top: 0;
-  z-index: 2;
-  height: 30px;
+  z-index: var(--ds-z-raised);
+  height: var(--ds-control-md);
   background: var(--ds-surface-1);
 }
 table.grid thead tr.filter-row th {
-  top: 30px;
+  top: var(--ds-control-md);
   height: auto;
-  padding: 3px 5px;
+  padding: var(--ds-space-1);
 }
 /* Top-left corner + sticky rownum column sit above the rest. */
 table.grid thead th.rownum {
   left: 0;
-  z-index: 3;
+  z-index: calc(var(--ds-z-raised) + 1);
 }
 table.grid tbody td.rownum {
   position: sticky;
   left: 0;
-  z-index: 1;
+  z-index: var(--ds-z-base);
   background: var(--ds-surface-1);
 }
 
@@ -88,7 +89,7 @@ table.grid tbody td.rownum {
    contain-intrinsic-size reserves each row's height so the scrollbar stays stable. */
 table.grid tbody tr {
   content-visibility: auto;
-  contain-intrinsic-size: 0 27px;
+  contain-intrinsic-size: 0 var(--ds-control-md);
 }
 
 /* Zebra / hover / selected — later rule wins at equal specificity, so order matters. */
@@ -127,7 +128,7 @@ table.grid tbody td.cell-sel {
 }
 .grid-scroll::-webkit-scrollbar-thumb {
   background: var(--ds-text-muted);
-  border-radius: 999px;
+  border-radius: var(--ds-radius-pill);
   border: 3px solid transparent;
   background-clip: padding-box;
 }
@@ -146,10 +147,10 @@ table.grid tbody td.cell-sel {
   position: absolute;
   top: 0;
   right: 0;
-  width: 7px;
+  width: var(--ds-space-2);
   height: 100%;
   cursor: col-resize;
-  z-index: 4;
+  z-index: var(--ds-z-sticky);
 }
 .col-resizer:hover,
 .col-resizer:active {
@@ -174,21 +175,22 @@ table.grid th.sortable:hover {
 }
 .sort-arrow {
   color: var(--ds-accent-text);
-  font-size: 10px;
+  font-size: var(--ds-font-size-2xs);
 }
 table.grid td.clickable {
   cursor: pointer;
 }
 .filter-input {
   width: 100%;
-  min-width: 70px;
+  min-width: 72px;
+  min-height: var(--ds-control-xs);
   box-sizing: border-box;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--ds-font-size-sm);
   font-weight: 400;
-  padding: 2px 5px;
+  padding: 0 var(--ds-space-1);
   border: 1px solid var(--ds-border-subtle);
-  border-radius: 4px;
+  border-radius: var(--ds-radius-xs);
   background: var(--ds-surface-0);
   color: var(--ds-text);
 }
@@ -198,7 +200,7 @@ table.grid td.clickable {
   display: flex;
   flex: 1;
   min-height: 0;
-  gap: 10px;
+  gap: var(--ds-space-3);
 }
 .table-data-body .grid-scroll {
   flex: 1;
@@ -207,9 +209,9 @@ table.grid td.clickable {
 .grid-toolbar {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--ds-space-2);
   flex-wrap: wrap;
-  margin-bottom: 8px;
+  margin-bottom: var(--ds-space-2);
 }
 .grid-toolbar .tb-sep {
   width: 1px;
@@ -229,13 +231,13 @@ table.grid td.clickable {
 }
 .toolbar-menu-panel {
   position: absolute;
-  z-index: 6;
+  z-index: var(--ds-z-sticky);
   top: calc(100% + 6px);
   left: 0;
-  min-width: 150px;
+  min-width: 152px;
   display: grid;
-  gap: 6px;
-  padding: 8px;
+  gap: var(--ds-space-2);
+  padding: var(--ds-space-2);
   border: 1px solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-sm);
   background: var(--ds-surface-0);
@@ -246,14 +248,14 @@ table.grid td.clickable {
 }
 
 .grid-panel {
-  width: clamp(360px, 34vw, 520px);
-  max-width: 46%;
+  width: clamp(320px, 32vw, 480px);
+  max-width: 44%;
   flex-shrink: 0;
   overflow: auto;
   border: 1px solid var(--ds-border-subtle);
-  border-radius: 8px;
+  border-radius: var(--ds-radius-md);
   background: var(--ds-surface-0);
-  padding: 10px;
+  padding: var(--ds-space-3);
 }
 .grid-panel .approval {
   margin-top: 0;
@@ -266,23 +268,23 @@ table.grid td.clickable {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 8px;
+  gap: var(--ds-space-2);
+  margin-bottom: var(--ds-space-2);
 }
 .panel-head-actions {
   display: flex;
-  gap: 6px;
+  gap: var(--ds-space-2);
 }
 .cell-body {
   margin: 0;
   white-space: pre-wrap;
   word-break: break-word;
-  font-size: 12px;
+  font-size: var(--ds-font-size-sm);
   max-height: 60vh;
   overflow: auto;
 }
 .cell-body.json {
-  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-family: var(--ds-font-mono);
 }
 
 /* Row editor */
@@ -290,7 +292,7 @@ table.grid td.clickable {
   min-width: 0;
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: var(--ds-space-2);
 }
 .row-editor-title strong,
 .row-field > label {
@@ -299,14 +301,14 @@ table.grid td.clickable {
 .row-fields {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin-bottom: 10px;
+  gap: var(--ds-space-2);
+  margin-bottom: var(--ds-space-3);
 }
 .row-field > label {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
+  gap: var(--ds-space-2);
+  font-size: var(--ds-font-size-sm);
   margin-bottom: 3px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -314,19 +316,19 @@ table.grid td.clickable {
 }
 .row-field.changed {
   border-left: 2px solid var(--ds-accent);
-  padding-left: 8px;
+  padding-left: var(--ds-space-2);
 }
 .changed-badge {
-  font-size: 9px;
+  font-size: var(--ds-font-size-2xs);
   font-weight: 700;
   color: var(--ds-accent-text);
   background: var(--ds-accent-soft);
-  border-radius: 4px;
+  border-radius: var(--ds-radius-xs);
   padding: 1px 4px;
   text-transform: uppercase;
 }
 .pk-badge {
-  font-size: 9px;
+  font-size: var(--ds-font-size-2xs);
   font-weight: 700;
   color: var(--ds-accent-text);
   border: 1px solid var(--ds-accent);
@@ -336,16 +338,16 @@ table.grid td.clickable {
 .row-field-input {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--ds-space-2);
 }
 .row-field-input input[type="text"],
 .row-field-input input[type="number"] {
   flex: 1;
   min-width: 0;
   font: inherit;
-  padding: 4px 7px;
+  padding: var(--ds-space-1) var(--ds-space-2);
   border: 1px solid var(--ds-border-subtle);
-  border-radius: 6px;
+  border-radius: var(--ds-radius-sm);
   background: var(--ds-surface-0);
   color: var(--ds-text);
 }
@@ -354,8 +356,8 @@ table.grid td.clickable {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: var(--ds-control-md);
+  height: var(--ds-control-md);
   border: 1px solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-sm);
   color: var(--ds-text-muted);
@@ -384,14 +386,14 @@ table.grid td.clickable {
 .row-editor-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--ds-space-2);
   flex-wrap: wrap;
   position: sticky;
-  bottom: -10px;
+  bottom: calc(var(--ds-space-3) * -1);
   background: var(--ds-surface-0);
   border-top: 1px solid var(--ds-border-subtle);
-  margin: 8px -10px -10px;
-  padding: 10px;
+  margin: var(--ds-space-2) calc(var(--ds-space-3) * -1) calc(var(--ds-space-3) * -1);
+  padding: var(--ds-space-3);
 }
 
 @media (max-width: 920px) {

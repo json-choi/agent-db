@@ -2,29 +2,29 @@
 
 /* App updater */
 .updates {
-  max-width: 760px;
+  max-width: 720px;
 }
 .updates-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 14px;
+  gap: var(--ds-space-4);
+  margin-bottom: var(--ds-space-3);
 }
 .updates-head p {
-  margin-top: 4px;
+  margin-top: var(--ds-space-1);
 }
 .update-card {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--ds-space-3);
 }
 .update-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  min-height: 28px;
+  gap: var(--ds-space-4);
+  min-height: var(--ds-control-md);
 }
 .update-state {
   color: var(--ds-text-muted);
@@ -38,8 +38,8 @@
 }
 .update-progress {
   display: grid;
-  gap: 6px;
-  margin: 4px 0;
+  gap: var(--ds-space-2);
+  margin: var(--ds-space-1) 0;
 }
 .bar {
   width: 100%;
@@ -59,7 +59,7 @@
 }
 .release-notes {
   border-top: 1px solid var(--ds-border-subtle);
-  padding-top: 10px;
+  padding-top: var(--ds-space-3);
 }
 .release-notes summary {
   cursor: pointer;
@@ -67,8 +67,7 @@
 }
 .release-notes pre {
   white-space: pre-wrap;
-  margin: 8px 0 0;
-  font-size: 12px;
+  margin: var(--ds-space-2) 0 0;
+  font-size: var(--ds-font-size-sm);
   color: var(--ds-text);
 }
-

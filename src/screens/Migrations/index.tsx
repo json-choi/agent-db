@@ -18,6 +18,17 @@ import { Icon } from "../../components/Icon";
 import "./migrations.css";
 
 const keyFor = (id: string) => `dopedb.migrationsDir.${id}`;
+const ANALYZE_TIMEOUT_MS = 12_000;
+const DETECT_TIMEOUT_MS = 5_000;
+const WATCH_TIMEOUT_MS = 3_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: number | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = window.setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => window.clearTimeout(timer));
+}
 
 // Stored override remembers which projectDir it was derived from, so editing the
 // connection's projectDir re-triggers detection instead of being short-circuited forever.
@@ -56,6 +67,7 @@ export default function Migrations({
   const [actionErr, setActionErr] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const dirRef = useRef("");
+  const analyzeSeq = useRef(0);
 
   const persist = useCallback(() => {
     if (!dirRef.current) return;
@@ -67,18 +79,30 @@ export default function Migrations({
 
   const analyze = useCallback(
     async (d: string) => {
-      if (!d.trim()) return;
+      if (!d.trim()) return false;
+      const seq = ++analyzeSeq.current;
       setBusy(true);
       setErr(null);
       try {
-        const r = await analyzeMigrations(d, connection.id);
+        const r = await withTimeout(
+          analyzeMigrations(d, connection.id),
+          ANALYZE_TIMEOUT_MS,
+          "Migration analysis timed out. Choose the actual migrations folder instead of a broad project folder.",
+        );
+        if (seq !== analyzeSeq.current) return false;
         setReport(r);
         if (r.error) setErr(r.error);
         else persist(); // only remember a folder that actually analyzed
+        return !r.error;
       } catch (e) {
-        setErr(errMessage(e));
+        if (seq === analyzeSeq.current) {
+          const msg = errMessage(e);
+          setErr(msg);
+          if (/timed out/i.test(msg)) localStorage.removeItem(keyFor(connection.id));
+        }
+        return false;
       } finally {
-        setBusy(false);
+        if (seq === analyzeSeq.current) setBusy(false);
       }
     },
     [connection.id, persist],
@@ -90,9 +114,14 @@ export default function Migrations({
       if (!t) return;
       setDir(t);
       dirRef.current = t;
-      await analyze(t);
+      const analyzed = await analyze(t);
+      if (!analyzed) return;
       try {
-        await startMigrationWatch(t);
+        await withTimeout(
+          startMigrationWatch(t),
+          WATCH_TIMEOUT_MS,
+          "Migration folder watch timed out.",
+        );
         setWatchErr(null);
       } catch (e) {
         setWatchErr(errMessage(e)); // surface instead of swallowing
@@ -116,14 +145,21 @@ export default function Migrations({
     setDir("");
     dirRef.current = "";
     if (connection.projectDir) {
-      void detectMigrationsDir(connection.projectDir)
+      void withTimeout(
+        detectMigrationsDir(connection.projectDir),
+        DETECT_TIMEOUT_MS,
+        "Migration folder auto-detect timed out. Choose the folder manually.",
+      )
         .then((found) => {
           const target = found ?? connection.projectDir ?? "";
           setDir(target);
           dirRef.current = target;
           if (found) void run(found);
         })
-        .catch(() => setDir(connection.projectDir ?? ""));
+        .catch((e) => {
+          setErr(errMessage(e));
+          setDir(connection.projectDir ?? "");
+        });
     }
   }, [connection.id, connection.projectDir, run]);
 

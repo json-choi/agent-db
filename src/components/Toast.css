@@ -1,25 +1,25 @@
 .toast-wrap {
   position: fixed;
-  bottom: 16px;
-  right: 16px;
+  right: var(--ds-space-4);
+  bottom: var(--ds-space-4);
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  z-index: 1000;
+  gap: var(--ds-space-2);
+  z-index: var(--ds-z-toast);
   pointer-events: none;
 }
 
 .toast {
   min-width: 180px;
   max-width: 360px;
-  padding: 10px 14px;
-  border-radius: 8px;
+  padding: var(--ds-space-3) var(--ds-space-4);
+  border-radius: var(--ds-radius-md);
   background: var(--ds-surface-0);
   color: var(--ds-text);
   border: 1px solid var(--ds-border-subtle);
   border-left: 3px solid var(--ds-success);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
-  font-size: 13px;
+  box-shadow: var(--ds-shadow-popover);
+  font-size: var(--ds-font-size-ui);
   animation: toast-in 0.15s ease-out;
   pointer-events: auto; /* wrap is none; re-enable so click-to-dismiss works */
   cursor: pointer;

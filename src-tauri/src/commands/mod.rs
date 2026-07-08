@@ -9,6 +9,7 @@
 //! DB's own read-only session) remains the authoritative stop.
 
 use chrono::Utc;
+use std::time::Duration;
 use tauri::State;
 use uuid::Uuid;
 
@@ -756,19 +757,55 @@ pub async fn analyze_migrations(
     dir: String,
     connection_id: Option<Uuid>,
 ) -> AppResult<crate::migrations::MigrationReport> {
+    const LIVE_COMPARE_TIMEOUT: Duration = Duration::from_secs(2);
+    const LOCAL_ANALYZE_TIMEOUT: Duration = Duration::from_secs(6);
+
     let (catalog, tracker) = match connection_id {
         Some(id) => {
-            let catalog = load_catalog(&state, id).await.ok();
+            // Keep the local migration report responsive even when the live DB is
+            // slow or unreachable. Drift/tracker data is useful, but best-effort.
+            let catalog = match tokio::time::timeout(LIVE_COMPARE_TIMEOUT, load_catalog(&state, id)).await {
+                Ok(Ok(catalog)) => Some(catalog),
+                Ok(Err(_)) | Err(_) => None,
+            };
             // Probe the read-only pool for the ORM's applied-state table (best-effort).
-            let tracker = match get_live(&state, id).await {
-                Ok(live) => crate::migrations::applied::detect(live.ro()).await,
-                Err(_) => None,
+            let tracker = match tokio::time::timeout(LIVE_COMPARE_TIMEOUT, get_live(&state, id)).await {
+                Ok(Ok(live)) => tokio::time::timeout(
+                    LIVE_COMPARE_TIMEOUT,
+                    crate::migrations::applied::detect(live.ro()),
+                )
+                .await
+                .ok()
+                .flatten(),
+                Ok(Err(_)) | Err(_) => None,
             };
             (catalog, tracker)
         }
         None => (None, None),
     };
-    Ok(crate::migrations::analyze(&dir, catalog.as_ref(), tracker.as_ref()))
+    let analysis_dir = dir.clone();
+    match tokio::time::timeout(
+        LOCAL_ANALYZE_TIMEOUT,
+        tokio::task::spawn_blocking(move || {
+            crate::migrations::analyze(&analysis_dir, catalog.as_ref(), tracker.as_ref())
+        }),
+    )
+    .await
+    {
+        Ok(Ok(report)) => Ok(report),
+        Ok(Err(e)) => Err(AppError::Config(format!("migration analysis failed: {e}"))),
+        Err(_) => Ok(crate::migrations::MigrationReport {
+            dir,
+            migrations: vec![],
+            drift: None,
+            error: Some(
+                "Migration analysis timed out. Choose the actual migrations folder instead of a broad project folder."
+                    .into(),
+            ),
+            tracker: None,
+            tracker_table: None,
+        }),
+    }
 }
 
 /// Actually run a migration: re-analyze the folder fresh against the live tracker, pick

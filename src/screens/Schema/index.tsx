@@ -6,10 +6,10 @@ import { tableKey, tableLabel } from "../../lib/tableRef";
 import { useI18n } from "../../lib/i18n";
 import "./schema.css";
 
-const NODE_W = 280;
-const NODE_H = 172;
-const GAP_X = 56;
-const GAP_Y = 54;
+const NODE_W = 264;
+const NODE_H = 160;
+const GAP_X = 48;
+const GAP_Y = 48;
 
 type Relationship = {
   id: string;

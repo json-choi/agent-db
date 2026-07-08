@@ -22,7 +22,7 @@
   background-image: var(--ds-glass-sheen);
   border-right: 1px solid var(--ds-border-subtle);
   box-shadow:
-    inset -1px 0 0 rgba(255, 255, 255, 0.12),
+    inset -1px 0 0 var(--ds-border-subtle),
     var(--ds-glass-edge);
   display: flex;
   flex-direction: column;
@@ -32,7 +32,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 14px;
+  padding: var(--ds-space-2) var(--ds-space-3);
   font-weight: 600;
   border-bottom: 1px solid var(--ds-border-subtle);
   background: var(--ds-surface-1);
@@ -41,7 +41,7 @@
   -webkit-backdrop-filter: var(--ds-glass-filter-soft);
 }
 .empty {
-  padding: 12px;
+  padding: var(--ds-space-3);
 }
 
 /* Main */
@@ -58,7 +58,7 @@
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  padding: 12px 16px;
+  padding: var(--ds-space-2) var(--ds-space-3);
   border-bottom: 1px solid var(--ds-border-subtle);
   background: var(--ds-surface-elevated);
   background-image: var(--ds-glass-sheen);
@@ -71,10 +71,11 @@
 }
 /* #10: clickable read↔write indicator in the main head. */
 .write-toggle {
-  min-height: 22px;
+  max-width: 100%;
+  min-height: var(--ds-control-xs);
   display: inline-flex;
   align-items: center;
-  padding: 0 8px;
+  padding: 0 var(--ds-space-2);
   font-size: var(--ds-font-size-xs);
   font-weight: 650;
   border-radius: 999px;
@@ -82,6 +83,9 @@
   background: transparent;
   cursor: pointer;
   color: var(--ds-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .write-toggle:disabled {
   cursor: default;
@@ -101,27 +105,40 @@
   background: var(--ds-accent-soft);
 }
 .placeholder {
-  display: grid;
-  place-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--ds-space-2);
   height: 100%;
-  padding: 24px;
+  min-width: 0;
+  padding: var(--ds-pane-pad);
   text-align: center;
-  line-height: 1.45;
+  line-height: var(--ds-line-body);
   background: var(--ds-surface-1);
   background-image: var(--ds-glass-sheen);
   border-left: 1px solid var(--ds-border-subtle);
   box-shadow:
-    inset 1px 0 0 rgba(255, 255, 255, 0.08),
+    inset 1px 0 0 var(--ds-border-subtle),
     var(--ds-glass-edge);
   backdrop-filter: var(--ds-glass-filter);
   -webkit-backdrop-filter: var(--ds-glass-filter);
+}
+
+.placeholder > * {
+  max-width: min(520px, 100%);
+}
+
+.placeholder .error,
+.placeholder .muted {
+  overflow-wrap: anywhere;
 }
 
 /* Tabs */
 .tabs {
   display: flex;
   gap: 2px;
-  padding: var(--ds-space-2) var(--ds-space-3) 0;
+  padding: var(--ds-space-1) var(--ds-space-2) 0;
   border-bottom: 1px solid var(--ds-border-subtle);
   background: var(--ds-surface-1);
   background-image: var(--ds-glass-sheen);
@@ -133,16 +150,20 @@
   border: none;
   background: transparent;
   color: var(--ds-text-muted);
-  min-height: 32px;
-  padding: 0 var(--ds-space-3);
+  min-width: 0;
+  min-height: var(--ds-control-md);
+  padding: 0 var(--ds-space-2);
   cursor: pointer;
   font-size: var(--ds-font-size-ui);
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--ds-space-2);
   /* Reserve the active underline's space so switching tabs doesn't shift the row. */
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .tab:hover {
   color: var(--ds-text);
@@ -155,7 +176,7 @@
 .tabs .tab.agent-tab {
   margin-left: auto;
   border-left: 1px solid var(--ds-border-subtle);
-  padding-left: var(--ds-space-4);
+  padding-left: var(--ds-space-3);
 }
 /* Unseen-count pill next to the Agent tab label. */
 .tab-dot {
@@ -164,7 +185,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 10px;
+  font-size: var(--ds-font-size-2xs);
   font-weight: 600;
   background: var(--ds-accent);
   color: var(--ds-text-inverse);

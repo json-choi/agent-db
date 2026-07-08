@@ -47,9 +47,13 @@
 .table-data-head .table-pager {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--ds-space-2);
 }
-.table-pager .page-ind { font-size: 12px; white-space: nowrap; }
+
+.table-pager .page-ind {
+  font-size: var(--ds-font-size-sm);
+  white-space: nowrap;
+}
 /* Cap very wide cells with an ellipsis; the row still scrolls horizontally for many columns. */
 .grid td {
   max-width: 480px;

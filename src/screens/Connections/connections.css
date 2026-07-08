@@ -2,10 +2,10 @@
 .db-section {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
-  margin-top: 4px;
-  font-size: 11px;
+  gap: var(--ds-space-1);
+  padding: var(--ds-space-1) var(--ds-space-2);
+  margin-top: var(--ds-space-1);
+  font-size: var(--ds-font-size-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -23,10 +23,10 @@
   border: 1px solid var(--ds-border-subtle);
   background: transparent;
   color: var(--ds-text-muted);
-  font-size: 10px;
+  font-size: var(--ds-font-size-2xs);
   font-weight: 600;
   padding: 1px 6px;
-  border-radius: 4px;
+  border-radius: var(--ds-radius-xs);
   cursor: pointer;
   opacity: 0;
   transition: opacity 0.12s ease, color 0.12s ease, border-color 0.12s ease;
@@ -41,18 +41,18 @@
   border-color: var(--ds-accent-text);
 }
 .db-table.selected .ddl-btn {
-  color: rgba(255, 255, 255, 0.9);
-  border-color: rgba(255, 255, 255, 0.42);
+  color: var(--ds-text-on-accent-muted);
+  border-color: var(--ds-border-on-accent);
 }
 
 /* Environment chip on the connection row (staging/prod only; prod = danger). */
 .env-chip {
-  font-size: 10px;
+  font-size: var(--ds-font-size-2xs);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.03em;
   padding: 1px 6px;
-  border-radius: 4px;
+  border-radius: var(--ds-radius-xs);
   border: 1px solid var(--ds-warning);
   color: var(--ds-warning);
 }
@@ -66,36 +66,36 @@
 .ddl-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.4);
+  background: var(--ds-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 50;
+  z-index: var(--ds-z-modal);
 }
 .ddl-modal {
   background: var(--ds-surface-0);
   border: 1px solid var(--ds-border-subtle);
-  border-radius: 10px;
+  border-radius: var(--ds-radius-lg);
   box-shadow: var(--ds-shadow-panel);
-  width: min(720px, 90vw);
-  max-height: 80vh;
+  width: min(640px, 88vw);
+  max-height: 76vh;
   overflow: auto;
-  padding: 16px;
+  padding: var(--ds-space-4);
 }
 .ddl-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 10px;
+  margin-bottom: var(--ds-space-3);
 }
 .ddl-title {
   font-weight: 600;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 13px;
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-font-size-ui);
 }
 .ddl-actions {
   display: flex;
-  gap: 8px;
+  gap: var(--ds-space-2);
 }
 
 /* Database explorer — sidebar tree (DataGrip-style): connections expand to tables. */
@@ -112,13 +112,13 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 4px;
+  padding: var(--ds-space-1);
 }
 .db-conn {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
+  gap: var(--ds-space-2);
+  padding: var(--ds-space-2);
   border-radius: var(--ds-radius-sm);
   cursor: pointer;
   font-weight: 500;
@@ -133,7 +133,7 @@
   width: 12px;
   text-align: center;
   color: var(--ds-text-muted);
-  font-size: 10px;
+  font-size: var(--ds-font-size-2xs);
 }
 .db-conn-name {
   overflow: hidden;
@@ -142,24 +142,24 @@
 }
 .db-conn-engine {
   margin-left: auto;
-  font-size: 11px;
+  font-size: var(--ds-font-size-xs);
   flex-shrink: 0;
 }
 .db-tables {
   display: flex;
   flex-direction: column;
   gap: 1px;
-  padding: 4px 0 8px 14px;
+  padding: var(--ds-space-1) 0 var(--ds-space-2) var(--ds-space-4);
 }
 .db-context-strip {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: var(--ds-space-1);
-  padding: 4px 6px 6px;
+  padding: var(--ds-space-1) var(--ds-space-2) var(--ds-space-2);
 }
 .db-context-strip .ds-filter-token {
-  min-height: 22px;
+  min-height: var(--ds-control-xs);
   padding: 0 6px;
   font-size: var(--ds-font-size-xs);
 }
@@ -175,7 +175,7 @@
 }
 .view-options-panel {
   position: absolute;
-  z-index: 8;
+  z-index: var(--ds-z-popover);
   top: calc(100% + 4px);
   left: 0;
   min-width: 156px;
@@ -199,12 +199,12 @@
 .db-table {
   display: flex;
   align-items: center;
-  gap: 6px;
-  min-height: 25px;
-  padding: 4px 6px 4px 8px;
+  gap: var(--ds-space-2);
+  min-height: var(--ds-control-sm);
+  padding: var(--ds-space-1) var(--ds-space-2);
   border-radius: var(--ds-radius-sm);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--ds-font-size-ui);
 }
 .db-table:hover {
   background: var(--ds-hover);
@@ -214,24 +214,24 @@
   color: var(--ds-text-inverse);
 }
 .db-table.selected .muted {
-  color: rgba(255, 255, 255, 0.8);
+  color: var(--ds-text-on-accent-muted);
 }
 .db-table-ico {
   color: var(--ds-text-muted);
-  font-size: 11px;
+  font-size: var(--ds-font-size-xs);
   flex-shrink: 0;
 }
 .db-table.selected .db-table-ico {
-  color: rgba(255, 255, 255, 0.85);
+  color: var(--ds-text-on-accent-muted);
 }
 .small-pad {
-  padding: 4px 8px;
+  padding: var(--ds-space-1) var(--ds-space-2);
 }
 
 /* Shared table-row widgets (filter box, name/count). */
 .table-filter {
   width: 100%;
-  padding: 5px 8px;
+  padding: var(--ds-space-1) var(--ds-space-2);
   border: 1px solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-sm);
   background: var(--ds-surface-1);
@@ -246,7 +246,7 @@
   white-space: nowrap;
 }
 .tbl-count {
-  font-size: 11px;
+  font-size: var(--ds-font-size-xs);
   font-variant-numeric: tabular-nums;
   opacity: 0.55;
   flex-shrink: 0;
@@ -262,7 +262,7 @@
   background: transparent;
   cursor: pointer;
   color: var(--ds-text-muted);
-  font-size: 13px;
+  font-size: var(--ds-font-size-ui);
   line-height: 1;
   min-width: 24px;
   min-height: 24px;
@@ -279,21 +279,60 @@
 }
 
 /* Sidebar footer (Settings entry) */
-.sidebar-foot { border-top: 1px solid var(--ds-border-subtle); padding: 6px; }
-.foot-btn {
-  width: 100%; display: flex; align-items: center; gap: 8px;
-  border: none; background: transparent; color: var(--ds-text);
-  padding: 8px 10px; border-radius: var(--ds-radius-sm); cursor: pointer; font: inherit; font-size: 13px;
+.sidebar-foot {
+  padding: var(--ds-space-2);
+  border-top: 1px solid var(--ds-border-subtle);
 }
-.foot-btn:hover { background: var(--ds-hover); }
-.foot-btn .gear { color: var(--ds-text-muted); }
+
+.foot-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-2);
+  padding: var(--ds-space-2) var(--ds-space-3);
+  border: none;
+  border-radius: var(--ds-radius-sm);
+  background: transparent;
+  color: var(--ds-text);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--ds-font-size-ui);
+}
+
+.foot-btn:hover {
+  background: var(--ds-hover);
+}
+
+.foot-btn .gear {
+  color: var(--ds-text-muted);
+}
 
 /* Sidebar "Migrations" nav row (under an expanded connection) */
 .db-nav {
-  display: flex; align-items: center; gap: 6px;
-  padding: 5px 8px; border-radius: var(--ds-radius-sm); cursor: pointer; font-size: 13px; margin-bottom: 2px;
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-2);
+  margin-bottom: 2px;
+  padding: var(--ds-space-1) var(--ds-space-2);
+  border-radius: var(--ds-radius-sm);
+  cursor: pointer;
+  font-size: var(--ds-font-size-ui);
 }
-.db-nav:hover { background: var(--ds-hover); }
-.db-nav.active { background: var(--ds-accent); color: var(--ds-text-inverse); }
-.db-nav-ico { color: var(--ds-text-muted); font-size: 11px; }
-.db-nav.active .db-nav-ico { color: rgba(255, 255, 255, 0.85); }
+
+.db-nav:hover {
+  background: var(--ds-hover);
+}
+
+.db-nav.active {
+  background: var(--ds-accent);
+  color: var(--ds-text-inverse);
+}
+
+.db-nav-ico {
+  color: var(--ds-text-muted);
+  font-size: var(--ds-font-size-xs);
+}
+
+.db-nav.active .db-nav-ico {
+  color: var(--ds-text-on-accent-muted);
+}

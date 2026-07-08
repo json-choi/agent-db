@@ -32,6 +32,20 @@
 
 예전 전역 변수명인 `--bg`, `--panel`, `--accent`, `--risk-low` 등은 사용하지 않는다. 모든 CSS는 `--ds-*` 토큰만 사용한다. 새 스타일을 추가할 때 이전 변수명을 되살리지 말고 필요한 의미가 없으면 `tokens.css`에 정식 `--ds-*` 토큰을 추가한다.
 
+Vibe coding smell을 줄이기 위해 새 UI에서 아래 패턴은 피한다.
+
+- 화면 CSS에 직접 hex/rgb/rgba 색상, z-index 숫자, 임의 box-shadow를 쓰지 않는다.
+- `13px`, `8px`, `12px` 같은 값은 먼저 spacing/type/radius 토큰으로 표현한다.
+- 카드, 패널, 코드블록, empty state, toolbar는 기존 `ds-*` 클래스나 같은 토큰 구조를 재사용한다.
+- 한 줄에 여러 선언을 몰아넣지 않는다. 반복 수정이 필요한 화면 CSS는 읽기 쉬운 블록으로 쓴다.
+
+## 미니멀 밀도와 오버플로우
+
+- 기본 화면 패딩은 `--ds-pane-pad`를 사용하고, 반복 카드/패널은 `--ds-space-3` 중심으로 둔다.
+- 버튼, 탭, 배지, 헤더 제목, 테이블 셀처럼 폭이 줄어드는 요소는 `min-width: 0`, `overflow: hidden`, `text-overflow: ellipsis`를 갖게 한다.
+- 사용자가 읽어야 하는 긴 오류/설명 문구는 `overflow-wrap: anywhere` 또는 `pre-wrap`처럼 의도적으로 줄바꿈한다.
+- 새 고정 치수는 가능한 4px 그리드에 맞춘다. 예외가 필요하면 해당 화면 CSS에 이유가 드러나야 한다.
+
 ## 컬러 팔레트
 
 아이콘에서 추출한 녹색을 primary hue로 삼고, chromatic color는 세 가지로 제한한다. 중립, 텍스트, border, glass alpha 값은 제외한다.

@@ -85,7 +85,7 @@ h3,
 
 .app > * {
   position: relative;
-  z-index: 1;
+  z-index: var(--ds-z-base);
 }
 
 .sidebar {
@@ -159,6 +159,13 @@ h3,
   font-size: var(--ds-font-size-ui);
 }
 
+.empty,
+.ds-empty {
+  color: var(--ds-text-muted);
+  font-size: var(--ds-font-size-ui);
+  line-height: var(--ds-line-body);
+}
+
 .label {
   font-size: var(--ds-font-size-sm);
 }
@@ -166,19 +173,53 @@ h3,
 .ds-code,
 .result-sql,
 .tables code,
-.audit-sql {
+.audit-sql,
+.mcp-field pre,
+.mcp-token code,
+.mig-script,
+.mig-down pre,
+.mig-ver,
+.chg,
+.history-table code,
+.schema-col-type,
+.context-sql,
+.act-ts,
+.act-detail {
   font-family: var(--ds-font-mono);
   font-size: var(--ds-font-size-sm);
 }
 
+.ds-code-block {
+  overflow: auto;
+  border: 1px solid var(--ds-border-subtle);
+  border-radius: var(--ds-radius-sm);
+  background: var(--ds-surface-1);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-font-size-sm);
+  line-height: var(--ds-line-body);
+}
+
+.ds-truncate {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app :where(button, input, select, textarea, summary, code, strong, span) {
+  min-width: 0;
+}
+
 .btn,
 .ds-button {
+  max-width: 100%;
+  min-width: 0;
   min-height: var(--ds-control-md);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  padding: 0 10px;
+  gap: var(--ds-space-2);
+  padding: 0 var(--ds-space-3);
   border: 1px solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-sm);
   background: var(--ds-surface-0);
@@ -188,7 +229,9 @@ h3,
   font: inherit;
   font-size: var(--ds-font-size-ui);
   line-height: 1;
+  overflow: hidden;
   text-decoration: none;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -276,11 +319,13 @@ h3,
 .badge,
 .ds-badge,
 .ds-status {
+  max-width: 100%;
+  min-width: 0;
   min-height: 20px;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 0 8px;
+  gap: var(--ds-space-1);
+  padding: 0 var(--ds-space-2);
   border: 1px solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-pill);
   background: transparent;
@@ -288,6 +333,9 @@ h3,
   font-size: var(--ds-font-size-xs);
   font-weight: 650;
   line-height: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ds-badge-strong,
@@ -325,23 +373,27 @@ h3,
 }
 
 .ds-context-badge {
-  min-height: 22px;
+  min-width: 0;
+  min-height: var(--ds-control-xs);
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  max-width: 280px;
-  padding: 0 9px;
+  gap: var(--ds-space-2);
+  max-width: 240px;
+  padding: 0 var(--ds-space-2);
   border-radius: var(--ds-radius-pill);
   background: var(--ds-accent-soft);
   color: var(--ds-accent-text);
   font-size: var(--ds-font-size-xs);
   font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ds-context-badge::before {
   content: "";
-  width: 7px;
-  height: 7px;
+  width: var(--ds-space-2);
+  height: var(--ds-space-2);
   border-radius: var(--ds-radius-pill);
   background: currentColor;
   flex-shrink: 0;
@@ -382,7 +434,7 @@ h3,
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--ds-space-2);
   min-width: 0;
   color: var(--ds-text-muted);
   font-size: var(--ds-font-size-sm);
@@ -455,7 +507,7 @@ h3,
 .ds-ledger-card .icon,
 .ds-policy-card .icon {
   color: var(--ds-accent-text);
-  font-size: 17px;
+  font-size: var(--ds-font-size-title);
 }
 
 .ds-ledger-card strong,
@@ -528,16 +580,21 @@ h3,
 }
 
 .ds-filter-token {
+  max-width: 100%;
+  min-width: 0;
   min-height: var(--ds-control-sm);
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 0 8px;
+  gap: var(--ds-space-2);
+  padding: 0 var(--ds-space-2);
   border: 1px solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-sm);
   background: var(--ds-surface-0);
   color: var(--ds-text-muted);
   font-size: var(--ds-font-size-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ds-filter-token strong {
@@ -563,13 +620,13 @@ h3,
 .form textarea,
 .ds-input {
   min-height: var(--ds-control-md);
-  padding: 0 9px;
+  padding: 0 var(--ds-space-2);
 }
 
 .form textarea,
 textarea.ds-input {
-  min-height: 88px;
-  padding-top: 7px;
+  min-height: 80px;
+  padding-top: var(--ds-space-2);
   line-height: var(--ds-line-body);
 }
 
@@ -591,6 +648,9 @@ textarea.ds-input {
 .tab {
   min-height: 32px;
   color: var(--ds-text-muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .tab:hover {
@@ -640,8 +700,8 @@ textarea.ds-input {
   grid-template-columns: 24px minmax(0, 1fr);
   align-items: center;
   gap: var(--ds-space-2);
-  min-height: 68px;
-  padding: 10px;
+  min-height: 64px;
+  padding: var(--ds-space-3);
   border: 1px solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-md);
   background: var(--ds-surface-0);
@@ -649,11 +709,11 @@ textarea.ds-input {
 }
 
 .ds-object-row {
-  min-height: 26px;
+  min-height: var(--ds-control-sm);
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
+  gap: var(--ds-space-2);
+  padding: var(--ds-space-1) var(--ds-space-2);
   border-radius: var(--ds-radius-sm);
   color: var(--ds-text);
   cursor: pointer;
@@ -753,7 +813,7 @@ textarea.ds-input {
 }
 
 .ddl-overlay {
-  background: rgba(5, 9, 13, 0.32);
+  background: var(--ds-overlay);
   backdrop-filter: var(--ds-glass-filter-soft);
   -webkit-backdrop-filter: var(--ds-glass-filter-soft);
 }
@@ -764,7 +824,7 @@ textarea.ds-input {
 }
 
 .form {
-  max-width: 560px;
+  max-width: 520px;
   display: flex;
   flex-direction: column;
   gap: var(--ds-space-3);
@@ -796,7 +856,7 @@ textarea.ds-input {
 }
 
 .form .port {
-  width: 90px;
+  width: 88px;
 }
 
 .form-msg {

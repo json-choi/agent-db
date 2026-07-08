@@ -9,18 +9,18 @@
 }
 
 .restatement p {
-  margin: 4px 0 0;
-  line-height: 1.45;
+  margin: var(--ds-space-1) 0 0;
+  line-height: var(--ds-line-body);
 }
 
 .review-status {
-  padding: 9px 10px;
+  padding: var(--ds-space-2);
   border: 1px solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-sm);
   background: var(--ds-surface-1);
   color: var(--ds-text-muted);
   font-size: var(--ds-font-size-ui);
-  line-height: 1.4;
+  line-height: var(--ds-line-ui);
 }
 
 .review-status.blocked {
@@ -44,7 +44,7 @@
 .generated-sql summary,
 .safety-details > summary {
   cursor: pointer;
-  padding: 8px 10px;
+  padding: var(--ds-space-2) var(--ds-space-3);
   color: var(--ds-text-muted);
   font-size: var(--ds-font-size-ui);
 }
@@ -54,11 +54,11 @@
 }
 
 .safety-details > :not(summary) {
-  margin: 0 10px 10px;
+  margin: 0 var(--ds-space-3) var(--ds-space-3);
 }
 
 .tables code {
-  margin-right: 6px;
+  margin-right: var(--ds-space-2);
   padding: 1px 6px;
   border-radius: var(--ds-radius-sm);
   background: var(--ds-hover-strong);
@@ -68,13 +68,13 @@
 
 .plan summary {
   cursor: pointer;
-  padding: 4px 0;
+  padding: var(--ds-space-1) 0;
   color: var(--ds-text-muted);
   font-size: var(--ds-font-size-ui);
 }
 
 .plan pre {
-  max-height: 220px;
+  max-height: 216px;
   overflow: auto;
   padding: var(--ds-space-2);
   border: 1px solid var(--ds-border-subtle);
