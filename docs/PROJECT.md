@@ -154,6 +154,15 @@ User-facing bypass path:
 3. Choose Open Anyway for dopedb.
 4. Confirm Open.
 
+Terminal alternative after copying the app to Applications:
+
+```sh
+sudo xattr -dr com.apple.quarantine /Applications/dopedb.app
+open /Applications/dopedb.app
+```
+
+Only document this command with the release-origin warning. It removes the macOS quarantine flag from the downloaded app and should not be presented as a general bypass for untrusted binaries.
+
 ## Deferred Work
 
 - Developer ID signing and notarization

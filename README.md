@@ -56,6 +56,15 @@ git push origin app-v0.1.1
 
 Apple Developer ID로 서명/공증하기 전에는 macOS가 개발자 확인 경고를 표시할 수 있습니다. GitHub Releases에서 받은 파일인지 확인한 뒤 System Settings -> Privacy & Security -> Open Anyway로 실행을 허용할 수 있습니다.
 
+터미널로 quarantine 플래그를 해제해야 한다면, dopedb를 Applications 폴더에 복사한 뒤 아래 명령을 실행하세요.
+
+```sh
+sudo xattr -dr com.apple.quarantine /Applications/dopedb.app
+open /Applications/dopedb.app
+```
+
+`/Applications/dopedb.app`이 아니라면 실제 앱 경로로 바꾸세요. 이 명령은 macOS가 다운로드 파일에 붙인 격리 플래그를 제거하므로, 공식 GitHub Release에서 받은 파일에만 사용하세요.
+
 ## 라이선스
 
 MIT License. [LICENSE](./LICENSE)를 참고하세요.

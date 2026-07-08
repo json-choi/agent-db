@@ -247,6 +247,10 @@ dopedb safety:
                 System Settings, Privacy & Security, Open Anyway after confirming the file
                 came from GitHub Releases.
               </p>
+              <p>
+                Terminal alternative after copying to Applications:{" "}
+                <code>sudo xattr -dr com.apple.quarantine /Applications/dopedb.app</code>
+              </p>
             </div>
           </div>
         </div>

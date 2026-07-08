@@ -56,6 +56,15 @@ The release workflow requires the `TAURI_SIGNING_PRIVATE_KEY` repository secret.
 
 Until the app is signed and notarized with an Apple Developer ID, macOS can show an unidentified developer warning. After confirming the file came from GitHub Releases, open System Settings -> Privacy & Security -> Open Anyway.
 
+If you need to remove the quarantine flag from Terminal, copy dopedb to Applications first, then run:
+
+```sh
+sudo xattr -dr com.apple.quarantine /Applications/dopedb.app
+open /Applications/dopedb.app
+```
+
+Replace `/Applications/dopedb.app` if the app lives somewhere else. This command removes the macOS quarantine flag from the downloaded app, so only use it for files you verified came from the official GitHub Release.
+
 ## License
 
 MIT License. See [LICENSE](./LICENSE).
