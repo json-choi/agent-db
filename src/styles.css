@@ -57,6 +57,20 @@
 .main-policy {
   flex-shrink: 0;
 }
+.app-title-line {
+  flex-wrap: nowrap;
+}
+.app-title-line .env-chip {
+  flex-shrink: 0;
+}
+.app-title-meta {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ds-text-muted);
+  font-size: var(--ds-font-size-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .agent-jump {
   color: var(--ds-accent-text);
   border-color: color-mix(in srgb, var(--ds-accent) 45%, var(--ds-border-subtle));
@@ -90,6 +104,145 @@
 .placeholder .error,
 .placeholder .muted {
   overflow-wrap: anywhere;
+}
+
+.connection-picker {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-5);
+  max-width: 1120px;
+}
+.connection-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ds-space-3);
+}
+.connection-picker-head h2 {
+  margin: 0;
+  font-size: var(--ds-font-size-heading);
+  line-height: var(--ds-line-tight);
+}
+.connection-picker-head .btn {
+  flex-shrink: 0;
+}
+.connection-picker-section {
+  display: grid;
+  gap: var(--ds-space-3);
+}
+.connection-picker-label {
+  color: var(--ds-text-muted);
+  font-size: var(--ds-font-size-xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.connection-group-section {
+  display: grid;
+  gap: var(--ds-space-2);
+  padding-left: var(--ds-space-3);
+  border-left: var(--ds-border-width-strong) solid var(--ds-accent-text);
+}
+.connection-group-head {
+  min-height: var(--ds-control-sm);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ds-space-3);
+}
+.connection-group-title {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-2);
+  color: var(--ds-text);
+  font-size: var(--ds-font-size-title);
+  font-weight: 700;
+}
+.connection-group-title > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.connection-group-mark {
+  width: 9px;
+  height: 9px;
+  flex-shrink: 0;
+  border-radius: var(--ds-radius-pill);
+  border: var(--ds-border-width-strong) solid var(--ds-accent-text);
+}
+.connection-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--ds-space-3);
+}
+.connection-card {
+  min-width: 0;
+  min-height: 92px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: var(--ds-space-3);
+  padding: var(--ds-space-3);
+  border: var(--ds-border-width) solid var(--ds-border-subtle);
+  border-radius: var(--ds-radius-md);
+  background: var(--ds-surface-elevated);
+  color: var(--ds-text);
+  box-shadow: var(--ds-shadow-panel), var(--ds-glass-edge);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease,
+    box-shadow 0.12s ease,
+    transform 0.12s ease;
+}
+.connection-card:hover {
+  border-color: var(--ds-border-strong);
+  background: color-mix(in srgb, var(--ds-surface-elevated) 84%, var(--ds-accent-soft));
+  transform: translateY(calc(var(--ds-optical-offset-xs) * -1));
+}
+.connection-card:focus-visible {
+  outline: none;
+  box-shadow: var(--ds-focus-ring), var(--ds-shadow-panel), var(--ds-glass-edge);
+}
+.connection-card-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-2);
+}
+.connection-card-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--ds-font-size-body);
+  font-weight: 700;
+}
+.connection-card .env-chip {
+  margin-left: auto;
+}
+.connection-card-meta {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-2);
+  color: var(--ds-text-muted);
+  font-size: var(--ds-font-size-sm);
+}
+.connection-card-meta > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.connection-card-meta .ds-meta-dot {
+  flex-shrink: 0;
 }
 
 /* Tabs */
@@ -216,4 +369,19 @@
   .editor-pane {
     padding: var(--ds-space-3);
   }
+
+  .connection-picker-head {
+    align-items: flex-start;
+  }
+
+  .connection-card-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .connection-group-head {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: var(--ds-space-1);
+  }
+
 }

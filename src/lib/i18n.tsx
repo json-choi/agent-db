@@ -13,7 +13,6 @@ const STORAGE_KEY = "dopedb.lang";
 
 const messages = {
   en: {
-    "agent.activity": "Activity",
     "agent.audit": "Audit",
     "agent.auditBlockedWrites": "MCP writes are blocked today",
     "agent.auditBlockedWritesBody":
@@ -27,8 +26,6 @@ const messages = {
     "agent.auditReadOnlyBody":
       "run_query executes through the read-only database session; writes are rejected even if an agent asks for one.",
     "agent.context": "Context",
-    "agent.contextDetail": "Event detail",
-    "agent.contextEmpty": "No MCP context has been exposed in this session yet.",
     "agent.contextExposed": "Context exposed to the agent",
     "agent.contextHelp":
       "This ledger shows what DopeDB exposed through MCP: tools called, SQL, tables, columns, row counts, and errors. It does not include hidden reasoning from the external agent.",
@@ -43,23 +40,9 @@ const messages = {
     "agent.contextSummaryRunQuery":
       "SQL plus result metadata: row count, columns, truncation flag, and duration.",
     "agent.contextSummaryRunQueryNoSql": "Read query result metadata and any returned preview rows.",
-    "agent.empty":
-      "No agent calls yet. Connect an AI agent over MCP to see its queries here live.",
     "agent.emptyBody":
       "Tool calls, SQL, results, and blocked errors will appear here as they happen.",
     "agent.emptyCards": "Agent workspace states",
-    "agent.emptyContextBody":
-      "Connections, tables, columns, row counts, SQL, and errors are visible in the ledger.",
-    "agent.emptyContextTitle": "Context",
-    "agent.emptyCta": "Set up MCP server",
-    "agent.emptyGuardBody":
-      "MCP writes are blocked today, and manual writes still pass through approval and audit.",
-    "agent.emptyGuardTitle": "Guardrails",
-    "agent.emptyKicker": "Safe agent access",
-    "agent.emptyResultBody":
-      "Query tables and single metrics appear in-app so humans can inspect and export them.",
-    "agent.emptyResultTitle": "Results",
-    "agent.emptyTitle": "No agent activity yet.",
     "agent.errorCount": "{count} errors",
     "agent.dataAccess": "Data access",
     "agent.dataAccessBody":
@@ -68,7 +51,6 @@ const messages = {
     "agent.dataModificationBody":
       "Changes to rows stay blocked unless a reviewed approval flow allows them.",
     "agent.jumpLatest": "Jump to latest",
-    "agent.latest": "Latest",
     "agent.ledgerTitle": "Agent trust ledger",
     "agent.noSelection": "Select a timeline event to inspect what was exposed.",
     "agent.policy": "Policy",
@@ -89,15 +71,15 @@ const messages = {
     "agent.timeline": "Timeline",
     "agent.toolCalls": "{count} tool calls",
     "agent.workspace": "Agent workspace",
-    "app.agentQuiet": "Agent quiet",
     "app.agentUnseen": "{count} agent event(s)",
-    "app.connectionRequired": "Select a connection from the sidebar.",
+    "app.connectionPickerGroups": "Schema groups",
+    "app.connectionPickerSingles": "Other connections",
+    "app.connectionPickerTitle": "Databases",
     "app.couldNotLoadConnections": "Could not load connections: {error}",
     "app.dragResize": "Drag to resize (double-click resets)",
     "app.loading": "Loading...",
     "app.loadSafetyFailed": "Failed to load safety settings: {error}",
-    "app.noTableSelected":
-      "Select a table from the sidebar, or open the SQL tab to run a query.",
+    "app.openConnection": "Open {name}",
     "app.retry": "Retry",
     "app.toastAgentQuery": "Agent ran a query - open the Agent tab",
     "app.thisConnection": "this connection",
@@ -169,10 +151,30 @@ const messages = {
     "connections.projectFolder": "Project folder",
     "connections.projectFolderHint": "(optional - locates migrations)",
     "connections.refreshSchema": "Refresh schema",
-    "connections.refreshSchemaTitle": "Refresh schema (re-introspect live)",
     "connections.saved": "Saved.",
+    "connections.schemaDiffInSync": "Schema matches prod",
+    "connections.schemaDiffMissingSection": "Missing here ({count})",
+    "connections.schemaDiffPendingChip": "diff",
+    "connections.schemaDiffPendingTitle": "Expand the group to compare schemas",
+    "connections.schemaDiffTableAdded": "Only in this environment; missing from prod",
+    "connections.schemaDiffTableChanged":
+      "Compared with prod: +{added} columns, -{missing} columns, ~{changed} changed",
+    "connections.schemaDiffTableMissing": "Missing in this environment; exists in prod",
+    "connections.schemaDiffTitle":
+      "Compared with prod: +{added} only here, -{missing} missing here, ~{changed} changed",
+    "connections.schemaGroup": "Schema group",
+    "connections.schemaGroupConfirmGroup":
+      'Add "{connection}" to schema group "{group}"?',
+    "connections.schemaGroupConfirmPair":
+      'Group "{source}" and "{target}" together as "{group}"?',
+    "connections.schemaGroupHint":
+      "(optional - same value groups dev/staging/prod for prod-based schema diff)",
+    "connections.schemaGroupPlaceholder": "billing-api",
+    "connections.schemaGroupTitle": "{group} schema group",
+    "connections.schemaGroupUpdated": "Schema group updated",
     "connections.showDdl": "Show CREATE DDL",
     "connections.showRowCounts": "Show row counts",
+    "connections.sidebarTitle": "Connections",
     "connections.sslMode": "SSL mode",
     "connections.tables": "Tables ({count})",
     "connections.test": "Test connection",
@@ -199,11 +201,9 @@ const messages = {
     "mcp.httpConfig": "HTTP config (Cursor / VS Code / Windsurf)",
     "mcp.httpNotRunning": "MCP HTTP server not running.",
     "mcp.httpRunning": "HTTP running",
-    "mcp.liveMoved": "Live agent activity has moved to the Agent tab.",
     "mcp.manualSetup": "Manual setup / other platforms (Cursor, VS Code, ...)",
     "mcp.noPlatforms": "No supported AI platforms detected on this machine.",
     "mcp.notInstalled": "not installed",
-    "mcp.openAgent": "Open Agent tab",
     "mcp.platformDetectFailed": "Could not detect AI platforms: {error}",
     "mcp.reconnect": "Reconnect",
     "mcp.remove": "Remove",
@@ -329,8 +329,6 @@ const messages = {
     "sql.cancelled": "Query cancelled.",
     "sql.capped": "capped at {count} rows - add LIMIT to see more",
     "sql.committed": "script committed (one transaction)",
-    "sql.confirmReviewed": "I have reviewed these {count} statements",
-    "sql.executeScript": "Execute script",
     "sql.errorContext": "Error context",
     "sql.errorKind": "Kind",
     "sql.errorMessage": "Message",
@@ -424,7 +422,6 @@ const messages = {
     "schema.empty": "No tables or views in this schema.",
     "schema.filterPlaceholder": "Filter tables, columns, indexes...",
     "schema.fkCount": "{count} relationships",
-    "schema.foreignKeys": "Foreign keys",
     "schema.indexes": "Indexes",
     "schema.loading": "Loading schema...",
     "schema.noForeignKeys": "No foreign keys found.",
@@ -439,7 +436,6 @@ const messages = {
     "schema.view": "view",
   },
   ko: {
-    "agent.activity": "활동",
     "agent.audit": "감사",
     "agent.auditBlockedWrites": "현재 MCP 쓰기는 차단됨",
     "agent.auditBlockedWritesBody":
@@ -453,8 +449,6 @@ const messages = {
     "agent.auditReadOnlyBody":
       "run_query는 read-only 데이터베이스 세션에서 실행됩니다. 에이전트가 쓰기를 요청해도 거절됩니다.",
     "agent.context": "컨텍스트",
-    "agent.contextDetail": "이벤트 상세",
-    "agent.contextEmpty": "아직 이 세션에서 MCP 컨텍스트가 노출되지 않았습니다.",
     "agent.contextExposed": "에이전트에게 노출된 컨텍스트",
     "agent.contextHelp":
       "이 ledger는 DopeDB가 MCP로 노출한 내용을 보여줍니다: 호출된 도구, SQL, 테이블, 컬럼, 행 수, 오류. 외부 에이전트의 숨은 reasoning은 포함하지 않습니다.",
@@ -469,23 +463,9 @@ const messages = {
     "agent.contextSummaryRunQuery":
       "SQL과 결과 메타데이터: 행 수, 컬럼, 잘림 여부, 소요 시간.",
     "agent.contextSummaryRunQueryNoSql": "읽기 쿼리 결과 메타데이터와 반환된 preview rows.",
-    "agent.empty":
-      "아직 에이전트 호출이 없습니다. MCP로 AI 에이전트를 연결하면 쿼리가 여기에 실시간으로 표시됩니다.",
     "agent.emptyBody":
       "도구 호출, SQL, 결과, 차단된 오류가 발생하는 즉시 여기에 쌓입니다.",
     "agent.emptyCards": "에이전트 작업공간 상태",
-    "agent.emptyContextBody":
-      "연결, 테이블, 컬럼, 행 수, SQL, 오류가 ledger에 표시됩니다.",
-    "agent.emptyContextTitle": "컨텍스트",
-    "agent.emptyCta": "MCP 서버 설정",
-    "agent.emptyGuardBody":
-      "현재 MCP 쓰기는 차단되며, 수동 쓰기도 승인과 감사 흐름을 통과합니다.",
-    "agent.emptyGuardTitle": "가드레일",
-    "agent.emptyKicker": "안전한 에이전트 접근",
-    "agent.emptyResultBody":
-      "쿼리 테이블과 단일 지표가 앱 안에 표시되어 사람이 검토하고 내보낼 수 있습니다.",
-    "agent.emptyResultTitle": "결과",
-    "agent.emptyTitle": "아직 에이전트 활동이 없습니다.",
     "agent.errorCount": "오류 {count}개",
     "agent.dataAccess": "데이터 접근",
     "agent.dataAccessBody":
@@ -494,7 +474,6 @@ const messages = {
     "agent.dataModificationBody":
       "행 변경은 검토된 승인 흐름이 허용하기 전까지 차단된 상태로 둡니다.",
     "agent.jumpLatest": "최신으로 이동",
-    "agent.latest": "최신",
     "agent.ledgerTitle": "에이전트 신뢰 원장",
     "agent.noSelection": "타임라인 이벤트를 선택하면 무엇이 노출됐는지 볼 수 있습니다.",
     "agent.policy": "정책",
@@ -515,15 +494,15 @@ const messages = {
     "agent.timeline": "타임라인",
     "agent.toolCalls": "도구 호출 {count}개",
     "agent.workspace": "에이전트 작업공간",
-    "app.agentQuiet": "Agent 조용함",
     "app.agentUnseen": "Agent 이벤트 {count}개",
-    "app.connectionRequired": "사이드바에서 연결을 선택하세요.",
+    "app.connectionPickerGroups": "스키마 그룹",
+    "app.connectionPickerSingles": "개별 연결",
+    "app.connectionPickerTitle": "데이터베이스",
     "app.couldNotLoadConnections": "연결을 불러오지 못했습니다: {error}",
     "app.dragResize": "드래그해 크기 조절 (더블 클릭하면 초기화)",
     "app.loading": "불러오는 중...",
     "app.loadSafetyFailed": "안전 설정을 불러오지 못했습니다: {error}",
-    "app.noTableSelected":
-      "사이드바에서 테이블을 선택하거나 SQL 탭에서 쿼리를 실행하세요.",
+    "app.openConnection": "{name} 열기",
     "app.retry": "다시 시도",
     "app.toastAgentQuery": "에이전트가 쿼리를 실행했습니다. Agent 탭을 열어보세요.",
     "app.thisConnection": "이 연결",
@@ -595,10 +574,30 @@ const messages = {
     "connections.projectFolder": "프로젝트 폴더",
     "connections.projectFolderHint": "(선택 - 마이그레이션 위치 찾기)",
     "connections.refreshSchema": "스키마 새로고침",
-    "connections.refreshSchemaTitle": "스키마 새로고침 (실시간 재탐색)",
     "connections.saved": "저장되었습니다.",
+    "connections.schemaDiffInSync": "prod와 스키마가 같습니다",
+    "connections.schemaDiffMissingSection": "이 환경에 없음 ({count})",
+    "connections.schemaDiffPendingChip": "diff",
+    "connections.schemaDiffPendingTitle": "그룹을 펼치면 스키마를 비교합니다",
+    "connections.schemaDiffTableAdded": "이 환경에만 있으며 prod에는 없습니다",
+    "connections.schemaDiffTableChanged":
+      "prod와 비교: +{added} 컬럼, -{missing} 컬럼, ~{changed} 변경",
+    "connections.schemaDiffTableMissing": "이 환경에는 없고 prod에는 있습니다",
+    "connections.schemaDiffTitle":
+      "prod와 비교: +{added} 이 환경에만 있음, -{missing} 이 환경에 없음, ~{changed} 변경",
+    "connections.schemaGroup": "스키마 그룹",
+    "connections.schemaGroupConfirmGroup":
+      '"{connection}"을(를) 스키마 그룹 "{group}"에 추가할까요?',
+    "connections.schemaGroupConfirmPair":
+      '"{source}"와 "{target}"을(를) 같은 스키마 그룹 "{group}"으로 묶을까요?',
+    "connections.schemaGroupHint":
+      "(선택 - 같은 값의 dev/staging/prod를 묶어 prod 기준 스키마 diff 표시)",
+    "connections.schemaGroupPlaceholder": "billing-api",
+    "connections.schemaGroupTitle": "{group} 스키마 그룹",
+    "connections.schemaGroupUpdated": "스키마 그룹이 업데이트되었습니다",
     "connections.showDdl": "CREATE DDL 보기",
     "connections.showRowCounts": "행 수 표시",
+    "connections.sidebarTitle": "연결",
     "connections.sslMode": "SSL 모드",
     "connections.tables": "테이블 ({count})",
     "connections.test": "연결 테스트",
@@ -625,11 +624,9 @@ const messages = {
     "mcp.httpConfig": "HTTP 설정 (Cursor / VS Code / Windsurf)",
     "mcp.httpNotRunning": "MCP HTTP 서버가 실행 중이 아닙니다.",
     "mcp.httpRunning": "HTTP 실행 중",
-    "mcp.liveMoved": "실시간 에이전트 활동은 Agent 탭으로 이동했습니다.",
     "mcp.manualSetup": "수동 설정 / 기타 플랫폼 (Cursor, VS Code, ...)",
     "mcp.noPlatforms": "이 컴퓨터에서 지원되는 AI 플랫폼을 찾지 못했습니다.",
     "mcp.notInstalled": "설치되지 않음",
-    "mcp.openAgent": "Agent 탭 열기",
     "mcp.platformDetectFailed": "AI 플랫폼을 감지하지 못했습니다: {error}",
     "mcp.reconnect": "다시 연결",
     "mcp.remove": "제거",
@@ -753,8 +750,6 @@ const messages = {
     "sql.cancelled": "쿼리가 취소되었습니다.",
     "sql.capped": "{count}행에서 제한됨 - 더 보려면 LIMIT을 추가하세요",
     "sql.committed": "스크립트 커밋됨 (하나의 트랜잭션)",
-    "sql.confirmReviewed": "{count}개 문장을 검토했습니다",
-    "sql.executeScript": "스크립트 실행",
     "sql.errorContext": "오류 컨텍스트",
     "sql.errorKind": "종류",
     "sql.errorMessage": "메시지",
@@ -848,7 +843,6 @@ const messages = {
     "schema.empty": "이 스키마에는 테이블이나 뷰가 없습니다.",
     "schema.filterPlaceholder": "테이블, 컬럼, 인덱스 필터...",
     "schema.fkCount": "관계 {count}개",
-    "schema.foreignKeys": "외래 키",
     "schema.indexes": "인덱스",
     "schema.loading": "스키마 불러오는 중...",
     "schema.noForeignKeys": "외래 키를 찾지 못했습니다.",

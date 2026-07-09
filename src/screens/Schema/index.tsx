@@ -284,7 +284,10 @@ export default function SchemaExplorer({
                     key={key}
                     className={selectedKey === key ? "schema-node selected" : "schema-node"}
                     style={{ left: `${pos.x}px`, top: `${pos.y}px` }}
-                    onClick={() => setSelectedKey(key)}
+                    onClick={() => {
+                      setSelectedKey(key);
+                      onOpenTable(table);
+                    }}
                   >
                     <span className="schema-node-head">
                       <strong>{labelFor(table)}</strong>

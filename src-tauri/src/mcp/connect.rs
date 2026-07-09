@@ -5,6 +5,7 @@
 //!   - Codex CLI   : `codex mcp add dopedb -- <bridge>`           (stdio bridge)
 //!   - Codex Desktop : merge `[mcp_servers.dopedb]` into config.toml
 //!   - Claude Desktop : merge `mcpServers.dopedb` into its JSON    (no CLI available)
+//!
 //! Each user's own token is filled in from their local mcp.json, so no manual JSON.
 
 use std::ffi::OsString;

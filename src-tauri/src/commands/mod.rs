@@ -152,6 +152,19 @@ pub async fn upsert_connection(
 }
 
 #[tauri::command]
+pub async fn set_connection_schema_group(
+    state: State<'_, AppState>,
+    id: Uuid,
+    schema_group: Option<String>,
+) -> AppResult<ConnectionProfile> {
+    let normalized = schema_group.and_then(|value| {
+        let trimmed = value.trim().to_string();
+        if trimmed.is_empty() { None } else { Some(trimmed) }
+    });
+    state.store.set_connection_schema_group(id, normalized).await
+}
+
+#[tauri::command]
 pub async fn delete_connection(state: State<'_, AppState>, id: Uuid) -> AppResult<()> {
     state.store.delete_connection(id).await?;
     let _ = connection::delete_secret(&id);

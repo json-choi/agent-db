@@ -179,7 +179,7 @@ pub async fn table_ddl(pool: &PgPool, schema: Option<&str>, table: &str) -> AppR
     let t = cat
         .tables
         .iter()
-        .find(|t| t.name == table && schema.map_or(true, |s| t.schema.as_deref() == Some(s)))
+        .find(|t| t.name == table && schema.is_none_or(|s| t.schema.as_deref() == Some(s)))
         .ok_or_else(|| AppError::NotFound(format!("table {table}")))?;
     Ok(synthesize_ddl(t))
 }

@@ -18,6 +18,7 @@ export interface ConnectionProfile {
   secretRef: string | null;
   projectDir: string | null;
   env: string | null; // "dev" | "staging" | "prod" | null
+  schemaGroup: string | null; // shared group for dev/staging/prod schema comparison
 }
 
 export interface SafetySettings {

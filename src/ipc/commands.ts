@@ -32,6 +32,13 @@ export function upsertConnection(
   return invoke("upsert_connection", { profile, password });
 }
 
+export function setConnectionSchemaGroup(
+  id: string,
+  schemaGroup: string | null,
+): Promise<ConnectionProfile> {
+  return invoke("set_connection_schema_group", { id, schemaGroup });
+}
+
 export function deleteConnection(id: string): Promise<void> {
   return invoke("delete_connection", { id });
 }

@@ -105,6 +105,7 @@ mod tests {
             secret_ref: None,
             project_dir: None,
             env: None,
+            schema_group: None,
         }
     }
 

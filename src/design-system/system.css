@@ -411,33 +411,16 @@ h3,
   height: var(--ds-control-sm);
   display: inline-grid;
   place-items: center;
-  border: var(--ds-border-width) solid var(--ds-border-subtle);
-  border-radius: var(--ds-radius-sm);
-  background: var(--ds-surface-0);
-  color: var(--ds-text-muted);
+  border: none;
+  background: transparent;
   line-height: 0;
 }
 
-.ds-engine-mark svg {
-  width: var(--ds-icon-md);
-  height: var(--ds-icon-md);
-  fill: none;
-  stroke: currentColor;
-  stroke-width: var(--ds-stroke-width);
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.ds-engine-mark.engine-postgres {
-  border-color: var(--ds-trust-border);
-  background: var(--ds-trust-bg);
-  color: var(--ds-success);
-}
-
-.ds-engine-mark.engine-mysql {
-  border-color: var(--ds-risk-border);
-  background: var(--ds-risk-bg);
-  color: var(--ds-warning);
+.ds-engine-mark img {
+  width: var(--ds-control-sm);
+  height: var(--ds-control-sm);
+  display: block;
+  object-fit: contain;
 }
 
 .ds-workbench-head {

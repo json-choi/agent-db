@@ -600,7 +600,7 @@ fn ident_of(path: &Path) -> (String, String, bool) {
         // first-token split collapsed both to "1").
         Some((ver, _desc)) => ver.trim_start_matches(['V', 'v']).replace('_', "."),
         None => base
-            .split(|c: char| c == '_' || c == '-')
+            .split(['_', '-'])
             .next()
             .unwrap_or(&base)
             .trim_start_matches(['V', 'v'])
@@ -703,12 +703,17 @@ pub fn analyze(
     }
 
     let dialect = GenericDialect {};
-    let mut model = Model::default();
     // Default schema for unqualified migration tables: public for PG (catalog carries a schema),
     // None for sqlite / single-schema MySQL. Only affects keying when we have a catalog to diff.
-    model.default_schema = catalog.and_then(|c| {
-        c.tables.iter().any(|t| t.schema.is_some()).then(|| "public".to_string())
-    });
+    let mut model = Model {
+        default_schema: catalog.and_then(|c| {
+            c.tables
+                .iter()
+                .any(|t| t.schema.is_some())
+                .then(|| "public".to_string())
+        }),
+        ..Default::default()
+    };
     let mut migrations = Vec::new();
     let mut prev_version: Option<String> = None;
 

@@ -61,6 +61,9 @@ impl Store {
         let _ = sqlx::query("ALTER TABLE connections ADD COLUMN env TEXT")
             .execute(&pool)
             .await;
+        let _ = sqlx::query("ALTER TABLE connections ADD COLUMN schema_group TEXT")
+            .execute(&pool)
+            .await;
         migrate_audit_no_cascade(&pool).await?;
         Ok(Store { pool, audit_lock: Arc::new(Mutex::new(())) })
     }
@@ -95,13 +98,13 @@ impl Store {
             r#"INSERT INTO connections
                 (id, name, engine, host, port, db_name, username, sslmode,
                  extra_params, secret_ref, readonly_default, allow_writes,
-                 created_at, updated_at, project_dir, env)
-               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?13,?14,?15)
+                 created_at, updated_at, project_dir, env, schema_group)
+               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?13,?14,?15,?16)
                ON CONFLICT(id) DO UPDATE SET
                  name=?2, engine=?3, host=?4, port=?5, db_name=?6, username=?7,
                  sslmode=?8, extra_params=?9, secret_ref=?10,
                  readonly_default=?11, allow_writes=?12, updated_at=?13, project_dir=?14,
-                 env=?15"#,
+                 env=?15, schema_group=?16"#,
         )
         .bind(p.id.to_string())
         .bind(&p.name)
@@ -118,6 +121,7 @@ impl Store {
         .bind(now)
         .bind(&p.project_dir)
         .bind(&p.env)
+        .bind(&p.schema_group)
         .execute(&self.pool)
         .await?;
 
@@ -144,6 +148,20 @@ impl Store {
             .await?
             .ok_or_else(|| AppError::NotFound(format!("connection {id}")))?;
         row_to_connection(&row)
+    }
+
+    pub async fn set_connection_schema_group(
+        &self,
+        id: Uuid,
+        schema_group: Option<String>,
+    ) -> AppResult<ConnectionProfile> {
+        sqlx::query("UPDATE connections SET schema_group = ?2, updated_at = ?3 WHERE id = ?1")
+            .bind(id.to_string())
+            .bind(schema_group)
+            .bind(Utc::now())
+            .execute(&self.pool)
+            .await?;
+        self.get_connection(id).await
     }
 
     /// Delete a connection; child rows cascade (safety, history, cache). The audit log
@@ -365,6 +383,7 @@ fn row_to_connection(r: &sqlx::sqlite::SqliteRow) -> AppResult<ConnectionProfile
         secret_ref: r.try_get("secret_ref")?,
         project_dir: r.try_get("project_dir").unwrap_or(None),
         env: r.try_get("env").unwrap_or(None),
+        schema_group: r.try_get("schema_group").unwrap_or(None),
     })
 }
 

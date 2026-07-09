@@ -61,6 +61,146 @@
   color: var(--ds-text-inverse);
   background: var(--ds-danger);
 }
+.env-chip.env-dev {
+  border-color: var(--ds-success);
+  color: var(--ds-success);
+}
+.env-chip.env-staging {
+  border-color: var(--ds-warning);
+  color: var(--ds-warning);
+}
+
+/* Schema groups collect dev/staging/prod siblings and surface prod-based drift. */
+.db-group {
+  position: relative;
+  margin: var(--ds-space-2) 0;
+  padding: var(--ds-space-1) var(--ds-space-1) var(--ds-space-1) 0;
+  border: var(--ds-border-width) solid color-mix(in srgb, var(--ds-accent) 26%, var(--ds-border-subtle));
+  border-radius: var(--ds-radius-sm);
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--ds-accent-soft) 70%, transparent) 0,
+      transparent 58px
+    ),
+    color-mix(in srgb, var(--ds-surface-1) 72%, transparent);
+  transition: border-color 0.12s ease, background 0.12s ease, box-shadow 0.12s ease;
+}
+.db-group::before {
+  content: "";
+  position: absolute;
+  left: var(--ds-space-2);
+  top: calc(var(--ds-control-sm) + var(--ds-space-2));
+  bottom: var(--ds-space-2);
+  width: var(--ds-border-width-strong);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ds-accent) 42%, var(--ds-border-subtle));
+  pointer-events: none;
+}
+.db-group.drop-target {
+  border-color: var(--ds-accent-text);
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--ds-accent-soft) 100%, transparent) 0,
+      transparent 64px
+    ),
+    var(--ds-accent-soft);
+  box-shadow: inset 0 0 0 var(--ds-border-width) var(--ds-accent-text);
+}
+.db-group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-2);
+  min-height: var(--ds-control-sm);
+  padding: var(--ds-space-1) var(--ds-space-2) var(--ds-space-1) var(--ds-space-3);
+  color: var(--ds-text-muted);
+  font-size: var(--ds-font-size-xs);
+}
+.db-group-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+  color: var(--ds-text);
+}
+.db-group .db-node {
+  position: relative;
+  margin-left: var(--ds-space-3);
+}
+.db-conn.nested {
+  padding-left: var(--ds-space-2);
+}
+.db-conn {
+  transition: background 0.12s ease, box-shadow 0.12s ease, opacity 0.12s ease;
+}
+
+.schema-diff-chip {
+  flex-shrink: 0;
+  min-height: 18px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-segment-gap);
+  padding: 0 var(--ds-chip-pad-x);
+  border: var(--ds-border-width) solid var(--ds-border-subtle);
+  border-radius: var(--ds-radius-xs);
+  color: var(--ds-text-muted);
+  font-size: var(--ds-font-size-2xs);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.schema-diff-chip.diff-ok {
+  color: var(--ds-success);
+  border-color: color-mix(in srgb, var(--ds-success) 55%, var(--ds-border-subtle));
+}
+.schema-diff-chip.diff-pending {
+  color: var(--ds-text-subtle);
+}
+.schema-diff-chip .diff-remove {
+  color: var(--ds-danger);
+}
+.schema-diff-chip .diff-add {
+  color: var(--ds-success);
+}
+.schema-diff-chip .diff-change {
+  color: var(--ds-warning);
+}
+
+.schema-diff-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  background: var(--ds-text-subtle);
+}
+.schema-diff-dot.diff-added {
+  background: var(--ds-success);
+}
+.schema-diff-dot.diff-missing {
+  background: var(--ds-danger);
+}
+.schema-diff-dot.diff-changed {
+  background: var(--ds-warning);
+}
+.schema-diff-dot.diff-mixed {
+  background: var(--ds-warning);
+  border: var(--ds-border-width) solid var(--ds-danger);
+}
+.schema-diff-missing-row {
+  cursor: default;
+  color: var(--ds-text-muted);
+}
+.schema-diff-inline {
+  flex-shrink: 0;
+  font-size: var(--ds-font-size-2xs);
+  font-weight: 700;
+}
+.schema-diff-inline.diff-missing,
+.schema-diff-section {
+  color: var(--ds-danger);
+}
 
 /* DDL modal. */
 .ddl-overlay {
@@ -99,6 +239,50 @@
 }
 
 /* Database explorer — sidebar tree (DataGrip-style): connections expand to tables. */
+.sidebar-top {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ds-space-2);
+  min-height: calc(var(--ds-space-8) + var(--ds-control-md) + var(--ds-space-3));
+  padding: var(--ds-space-8) var(--ds-space-3) var(--ds-space-3);
+  border-bottom: var(--ds-border-width) solid var(--ds-border-subtle);
+  background: var(--ds-surface-elevated);
+  background-image: var(--ds-glass-sheen);
+  box-shadow: var(--ds-shadow-panel);
+}
+.sidebar-top-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-segment-gap);
+}
+.sidebar-top-title {
+  font-size: var(--ds-font-size-title);
+  line-height: var(--ds-line-tight);
+  font-weight: 650;
+  color: var(--ds-text);
+}
+.sidebar-add-btn {
+  width: var(--ds-control-md);
+  min-width: var(--ds-control-md);
+  height: var(--ds-control-md);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: var(--ds-border-width) solid var(--ds-border-subtle);
+  border-radius: var(--ds-radius-sm);
+  background: var(--ds-surface-0);
+  color: var(--ds-text);
+  cursor: pointer;
+  box-shadow: var(--ds-glass-edge);
+}
+.sidebar-add-btn:hover {
+  background: var(--ds-hover);
+  border-color: var(--ds-border-strong);
+}
+
 .explorer {
   flex: 1;
   min-height: 0;
@@ -113,12 +297,49 @@
   border-radius: var(--ds-radius-sm);
   cursor: pointer;
   font-weight: 500;
+  user-select: none;
+  touch-action: none;
 }
 .db-conn:hover {
   background: var(--ds-hover);
 }
 .db-conn.selected {
   background: var(--ds-hover-strong);
+}
+.db-conn.dragging {
+  opacity: 0.48;
+}
+.db-conn.drop-target,
+.db-conn.drop-target:hover {
+  background: var(--ds-accent-soft);
+  box-shadow:
+    inset 0 0 0 var(--ds-border-width-strong) var(--ds-accent-text),
+    0 0 0 var(--ds-border-width) color-mix(in srgb, var(--ds-accent) 20%, transparent);
+}
+.db-drag-preview {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: var(--ds-z-popover);
+  pointer-events: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-2);
+  max-width: min(280px, 70vw);
+  padding: var(--ds-space-2);
+  border: var(--ds-border-width) solid var(--ds-border-strong);
+  border-radius: var(--ds-radius-sm);
+  background: var(--ds-surface-0);
+  color: var(--ds-text);
+  box-shadow: var(--ds-shadow-popover);
+  font-size: var(--ds-font-size-ui);
+  font-weight: 600;
+}
+.db-drag-preview > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .db-conn .tw {
   width: 12px;
@@ -310,25 +531,6 @@
 
 .foot-btn .gear {
   color: var(--ds-text-muted);
-}
-
-.foot-add-btn {
-  width: var(--ds-control-md);
-  min-width: var(--ds-control-md);
-  height: var(--ds-control-md);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  border-radius: var(--ds-radius-sm);
-  background: transparent;
-  color: var(--ds-text-muted);
-  cursor: pointer;
-}
-
-.foot-add-btn:hover {
-  background: var(--ds-hover);
-  color: var(--ds-text);
 }
 
 /* Sidebar "Migrations" nav row (under an expanded connection) */

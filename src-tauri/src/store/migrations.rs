@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS connections (
     allow_writes      INTEGER NOT NULL DEFAULT 0,
     project_dir       TEXT,                          -- working project folder (for migrations)
     env               TEXT,                          -- dev|staging|prod label (optional)
+    schema_group      TEXT,                          -- groups dev|staging|prod siblings for schema diff
     created_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL
 );

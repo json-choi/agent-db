@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import {
   getSafety,
@@ -8,6 +8,7 @@ import {
 } from "./ipc/commands";
 import type { CatalogTable, ConnectionProfile, SafetySettings } from "./ipc/types";
 import { errMessage } from "./ipc/types";
+import { buildConnectionSections, type SchemaConnectionGroup } from "./lib/schemaDiff";
 import { tableKey, tableLabel } from "./lib/tableRef";
 import { ConnectionForm, DatabaseExplorer } from "./screens/Connections";
 import TableData from "./screens/Tables";
@@ -58,6 +59,100 @@ const SIDEBAR_MIN = 180;
 const SIDEBAR_MAX = 520;
 const SIDEBAR_DEFAULT = 240;
 const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
+
+function connectionEndpoint(conn: ConnectionProfile) {
+  if (conn.engine === "sqlite") return conn.database || conn.host || "sqlite";
+  return `${conn.host}${conn.port ? `:${conn.port}` : ""}`;
+}
+
+function ConnectionPicker({
+  connections,
+  onSelect,
+  onNew,
+}: {
+  connections: ConnectionProfile[];
+  onSelect: (id: string) => void;
+  onNew: () => void;
+}) {
+  const { t } = useI18n();
+  const sections = useMemo(() => buildConnectionSections(connections), [connections]);
+  const grouped = sections.filter((section) => section.kind === "group");
+  const singles = sections.filter((section) => section.kind === "single");
+
+  function renderConnectionCard(conn: ConnectionProfile, grouped = false) {
+    const name = conn.name || t("app.unnamed");
+    return (
+      <button
+        key={conn.id}
+        type="button"
+        className="connection-card"
+        onClick={() => onSelect(conn.id)}
+        title={`${conn.engine} · ${connectionEndpoint(conn)} · ${conn.database}`}
+        aria-label={t("app.openConnection", { name })}
+      >
+        <span className="connection-card-title">
+          {!grouped && <EngineMark engine={conn.engine} />}
+          <span className="connection-card-name">{name}</span>
+          {conn.env && <span className={`env-chip env-${conn.env}`}>{conn.env}</span>}
+        </span>
+        <span className="connection-card-meta">
+          <span>{conn.database || t("common.unknown")}</span>
+          <span className="ds-meta-dot" />
+          <span>{connectionEndpoint(conn)}</span>
+        </span>
+      </button>
+    );
+  }
+
+  function renderGroup(group: SchemaConnectionGroup) {
+    const engine = group.connections[0]?.engine;
+    return (
+      <section className="connection-group-section" key={group.key}>
+        <div className="connection-group-head">
+          <div className="connection-group-title">
+            {engine ? <EngineMark engine={engine} /> : <span className="connection-group-mark" />}
+            <span>{group.label}</span>
+          </div>
+        </div>
+        <div className="connection-card-grid">
+          {group.connections.map((conn) => renderConnectionCard(conn, true))}
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <div className="connection-picker">
+      <div className="connection-picker-head">
+        <h2>{t("app.connectionPickerTitle")}</h2>
+        <button className="btn small" onClick={onNew}>
+          <Icon name="plus" />
+          {t("connections.new")}
+        </button>
+      </div>
+
+      {grouped.length > 0 && (
+        <section className="connection-picker-section">
+          <div className="connection-picker-label">{t("app.connectionPickerGroups")}</div>
+          {grouped.map((section) =>
+            section.kind === "group" ? renderGroup(section.group) : null,
+          )}
+        </section>
+      )}
+
+      {singles.length > 0 && (
+        <section className="connection-picker-section">
+          <div className="connection-picker-label">{t("app.connectionPickerSingles")}</div>
+          <div className="connection-card-grid">
+            {singles.map((section) =>
+              section.kind === "single" ? renderConnectionCard(section.connection) : null,
+            )}
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
 
 function Shell() {
   const { t } = useI18n();
@@ -276,6 +371,21 @@ function Shell() {
     setAvailableUpdate(update);
   }
 
+  function selectConnection(id: string, nextTab: Tab = "data") {
+    setSelectedId(id);
+    setSelectedTable(null);
+    setEditing(null);
+    setSettingsOpen(false);
+    setMigrationsOpen(false);
+    setTab(nextTab);
+  }
+
+  function startNewConnection() {
+    setEditing("new");
+    setSettingsOpen(false);
+    setMigrationsOpen(false);
+  }
+
   function renderMain() {
     if (settingsOpen) {
       return (
@@ -349,7 +459,11 @@ function Shell() {
     // renders its live feed. With no connection selected, the tab bar still shows so Agent
     // stays reachable — the data tabs fall back to a "pick a connection" placeholder.
     const needsConn = (
-      <div className="placeholder muted">{t("app.connectionRequired")}</div>
+      <ConnectionPicker
+        connections={conns}
+        onSelect={(id) => selectConnection(id, tab === "agent" ? "data" : tab)}
+        onNew={startNewConnection}
+      />
     );
 
     return (
@@ -357,16 +471,16 @@ function Shell() {
         {selected && (
           <header className="main-head ds-workbench-head">
             <div className="ds-workbench-title">
-              <div className="ds-title-line">
+              <div className="ds-title-line app-title-line">
                 <EngineMark engine={selected.engine} />
                 <strong>{selected.name || t("app.unnamed")}</strong>
-              </div>
-              <div className="ds-meta-row">
-                <span>{selected.database}</span>
+                {selected.env && <span className={`env-chip env-${selected.env}`}>{selected.env}</span>}
+                <span className="ds-meta-dot" />
+                <span className="app-title-meta">{selected.database}</span>
                 {selectedTable && (
                   <>
                     <span className="ds-meta-dot" />
-                    <span>{tableLabel(selected.engine, selectedTable)}</span>
+                    <span className="app-title-meta">{tableLabel(selected.engine, selectedTable)}</span>
                   </>
                 )}
               </div>
@@ -427,14 +541,21 @@ function Shell() {
           {tab === "data" &&
             (!selected ? (
               needsConn
-            ) : !safety ? (
-              safetyFallback
             ) : selectedTable ? (
-              <TableData connection={selected} table={selectedTable} safety={safety} />
+              safety ? (
+                <TableData connection={selected} table={selectedTable} safety={safety} />
+              ) : (
+                safetyFallback
+              )
             ) : (
-              <div className="placeholder muted">
-                {t("app.noTableSelected")}
-              </div>
+              <SchemaExplorer
+                connection={selected}
+                selectedTable={selectedTable}
+                onOpenTable={(table) => {
+                  setSelectedTable(table);
+                  setTab("data");
+                }}
+              />
             ))}
           {tab === "schema" &&
             (selected ? (
@@ -488,12 +609,7 @@ function Shell() {
         selectedTableKey={selectedTable ? tableKey(selectedTable) : null}
         migrationsOpen={migrationsOpen}
         onSelectConn={(id) => {
-          setSelectedId(id);
-          setSelectedTable(null);
-          setEditing(null);
-          setSettingsOpen(false);
-          setMigrationsOpen(false);
-          setTab("data");
+          selectConnection(id);
         }}
         onOpenTable={(conn, t) => {
           setSelectedId(conn.id);
@@ -511,9 +627,7 @@ function Shell() {
           setMigrationsOpen(true);
         }}
         onNew={() => {
-          setEditing("new");
-          setSettingsOpen(false);
-          setMigrationsOpen(false);
+          startNewConnection();
         }}
         onEdit={(conn) => {
           setEditing(conn);
@@ -529,6 +643,17 @@ function Shell() {
           }
           setEditing((current) => {
             if (current && current !== "new" && current.id === id) return null;
+            return current;
+          });
+        }}
+        onConnectionUpdated={(updated) => {
+          setConns((current) =>
+            current.map((conn) => (conn.id === updated.id ? updated : conn)),
+          );
+          setEditing((current) => {
+            if (current && current !== "new" && current.id === updated.id) {
+              return updated;
+            }
             return current;
           });
         }}
