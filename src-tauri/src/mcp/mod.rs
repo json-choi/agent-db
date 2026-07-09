@@ -12,7 +12,7 @@ pub mod connect;
 pub mod tools;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use axum::extract::{Request, State};
@@ -39,28 +39,54 @@ pub const MCP_PORT: u16 = 7686;
 /// (for Claude Desktop, which can't reach a localhost HTTP server).
 pub const MCP_BRIDGE_PORT: u16 = 7687;
 
-/// Absolute path to the bundled stdio-bridge binary (next to the app binary). Used in
-/// the Claude Desktop config snippet — GUI-spawned children get a minimal PATH, so the
-/// config must reference it by absolute path.
+/// Absolute path to the bundled stdio-bridge binary. Used in generated MCP configs;
+/// GUI-spawned children get a minimal PATH, so the config must reference it directly.
 pub fn bridge_binary_path() -> String {
     let name = if cfg!(windows) {
         "dopedb-mcp-stdio.exe"
     } else {
         "dopedb-mcp-stdio"
     };
-    let exe = std::env::current_exe().ok();
-    // 1) Packaged .app: the `externalBin` sidecar is copied next to the app binary
-    //    (Contents/MacOS/dopedb-mcp-stdio). Dev: the same sibling under target/debug
-    //    (built by the `build:bridge` step). Prefer an existing file.
-    if let Some(sib) = exe.as_ref().and_then(|p| p.parent()).map(|d| d.join(name)) {
-        if sib.is_file() {
-            return sib.to_string_lossy().into_owned();
+
+    if let Ok(exe) = std::env::current_exe() {
+        let candidates = bridge_binary_candidates(&exe, name);
+        if let Some(path) = candidates.iter().find(|path| path.is_file()) {
+            return path.to_string_lossy().into_owned();
+        }
+
+        // Not built yet: still return the primary installed/dev location so the config
+        // points where the sidecar should land, not a bare name a GUI-spawned child
+        // cannot resolve through PATH.
+        if let Some(path) = candidates.into_iter().next() {
+            return path.to_string_lossy().into_owned();
         }
     }
-    // 2) Not built yet: still return the sibling location so the config points where the
-    //    sidecar will land, not a bare name a GUI-spawned child's minimal PATH can't find.
-    exe.and_then(|p| p.parent().map(|d| d.join(name).to_string_lossy().into_owned()))
-        .unwrap_or_else(|| name.into())
+
+    name.into()
+}
+
+fn bridge_binary_candidates(exe: &Path, name: &str) -> Vec<PathBuf> {
+    let Some(exe_dir) = exe.parent() else {
+        return Vec::new();
+    };
+
+    let mut candidates = vec![
+        // Tauri externalBin is copied next to the main binary on macOS
+        // (Contents/MacOS) and Windows install layouts.
+        exe_dir.join(name),
+        // Keep a resource-dir fallback for updater/bundler layout changes.
+        exe_dir.join("resources").join(name),
+    ];
+
+    // macOS app bundle fallback: /Applications/DopeDB.app/Contents/Resources.
+    if exe_dir.file_name().is_some_and(|part| part == "MacOS") {
+        if let Some(contents_dir) = exe_dir.parent() {
+            candidates.push(contents_dir.join("Resources").join(name));
+        }
+    }
+
+    candidates.dedup();
+    candidates
 }
 
 pub fn mcp_json_path() -> PathBuf {
@@ -85,8 +111,8 @@ pub fn load_or_create_token() -> String {
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
         .and_then(|v| v.get("token").and_then(|t| t.as_str()).map(String::from))
         .filter(|t| !t.is_empty());
-    let token =
-        existing.unwrap_or_else(|| format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple()));
+    let token = existing
+        .unwrap_or_else(|| format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple()));
 
     // Always refresh mcp.json so the bridge port + binary path are current for the
     // bridge to read and for the UI's config snippets. It holds the bearer token, so
@@ -126,10 +152,7 @@ fn write_private(path: &std::path::Path, bytes: &[u8]) {
             }
             // Enforce 0600 even if the file pre-existed with looser perms (mode() only
             // applies on create).
-            let _ = std::fs::set_permissions(
-                path,
-                std::fs::Permissions::from_mode(0o600),
-            );
+            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
         }
         Err(e) => tracing::error!("failed to open {} for write: {e}", path.display()),
     }
@@ -148,7 +171,10 @@ fn token_matches(candidate: &str, token: &str) -> bool {
     use sha2::{Digest, Sha256};
     let a = Sha256::digest(candidate.as_bytes());
     let b = Sha256::digest(token.as_bytes());
-    a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+    a.iter()
+        .zip(b.iter())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
 }
 
 /// Bearer-token gate. `rmcp` already validates Host (DNS-rebind); this adds auth so a
@@ -223,7 +249,9 @@ pub async fn serve_stdio_bridge(
         Err(e) => {
             let mut rt = runtime.lock().unwrap();
             rt.bridge_running = false;
-            rt.last_error = Some(format!("MCP bridge bind on 127.0.0.1:{MCP_BRIDGE_PORT} failed: {e}"));
+            rt.last_error = Some(format!(
+                "MCP bridge bind on 127.0.0.1:{MCP_BRIDGE_PORT} failed: {e}"
+            ));
             return Err(e);
         }
     };
