@@ -120,6 +120,9 @@ const messages = {
     "history.status": "Status",
     "history.title": "Query history",
     "connections.browse": "Browse...",
+    "connections.clipboardImported": "Connection URL imported from clipboard",
+    "connections.clipboardNoConnectionUrl": "Clipboard does not contain a supported database URL",
+    "connections.clipboardUnavailable": "Could not read the clipboard",
     "connections.columns": "{count} columns",
     "connections.connectionDeleted": "Connection deleted",
     "connections.connectionMenu": "Connection actions",
@@ -136,6 +139,7 @@ const messages = {
     "connections.collapse": "Collapse",
     "connections.filterTables": "Filter tables...",
     "connections.host": "Host",
+    "connections.importClipboard": "Import clipboard URL",
     "connections.loadingSchema": "Loading schema...",
     "connections.migrations": "Migrations",
     "connections.migrationsTitle": "Schema migration change-log",
@@ -167,8 +171,6 @@ const messages = {
       'Add "{connection}" to schema group "{group}"?',
     "connections.schemaGroupConfirmPair":
       'Group "{source}" and "{target}" together as "{group}"?',
-    "connections.schemaGroupHint":
-      "(optional - same value groups dev/staging/prod for prod-based schema diff)",
     "connections.schemaGroupPlaceholder": "billing-api",
     "connections.schemaGroupTitle": "{group} schema group",
     "connections.schemaGroupUpdated": "Schema group updated",
@@ -543,6 +545,9 @@ const messages = {
     "history.status": "상태",
     "history.title": "쿼리 히스토리",
     "connections.browse": "찾아보기...",
+    "connections.clipboardImported": "클립보드의 연결 URL을 가져왔습니다",
+    "connections.clipboardNoConnectionUrl": "클립보드에 지원되는 데이터베이스 URL이 없습니다",
+    "connections.clipboardUnavailable": "클립보드를 읽지 못했습니다",
     "connections.columns": "{count}개 컬럼",
     "connections.connectionDeleted": "연결이 삭제되었습니다",
     "connections.connectionMenu": "연결 메뉴",
@@ -559,6 +564,7 @@ const messages = {
     "connections.collapse": "접기",
     "connections.filterTables": "테이블 필터...",
     "connections.host": "호스트",
+    "connections.importClipboard": "클립보드 URL 가져오기",
     "connections.loadingSchema": "스키마 불러오는 중...",
     "connections.migrations": "마이그레이션",
     "connections.migrationsTitle": "스키마 마이그레이션 변경 기록",
@@ -590,8 +596,6 @@ const messages = {
       '"{connection}"을(를) 스키마 그룹 "{group}"에 추가할까요?',
     "connections.schemaGroupConfirmPair":
       '"{source}"와 "{target}"을(를) 같은 스키마 그룹 "{group}"으로 묶을까요?',
-    "connections.schemaGroupHint":
-      "(선택 - 같은 값의 dev/staging/prod를 묶어 prod 기준 스키마 diff 표시)",
     "connections.schemaGroupPlaceholder": "billing-api",
     "connections.schemaGroupTitle": "{group} 스키마 그룹",
     "connections.schemaGroupUpdated": "스키마 그룹이 업데이트되었습니다",

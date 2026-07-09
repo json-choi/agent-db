@@ -319,8 +319,18 @@
   min-width: 0;
 }
 
-/* Connection editor pane — was flush against the edges; give it breathing room. */
-.editor-pane { padding: var(--ds-pane-pad); overflow: auto; height: 100%; }
+/* Connection editor pane — center the form while preserving scroll. */
+.editor-pane {
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  overflow: auto;
+  padding: var(--ds-pane-pad);
+}
+.editor-pane > .form {
+  width: min(760px, 100%);
+  max-width: 760px;
+}
 
 /* Full-area main view (Migrations when opened from the sidebar) */
 .main-view { flex: 1; min-height: 0; overflow: auto; padding: var(--ds-pane-pad); }

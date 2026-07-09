@@ -94,14 +94,7 @@
   color: var(--ds-text-muted);
 }
 .safety-number input {
-  font: inherit;
-  width: 100%;
-  height: var(--ds-control-md);
-  padding: 0 var(--ds-space-2);
-  border: var(--ds-border-width) solid var(--ds-border-subtle);
-  border-radius: var(--ds-radius-sm);
   background: var(--ds-surface-1);
-  color: var(--ds-text);
 }
 .safety-save-row {
   display: flex;
@@ -138,10 +131,6 @@
 
   .safety-number {
     grid-template-columns: 1fr;
-  }
-
-  .safety-number input {
-    width: 100%;
   }
 
   .safety-save-row .btn {

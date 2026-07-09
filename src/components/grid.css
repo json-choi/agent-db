@@ -181,18 +181,9 @@ table.grid td.clickable {
   cursor: pointer;
 }
 .filter-input {
-  width: 100%;
   min-width: 72px;
-  min-height: var(--ds-control-xs);
-  box-sizing: border-box;
-  font: inherit;
   font-size: var(--ds-font-size-sm);
   font-weight: 400;
-  padding: 0 var(--ds-space-1);
-  border: var(--ds-border-width) solid var(--ds-border-subtle);
-  border-radius: var(--ds-radius-xs);
-  background: var(--ds-surface-0);
-  color: var(--ds-text);
 }
 
 /* Data-tab body: grid on the left, contextual panel (viewer/editor/approval) on right. */
@@ -344,12 +335,6 @@ table.grid td.clickable {
 .row-field-input input[type="number"] {
   flex: 1;
   min-width: 0;
-  font: inherit;
-  padding: var(--ds-space-1) var(--ds-space-2);
-  border: var(--ds-border-width) solid var(--ds-border-subtle);
-  border-radius: var(--ds-radius-sm);
-  background: var(--ds-surface-0);
-  color: var(--ds-text);
 }
 .null-toggle {
   position: relative;

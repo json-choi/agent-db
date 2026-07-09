@@ -475,13 +475,7 @@
 
 /* Shared table-row widgets (filter box, name/count). */
 .table-filter {
-  width: 100%;
-  padding: var(--ds-space-1) var(--ds-space-2);
-  border: var(--ds-border-width) solid var(--ds-border-subtle);
-  border-radius: var(--ds-radius-sm);
   background: var(--ds-surface-1);
-  color: var(--ds-text);
-  font: inherit;
 }
 .tbl-name {
   flex: 1;

@@ -56,6 +56,11 @@ type DragStart = {
   y: number;
 };
 
+type ParsedConnectionUrl = {
+  update: Partial<ConnectionProfile>;
+  password: string | null;
+};
+
 function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
   let timer: number | undefined;
   const timeout = new Promise<never>((_, reject) => {
@@ -96,6 +101,131 @@ function fallbackSchemaGroupName(
   let suffix = 2;
   while (used.has(`${base}-${suffix}`.toLocaleLowerCase())) suffix += 1;
   return `${base}-${suffix}`;
+}
+
+function decodeUrlPart(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function firstSearchParam(url: URL, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = url.searchParams.get(key);
+    if (value != null && value !== "") return value;
+  }
+  return null;
+}
+
+function parseOptionalBoolean(value: string | null): boolean | null {
+  if (value == null) return null;
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return null;
+}
+
+function normalizeSslMode(engine: Engine, value: string | null): string | null {
+  if (!value) return null;
+  const normalized = value.trim().toLowerCase().replace(/_/g, "-");
+  if (["1", "true", "yes", "on"].includes(normalized)) return "require";
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return engine === "mysql" ? "disabled" : "disable";
+  }
+  if (engine === "mysql") {
+    if (normalized === "disable") return "disabled";
+    if (normalized === "prefer") return "preferred";
+    if (normalized === "require") return "required";
+    if (normalized === "verify-full") return "verify-identity";
+  }
+  return normalized;
+}
+
+function sqliteDatabaseFromUrl(url: URL): string {
+  if (url.protocol === "file:") return decodeUrlPart(url.pathname);
+  if (url.hostname && !url.pathname) return decodeUrlPart(url.hostname);
+  if (url.hostname) return decodeUrlPart(`${url.hostname}${url.pathname}`);
+  return decodeUrlPart(url.pathname);
+}
+
+function parseConnectionUrl(raw: string): ParsedConnectionUrl | null {
+  const text = raw.trim().replace(/^['"`]+|['"`]+$/g, "");
+  if (!text) return null;
+
+  let url: URL;
+  try {
+    url = new URL(text);
+  } catch {
+    return null;
+  }
+
+  const protocol = url.protocol.replace(/:$/, "").toLowerCase();
+  const engine: Engine | null =
+    protocol === "postgres" || protocol === "postgresql"
+      ? "postgres"
+      : protocol === "mysql" || protocol === "mariadb"
+        ? "mysql"
+        : protocol === "sqlite" || protocol === "sqlite3" || protocol === "file"
+          ? "sqlite"
+          : null;
+  if (!engine) return null;
+
+  const extraParams: Record<string, string> = {};
+  url.searchParams.forEach((value, key) => {
+    if (key.toLowerCase() === "password" || key.toLowerCase() === "pass") return;
+    extraParams[key] = value;
+  });
+
+  const sslmode = normalizeSslMode(
+    engine,
+    firstSearchParam(url, ["sslmode", "ssl-mode", "sslMode", "ssl"]),
+  );
+  const database =
+    engine === "sqlite"
+      ? sqliteDatabaseFromUrl(url)
+      : decodeUrlPart(url.pathname.replace(/^\/+/, ""));
+  const name =
+    firstSearchParam(url, ["name", "connectionName", "connection_name"]) ||
+    database ||
+    url.hostname ||
+    "";
+  const readonlyDefault = parseOptionalBoolean(
+    firstSearchParam(url, ["readonly", "readOnly", "read_only"]),
+  );
+  const allowWrites = parseOptionalBoolean(
+    firstSearchParam(url, ["allowWrites", "allow_writes", "writes"]),
+  );
+  const update: Partial<ConnectionProfile> = {
+    name,
+    engine,
+    host: engine === "sqlite" ? "localhost" : decodeUrlPart(url.hostname),
+    port: url.port ? Number(url.port) : DEFAULT_PORT[engine],
+    database,
+    username: decodeUrlPart(url.username),
+    sslmode: sslmode ?? "prefer",
+    extraParams,
+  };
+  const env = firstSearchParam(url, ["env", "environment"]);
+  if (env) update.env = env;
+  const schemaGroup = firstSearchParam(url, [
+    "schemaGroup",
+    "schema_group",
+    "schema-group",
+    "group",
+  ]);
+  if (schemaGroup) update.schemaGroup = schemaGroup;
+  if (readonlyDefault != null) update.readonlyDefault = readonlyDefault;
+  if (allowWrites != null) update.allowWrites = allowWrites;
+
+  return {
+    update,
+    password:
+      decodeUrlPart(url.password) ||
+      firstSearchParam(url, ["password", "pass"]) ||
+      null,
+  };
 }
 
 function blank(): ConnectionProfile {
@@ -1020,6 +1150,38 @@ export function ConnectionForm({
     setForm((f) => ({ ...f, [key]: value }));
   }
 
+  function applyConnectionUrl(raw: string, showFeedback: boolean) {
+    const parsed = parseConnectionUrl(raw);
+    if (!parsed) return false;
+    setForm((current) => ({
+      ...current,
+      ...parsed.update,
+      id: current.id,
+      secretRef: current.secretRef,
+    }));
+    if (parsed.password != null) setPassword(parsed.password);
+    setMsg(null);
+    setMsgErr(false);
+    if (showFeedback) toast(t("connections.clipboardImported"));
+    return true;
+  }
+
+  async function importConnectionUrlFromClipboard(showFeedback = true) {
+    if (!navigator.clipboard?.readText) {
+      if (showFeedback) toast(t("connections.clipboardUnavailable"), "error");
+      return;
+    }
+    try {
+      const text = await navigator.clipboard.readText();
+      const imported = applyConnectionUrl(text, showFeedback);
+      if (!imported && showFeedback) {
+        toast(t("connections.clipboardNoConnectionUrl"), "error");
+      }
+    } catch {
+      if (showFeedback) toast(t("connections.clipboardUnavailable"), "error");
+    }
+  }
+
   async function save() {
     setBusy(true);
     setRunning("save");
@@ -1077,7 +1239,32 @@ export function ConnectionForm({
         }
       }}
     >
-      <h2>{isNew ? t("connections.new") : t("connections.edit")}</h2>
+      <div className="form-head">
+        <h2>{isNew ? t("connections.new") : t("connections.edit")}</h2>
+        <button
+          type="button"
+          className="form-close-btn"
+          onClick={onCancel}
+          title={t("common.close")}
+          aria-label={t("common.close")}
+        >
+          <Icon name="close" />
+        </button>
+      </div>
+
+      {isNew && (
+        <div className="form-import-row">
+          <button
+            type="button"
+            className="btn small"
+            disabled={busy}
+            onClick={() => void importConnectionUrlFromClipboard(true)}
+          >
+            <Icon name="copy" />
+            {t("connections.importClipboard")}
+          </button>
+        </div>
+      )}
 
       <label>
         {t("connections.name")}
@@ -1237,10 +1424,7 @@ export function ConnectionForm({
       </label>
 
       <label>
-        <span className="label-with-help">
-          {t("connections.schemaGroup")}
-          <InfoTip label={t("connections.schemaGroupHint")} />
-        </span>
+        {t("connections.schemaGroup")}
         <input
           value={form.schemaGroup ?? ""}
           onChange={(e) => set("schemaGroup", e.target.value.trim() || null)}
@@ -1256,9 +1440,6 @@ export function ConnectionForm({
         </button>
         <button className="btn" disabled={busy} onClick={test}>
           {running === "test" ? t("connections.testing") : t("connections.test")}
-        </button>
-        <button className="btn" disabled={busy} onClick={onCancel}>
-          {t("common.cancel")}
         </button>
       </div>
 

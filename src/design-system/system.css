@@ -214,7 +214,9 @@ h3,
 .ds-button {
   max-width: 100%;
   min-width: 0;
-  min-height: var(--ds-control-md);
+  height: var(--ds-control-field);
+  min-height: var(--ds-control-field);
+  box-sizing: border-box;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -278,7 +280,8 @@ h3,
 
 .btn.small,
 .ds-button-small {
-  min-height: var(--ds-control-sm);
+  height: var(--ds-control-field-sm);
+  min-height: var(--ds-control-field-sm);
   padding: 0 var(--ds-control-pad-x-sm);
   font-size: var(--ds-font-size-sm);
 }
@@ -645,12 +648,13 @@ h3,
   font-weight: 650;
 }
 
-.form input,
-.form select,
-.form textarea,
+.app input:not([type="checkbox"]):not([type="radio"]),
+.app select,
+.app textarea,
 .table-filter,
 .filter-input,
 .ds-input {
+  box-sizing: border-box;
   border: var(--ds-border-width) solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-sm);
   background: var(--ds-surface-0);
@@ -658,24 +662,41 @@ h3,
   font: inherit;
 }
 
-.form input,
-.form select,
-.form textarea,
+.app input:not([type="checkbox"]):not([type="radio"]),
+.app select,
+.app textarea,
+.table-filter,
+.filter-input,
 .ds-input {
-  min-height: var(--ds-control-md);
-  padding: 0 var(--ds-space-2);
+  height: var(--ds-control-field);
+  min-height: var(--ds-control-field);
+  padding: 0 var(--ds-control-pad-x-sm);
+  line-height: var(--ds-line-ui);
 }
 
+.form input:not([type="checkbox"]):not([type="radio"]),
+.form select,
 .form textarea,
+.table-filter,
+.filter-input,
+.ds-input,
+.row-field-input input,
+.safety-number input {
+  width: 100%;
+}
+
+.app textarea,
 textarea.ds-input {
+  height: auto;
   min-height: 80px;
   padding-top: var(--ds-space-2);
+  padding-bottom: var(--ds-space-2);
   line-height: var(--ds-line-body);
 }
 
-.form input:focus,
-.form select:focus,
-.form textarea:focus,
+.app input:not([type="checkbox"]):not([type="radio"]):focus,
+.app select:focus,
+.app textarea:focus,
 .table-filter:focus,
 .filter-input:focus,
 .ds-input:focus {
@@ -915,12 +936,54 @@ textarea.ds-input {
   gap: var(--ds-space-3);
 }
 
+.form-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ds-space-3);
+}
+
+.form-head h2 {
+  margin: 0;
+}
+
+.form-close-btn {
+  width: var(--ds-control-md);
+  min-width: var(--ds-control-md);
+  height: var(--ds-control-md);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: var(--ds-border-width) solid transparent;
+  border-radius: var(--ds-radius-sm);
+  background: transparent;
+  color: var(--ds-text-muted);
+  cursor: pointer;
+}
+
+.form-close-btn:hover,
+.form-close-btn:focus-visible {
+  background: var(--ds-hover);
+  color: var(--ds-text);
+  outline: none;
+}
+
+.form-import-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .form label {
   display: flex;
   flex-direction: column;
   gap: var(--ds-space-1);
   color: var(--ds-text-muted);
   font-size: var(--ds-font-size-sm);
+}
+
+.form .row .btn.small {
+  height: var(--ds-control-field);
+  min-height: var(--ds-control-field);
 }
 
 .form label.check {
