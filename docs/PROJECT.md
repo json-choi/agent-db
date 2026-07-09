@@ -18,7 +18,7 @@ Current scope:
 
 The Rust core owns the trust boundary:
 
-- `connection/`: connection profiles, pools, provider tuning, and Keychain-backed secrets
+- `connection/`: connection profiles, pools, provider tuning, and OS credential-store-backed secrets
 - `safety/`: SQL classification, read-only enforcement, preview, and approval policy
 - `executor/`: read execution and gated write execution
 - `audit/`: query history and hash-chained audit records
@@ -121,7 +121,9 @@ Release runs on `app-v*` tags or manual dispatch:
 
 - build macOS Apple Silicon artifact
 - build macOS Intel artifact
-- build Windows x64 NSIS installer
+- build Windows x64 NSIS installer with `src-tauri/tauri.windows.conf.json`
+- upload stable direct-download aliases:
+  `DopeDB-windows-x64-setup.exe`, `DopeDB-macos-arm64.dmg`, `DopeDB-macos-x64.dmg`
 - upload installers, updater archives, signatures, and `latest.json`
 
 Required GitHub secret:

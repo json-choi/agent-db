@@ -43,7 +43,11 @@ pub const MCP_BRIDGE_PORT: u16 = 7687;
 /// the Claude Desktop config snippet — GUI-spawned children get a minimal PATH, so the
 /// config must reference it by absolute path.
 pub fn bridge_binary_path() -> String {
-    let name = "dopedb-mcp-stdio";
+    let name = if cfg!(windows) {
+        "dopedb-mcp-stdio.exe"
+    } else {
+        "dopedb-mcp-stdio"
+    };
     let exe = std::env::current_exe().ok();
     // 1) Packaged .app: the `externalBin` sidecar is copied next to the app binary
     //    (Contents/MacOS/dopedb-mcp-stdio). Dev: the same sibling under target/debug
@@ -102,7 +106,10 @@ pub fn load_or_create_token() -> String {
     token
 }
 
-/// Write `bytes` to `path` with 0600 perms (owner-only — the file holds the token).
+/// Write `bytes` to `path` privately where the platform has a simple portable knob.
+/// On Unix we force 0600 because the file holds the MCP bearer token. On Windows the
+/// file lands under the user's roaming data directory; avoid Unix-only permission APIs.
+#[cfg(unix)]
 fn write_private(path: &std::path::Path, bytes: &[u8]) {
     use std::io::Write;
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -125,6 +132,13 @@ fn write_private(path: &std::path::Path, bytes: &[u8]) {
             );
         }
         Err(e) => tracing::error!("failed to open {} for write: {e}", path.display()),
+    }
+}
+
+#[cfg(windows)]
+fn write_private(path: &std::path::Path, bytes: &[u8]) {
+    if let Err(e) = std::fs::write(path, bytes) {
+        tracing::error!("failed to write {}: {e}", path.display());
     }
 }
 

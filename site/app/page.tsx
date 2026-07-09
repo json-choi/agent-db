@@ -18,6 +18,11 @@ import { TrackedLink } from "./TrackedLink";
 
 const repoUrl = "https://github.com/json-choi/dopedb";
 const releasesUrl = `${repoUrl}/releases/latest`;
+const downloadUrls = {
+  windows: `${repoUrl}/releases/latest/download/DopeDB-windows-x64-setup.exe`,
+  macApple: `${repoUrl}/releases/latest/download/DopeDB-macos-arm64.dmg`,
+  macIntel: `${repoUrl}/releases/latest/download/DopeDB-macos-x64.dmg`,
+};
 const siteUrl = "https://dopedb.dev";
 
 type Lang = "en" | "ko";
@@ -42,6 +47,8 @@ const copy = {
       signals: ["Agent-ready", "Credentials stay local", "Writes stay gated"],
       imageAlt:
         "DopeDB desktop app showing a SQL result, safety gate, and audit timeline",
+      windowsDownload: "Download for Windows",
+      macDownload: "Download for macOS",
     },
     positioning: {
       eyebrow: "The gap DopeDB fills",
@@ -124,6 +131,9 @@ DopeDB safety:
         "Until DopeDB is notarized with an Apple Developer ID, approve it from System Settings, Privacy & Security, Open Anyway after confirming the file came from GitHub Releases.",
       terminalPrefix: "Terminal alternative after copying to Applications:",
       latest: "Latest release",
+      windows: "Windows x64 installer",
+      macApple: "macOS Apple Silicon",
+      macIntel: "macOS Intel",
       source: "Build from source",
     },
     docs: {
@@ -169,6 +179,8 @@ DopeDB safety:
       signals: ["에이전트 준비 완료", "인증 정보는 로컬에", "쓰기는 승인 뒤에"],
       imageAlt:
         "SQL 결과, 안전 게이트, 감사 타임라인을 보여주는 DopeDB 데스크톱 앱",
+      windowsDownload: "Windows 다운로드",
+      macDownload: "macOS 다운로드",
     },
     positioning: {
       eyebrow: "DopeDB가 메우는 빈틈",
@@ -251,6 +263,9 @@ DopeDB safety:
         "Apple Developer ID로 공증되기 전까지는 GitHub Releases에서 받은 파일인지 확인한 뒤 System Settings, Privacy & Security, Open Anyway에서 실행을 허용하세요.",
       terminalPrefix: "Applications로 복사한 뒤 터미널에서 실행할 수 있는 대안:",
       latest: "최신 릴리스",
+      windows: "Windows x64 설치 파일",
+      macApple: "macOS Apple Silicon",
+      macIntel: "macOS Intel",
       source: "소스에서 빌드",
     },
     docs: {
@@ -302,7 +317,7 @@ export default async function Home({
     operatingSystem: "macOS, Windows",
     description: c.jsonDescription,
     url: siteUrl,
-    downloadUrl: releasesUrl,
+    downloadUrl: [downloadUrls.windows, downloadUrls.macApple, downloadUrls.macIntel],
     codeRepository: repoUrl,
     image: `${siteUrl}/dopedb-dashboard.png`,
     license: `${repoUrl}/blob/main/LICENSE`,
@@ -362,17 +377,22 @@ export default async function Home({
           <div className="hero-actions" aria-label="Primary actions">
             <TrackedLink
               className="button primary"
-              href={releasesUrl}
+              href={downloadUrls.windows}
               event="Download Clicked"
-              properties={{ source: "hero", target: "github_releases_latest" }}
+              properties={{ source: "hero", target: "windows_x64_installer" }}
             >
               <Download size={18} />
-              {c.hero.download}
+              {c.hero.windowsDownload}
             </TrackedLink>
-            <a className="button secondary" href={repoUrl}>
-              <GitBranch size={18} />
-              {c.hero.github}
-            </a>
+            <TrackedLink
+              className="button secondary"
+              href={downloadUrls.macApple}
+              event="Download Clicked"
+              properties={{ source: "hero", target: "macos_arm64_dmg" }}
+            >
+              <Download size={18} />
+              {c.hero.macDownload}
+            </TrackedLink>
           </div>
           <div className="signal-row" aria-label="Project highlights">
             {c.hero.signals.map((signal) => (
@@ -484,12 +504,30 @@ export default async function Home({
         <div className="release-actions">
           <TrackedLink
             className="button primary"
-            href={releasesUrl}
+            href={downloadUrls.windows}
             event="Download Clicked"
-            properties={{ source: "download_section", target: "github_releases_latest" }}
+            properties={{ source: "download_section", target: "windows_x64_installer" }}
           >
             <Download size={18} />
-            {c.download.latest}
+            {c.download.windows}
+          </TrackedLink>
+          <TrackedLink
+            className="button secondary"
+            href={downloadUrls.macApple}
+            event="Download Clicked"
+            properties={{ source: "download_section", target: "macos_arm64_dmg" }}
+          >
+            <Download size={18} />
+            {c.download.macApple}
+          </TrackedLink>
+          <TrackedLink
+            className="button secondary"
+            href={downloadUrls.macIntel}
+            event="Download Clicked"
+            properties={{ source: "download_section", target: "macos_x64_dmg" }}
+          >
+            <Download size={18} />
+            {c.download.macIntel}
           </TrackedLink>
           <a className="button secondary" href={`${repoUrl}/blob/main/docs/PROJECT.md#development`}>
             <TerminalSquare size={18} />

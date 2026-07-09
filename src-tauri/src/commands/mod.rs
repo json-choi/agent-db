@@ -138,7 +138,7 @@ pub async fn upsert_connection(
     password: Option<String>,
 ) -> AppResult<ConnectionProfile> {
     let mut profile = profile;
-    // Stash any supplied secret in the Keychain and point the profile at it.
+    // Stash any supplied secret in the OS credential store and point the profile at it.
     if let Some(pw) = password.filter(|p| !p.is_empty()) {
         connection::store_secret(&profile.id, &pw)?;
         profile.secret_ref = Some(profile.id.to_string());
@@ -168,7 +168,7 @@ pub async fn test_connection(state: State<'_, AppState>, id: Uuid) -> AppResult<
 }
 
 /// Dial an ad-hoc (possibly unsaved) profile purely to check that it connects.
-/// Persists NOTHING — no store row, no Keychain write, no cached pool. This is the
+/// Persists NOTHING — no store row, no credential-store write, no cached pool. This is the
 /// connection form's "Test connection" button: a literal reachability check.
 #[tauri::command]
 pub async fn test_connection_profile(

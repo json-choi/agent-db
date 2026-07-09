@@ -173,7 +173,7 @@ const messages = {
     "connections.objectCount": "{count} objects",
     "connections.objectExplorer": "Object explorer",
     "connections.password": "Password",
-    "connections.passwordStored": "stored in Keychain",
+    "connections.passwordStored": "stored securely",
     "connections.passwordStoredExisting": "stored",
     "connections.port": "Port",
     "connections.projectFolder": "Project folder",
@@ -228,7 +228,7 @@ const messages = {
       "DopeDB runs a local MCP server. Point Claude Code, Cursor, or Codex at it - the chat stays in your platform, while this app shows and controls the data.",
     "onboarding.agentTitle": "Connect your AI agent",
     "onboarding.databaseBody":
-      "Add a PostgreSQL, MySQL, or SQLite connection. Credentials are stored in your macOS Keychain - never in plain text.",
+      "Add a PostgreSQL, MySQL, or SQLite connection. Credentials are stored in your OS credential store - never in plain text.",
     "onboarding.databaseTitle": "Connect a database",
     "onboarding.foot":
       "You can do both, or start with just a database and add the agent later.",
@@ -585,7 +585,7 @@ const messages = {
     "connections.objectCount": "객체 {count}개",
     "connections.objectExplorer": "오브젝트 탐색기",
     "connections.password": "비밀번호",
-    "connections.passwordStored": "Keychain에 저장됨",
+    "connections.passwordStored": "보안 저장소에 저장됨",
     "connections.passwordStoredExisting": "저장됨",
     "connections.port": "포트",
     "connections.projectFolder": "프로젝트 폴더",
@@ -640,7 +640,7 @@ const messages = {
       "DopeDB는 로컬 MCP 서버를 실행합니다. Claude Code, Cursor, Codex를 연결하면 채팅은 기존 플랫폼에 남고, 이 앱이 데이터를 표시하고 제어합니다.",
     "onboarding.agentTitle": "AI 에이전트 연결",
     "onboarding.databaseBody":
-      "PostgreSQL, MySQL, SQLite 연결을 추가하세요. 인증 정보는 macOS Keychain에 저장되며 평문으로 남지 않습니다.",
+      "PostgreSQL, MySQL, SQLite 연결을 추가하세요. 인증 정보는 OS 보안 저장소에 저장되며 평문으로 남지 않습니다.",
     "onboarding.databaseTitle": "데이터베이스 연결",
     "onboarding.foot":
       "둘 다 설정해도 좋고, 데이터베이스부터 연결한 뒤 에이전트를 나중에 추가해도 됩니다.",

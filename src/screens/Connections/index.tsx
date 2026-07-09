@@ -1,5 +1,5 @@
 // Connection sidebar list + create/edit form. Secrets are never held here after
-// save — the password is handed to the backend, which stores it in the Keychain.
+// save — the password is handed to the backend, which stores it in the OS credential store.
 import { useEffect, useRef, useState } from "react";
 import {
   deleteConnection,

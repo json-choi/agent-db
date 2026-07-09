@@ -1,6 +1,6 @@
 //! DDL for the local app.db. Idempotent
 //! `CREATE TABLE IF NOT EXISTS` so `Store::open` can run it on every start.
-//! Secrets never live here — connections hold only a `secret_ref` (Keychain id).
+//! Secrets never live here — connections hold only a `secret_ref` (credential-store id).
 
 /// All migrations as one script; executed via `sqlx::raw_sql` (multi-statement).
 pub const SCHEMA: &str = r#"
@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS connections (
     username          TEXT NOT NULL,
     sslmode           TEXT NOT NULL,
     extra_params      TEXT NOT NULL DEFAULT '{}',   -- JSON map
-    secret_ref        TEXT,                          -- keychain item id, NOT the password
+    secret_ref        TEXT,                          -- credential-store item id, NOT the password
     readonly_default  INTEGER NOT NULL DEFAULT 1,
     allow_writes      INTEGER NOT NULL DEFAULT 0,
     project_dir       TEXT,                          -- working project folder (for migrations)

@@ -3,7 +3,7 @@
 DopeDB is a **free, open-source desktop app that gives AI agents a safe path to your databases**. Through MCP, agents can inspect schemas, run read queries, and understand results, while raw credentials, read-only enforcement, write approvals, rollback previews, and audit logs stay under the control of the local app.
 
 - Website: https://dopedb.dev (Korean: https://dopedb.dev/?lang=ko)
-- Download: https://github.com/json-choi/dopedb/releases/latest
+- Download: [Windows x64](https://github.com/json-choi/dopedb/releases/latest/download/DopeDB-windows-x64-setup.exe) · [macOS Apple Silicon](https://github.com/json-choi/dopedb/releases/latest/download/DopeDB-macos-arm64.dmg) · [macOS Intel](https://github.com/json-choi/dopedb/releases/latest/download/DopeDB-macos-x64.dmg)
 - Korean: [README.md](./README.md)
 - Project docs: [docs/PROJECT.md](./docs/PROJECT.md)
 
@@ -60,7 +60,7 @@ cargo check --workspace
 
 ## Releases
 
-Pushing an `app-v*` tag starts the GitHub Actions release workflow. It builds Apple Silicon and Intel macOS artifacts, a Windows x64 NSIS installer, and uploads updater metadata to GitHub Releases.
+Pushing an `app-v*` tag starts the GitHub Actions release workflow. It builds Apple Silicon and Intel macOS artifacts, a Windows x64 NSIS installer, and uploads updater metadata to GitHub Releases. The website download buttons point directly at stable release asset names: `DopeDB-windows-x64-setup.exe`, `DopeDB-macos-arm64.dmg`, and `DopeDB-macos-x64.dmg`.
 
 ```sh
 git tag app-v0.1.1

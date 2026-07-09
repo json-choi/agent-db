@@ -1,6 +1,6 @@
 //! Connection management: live sqlx pools (a separate read-only pool per
-//! connection), macOS Keychain secret storage, and per-provider connection-string
-//! tuning. Credentials live only in the Keychain; the MCP tool surface operates
+//! connection), OS credential-store secret storage, and per-provider connection-string
+//! tuning. Credentials live only in the credential store; the MCP tool surface operates
 //! on connection ids and never exposes stored secrets.
 
 pub mod keychain;

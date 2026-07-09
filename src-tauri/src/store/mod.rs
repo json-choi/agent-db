@@ -3,7 +3,7 @@
 //! query history, the audit log, snippets, and the schema cache.
 //!
 //! Secrets are NEVER stored here — connections carry only a `secret_ref` that
-//! points at a macOS Keychain item. Row⇄model mapping is manual (`sqlx::query`,
+//! points at an OS credential-store item. Row⇄model mapping is manual (`sqlx::query`,
 //! runtime, not the compile-time `query!` macro) because this is a
 //! runtime-arbitrary-SQL client.
 

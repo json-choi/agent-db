@@ -23,7 +23,7 @@ export function listConnections(): Promise<ConnectionProfile[]> {
 
 // NOTE(integrator): ConnectionProfile carries no plaintext secret. The optional
 // `password` is passed alongside the profile so the backend can stash it in the
-// Keychain and set `secretRef`. If upsert_connection does not accept a `password`
+// OS credential store and set `secretRef`. If upsert_connection does not accept a `password`
 // arg, drop it here and add a dedicated store_secret command.
 export function upsertConnection(
   profile: ConnectionProfile,

@@ -18,7 +18,7 @@ pub enum Engine {
 }
 
 /// A saved connection. Secrets never live here — only a `secretRef` pointing at the
-/// macOS Keychain item that holds the password/connection string.
+/// OS credential-store item that holds the password/connection string.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionProfile {
@@ -36,7 +36,7 @@ pub struct ConnectionProfile {
     pub readonly_default: bool,
     /// Master per-connection gate for the write path (default false).
     pub allow_writes: bool,
-    /// Keychain item id for the secret, if one has been stored.
+    /// Credential-store item id for the secret, if one has been stored.
     pub secret_ref: Option<String>,
     /// Working project folder for this connection (used to locate migrations).
     #[serde(default)]

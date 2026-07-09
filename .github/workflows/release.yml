@@ -30,7 +30,7 @@ jobs:
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
             rust-targets: x86_64-pc-windows-msvc
-            args: --target x86_64-pc-windows-msvc
+            args: --target x86_64-pc-windows-msvc --config src-tauri/tauri.windows.conf.json
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v7
@@ -81,3 +81,45 @@ jobs:
           uploadUpdaterJson: true
           uploadUpdaterSignatures: true
           args: ${{ matrix.args }}
+
+      - name: Upload stable direct-download asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+
+          version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          tag="${GITHUB_REF_NAME}"
+          if [[ "${GITHUB_REF_TYPE:-}" != "tag" ]]; then
+            tag="app-v${version}"
+          fi
+
+          mkdir -p release-alias
+          case "$TARGET" in
+            x86_64-pc-windows-msvc)
+              src="$(find "src-tauri/target/$TARGET/release/bundle/nsis" -maxdepth 1 -type f -name '*.exe' | head -n 1)"
+              alias="DopeDB-windows-x64-setup.exe"
+              ;;
+            aarch64-apple-darwin)
+              src="$(find "src-tauri/target/$TARGET/release/bundle/dmg" -maxdepth 1 -type f -name '*.dmg' | head -n 1)"
+              alias="DopeDB-macos-arm64.dmg"
+              ;;
+            x86_64-apple-darwin)
+              src="$(find "src-tauri/target/$TARGET/release/bundle/dmg" -maxdepth 1 -type f -name '*.dmg' | head -n 1)"
+              alias="DopeDB-macos-x64.dmg"
+              ;;
+            *)
+              echo "No stable alias configured for $TARGET"
+              exit 0
+              ;;
+          esac
+
+          if [[ -z "${src:-}" || ! -f "$src" ]]; then
+            echo "No installer artifact found for $TARGET" >&2
+            exit 1
+          fi
+
+          cp "$src" "release-alias/$alias"
+          gh release upload "$tag" "release-alias/$alias" --clobber

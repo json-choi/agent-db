@@ -1,10 +1,12 @@
-//! Connection secrets in the macOS Keychain (keyring 3, `apple-native` store).
+//! Connection secrets in the OS credential store (macOS Keychain or Windows
+//! Credential Manager through keyring 3).
 //! Service = bundle id, account = connection id. The app.db holds only a
 //! `secret_ref`; the password never touches disk in cleartext.
 //!
 //! PRODUCTION REQUIRES A SIGNED BUILD. Unsigned / ad-hoc builds hit
-//! `errSecMissingEntitlement (-34018)` — the Keychain is simply unavailable. So in
-//! DEBUG builds only we fall back to an obfuscated file under the app data dir.
+//! platform credential-store failures (for example macOS `errSecMissingEntitlement
+//! (-34018)`). So in DEBUG builds only we fall back to an obfuscated file under the
+//! app data dir.
 //! That fallback is NOT real security; it exists solely so unsigned dev builds run.
 
 use keyring::Entry;
@@ -12,7 +14,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 
-/// Keychain service name (bundle id). Must match the signed bundle identifier.
+/// Credential-store service name (bundle id). Must match the signed bundle identifier.
 const SERVICE: &str = "capital.launcher.dopedb";
 
 fn entry(connection_id: &Uuid) -> AppResult<Entry> {
@@ -33,9 +35,9 @@ pub fn fetch_secret(connection_id: &Uuid) -> AppResult<String> {
     match entry(connection_id)?.get_password() {
         Ok(s) => Ok(s),
         Err(keyring::Error::NoEntry) if cfg!(debug_assertions) => file_fetch(connection_id),
-        Err(keyring::Error::NoEntry) => {
-            Err(AppError::NotFound(format!("no secret for connection {connection_id}")))
-        }
+        Err(keyring::Error::NoEntry) => Err(AppError::NotFound(format!(
+            "no secret for connection {connection_id}"
+        ))),
         Err(e) if should_fallback(&e) => file_fetch(connection_id),
         Err(e) => Err(e.into()),
     }
@@ -54,8 +56,8 @@ pub fn delete_secret(connection_id: &Uuid) -> AppResult<()> {
     }
 }
 
-/// True when the Keychain is structurally unavailable (unsigned build) AND we are
-/// in a debug build permitted to use the file fallback.
+/// True when the OS credential store is structurally unavailable (for example an
+/// unsigned dev build) AND we are in a debug build permitted to use the file fallback.
 fn should_fallback(e: &keyring::Error) -> bool {
     cfg!(debug_assertions)
         && matches!(
@@ -68,7 +70,7 @@ fn should_fallback(e: &keyring::Error) -> bool {
 // DEBUG-ONLY file fallback. Obfuscated, NOT encrypted with a real key.
 // ponytail: XOR-with-static-key obfuscation. Ceiling: not secure against anyone
 // with file read access — it only stops a casual `cat`. Upgrade path is a signed
-// build so the Keychain works and this whole section is dead.
+// build so the OS credential store works and this whole section is dead.
 // ---------------------------------------------------------------------------
 
 const OBFUSCATION_KEY: &[u8] = b"dopedb-dev-only-not-secure-v1";

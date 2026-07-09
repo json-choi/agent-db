@@ -36,7 +36,7 @@ pub fn run() {
         .manage(state)
         .setup(|app| {
             // Start the local MCP server (Streamable HTTP on 127.0.0.1:7686). It shares
-            // the app's Store + Keychain + safety pipeline via the tools in `mcp`.
+            // the app's Store + credential-store + safety pipeline via the tools in `mcp`.
             let st = app.state::<state::AppState>();
             let store = st.store.clone();
             let token = st.mcp_token.clone();

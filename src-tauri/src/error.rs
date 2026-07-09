@@ -24,8 +24,8 @@ pub enum AppError {
     #[error("parse error: {0}")]
     Parse(#[from] sqlparser::parser::ParserError),
 
-    /// macOS Keychain access failure (note: unsigned builds hit errSecMissingEntitlement -34018).
-    #[error("keychain error: {0}")]
+    /// OS credential-store access failure (macOS Keychain / Windows Credential Manager).
+    #[error("credential store error: {0}")]
     Keychain(#[from] keyring::Error),
 
     #[error("io error: {0}")]

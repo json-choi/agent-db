@@ -1,9 +1,9 @@
 [package]
 name = "dopedb"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 rust-version = "1.82"
-description = "macOS-native, agent-driven database client (local MCP server)"
+description = "Cross-platform, agent-driven database client (local MCP server)"
 authors = ["Jaesong Choi"]
 license = "MIT"
 
@@ -47,8 +47,9 @@ uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 sha2 = "0.10"
 hex = "0.4"
-keyring = { version = "3", features = ["apple-native"] }
+keyring = { version = "3", features = ["apple-native", "windows-native"] }
 dirs = "6"
+toml_edit = "0.25"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 futures = "0.3"
