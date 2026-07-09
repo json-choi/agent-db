@@ -16,8 +16,8 @@
   border-radius: var(--ds-radius-md);
   background: var(--ds-surface-0);
   color: var(--ds-text);
-  border: 1px solid var(--ds-border-subtle);
-  border-left: 3px solid var(--ds-success);
+  border: var(--ds-border-width) solid var(--ds-border-subtle);
+  border-left: var(--ds-border-width-bold) solid var(--ds-success);
   box-shadow: var(--ds-shadow-popover);
   font-size: var(--ds-font-size-ui);
   animation: toast-in 0.15s ease-out;
@@ -29,10 +29,24 @@
   border-left-color: var(--ds-danger);
 }
 
+@media (max-width: 640px) {
+  .toast-wrap {
+    right: var(--ds-space-3);
+    bottom: var(--ds-space-3);
+    left: var(--ds-space-3);
+  }
+
+  .toast {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+  }
+}
+
 @keyframes toast-in {
   from {
     opacity: 0;
-    transform: translateY(6px);
+    transform: translateY(var(--ds-motion-distance-sm));
   }
   to {
     opacity: 1;

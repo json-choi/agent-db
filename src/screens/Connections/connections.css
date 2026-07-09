@@ -20,12 +20,12 @@
 /* Per-row "DDL" button — hidden until row hover to keep the tree quiet. */
 .ddl-btn {
   margin-left: auto;
-  border: 1px solid var(--ds-border-subtle);
+  border: var(--ds-border-width) solid var(--ds-border-subtle);
   background: transparent;
   color: var(--ds-text-muted);
   font-size: var(--ds-font-size-2xs);
   font-weight: 600;
-  padding: 1px 6px;
+  padding: var(--ds-chip-pad-y) var(--ds-chip-pad-x);
   border-radius: var(--ds-radius-xs);
   cursor: pointer;
   opacity: 0;
@@ -51,9 +51,9 @@
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.03em;
-  padding: 1px 6px;
+  padding: var(--ds-chip-pad-y) var(--ds-chip-pad-x);
   border-radius: var(--ds-radius-xs);
-  border: 1px solid var(--ds-warning);
+  border: var(--ds-border-width) solid var(--ds-warning);
   color: var(--ds-warning);
 }
 .env-chip.env-prod {
@@ -74,7 +74,7 @@
 }
 .ddl-modal {
   background: var(--ds-surface-0);
-  border: 1px solid var(--ds-border-subtle);
+  border: var(--ds-border-width) solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-lg);
   box-shadow: var(--ds-shadow-panel);
   width: min(640px, 88vw);
@@ -99,20 +99,11 @@
 }
 
 /* Database explorer — sidebar tree (DataGrip-style): connections expand to tables. */
-.explorer-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--ds-space-2);
-  padding: var(--ds-space-2) var(--ds-space-3);
-  border-bottom: 1px solid var(--ds-border-subtle);
-  background: var(--ds-surface-0);
-}
 .explorer {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: var(--ds-space-1);
+  padding: var(--ds-space-2);
 }
 .db-conn {
   display: flex;
@@ -136,65 +127,98 @@
   font-size: var(--ds-font-size-2xs);
 }
 .db-conn-name {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.db-conn-engine {
+.db-menu {
+  position: relative;
   margin-left: auto;
-  font-size: var(--ds-font-size-xs);
   flex-shrink: 0;
 }
-.db-tables {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  padding: var(--ds-space-1) 0 var(--ds-space-2) var(--ds-space-4);
-}
-.db-context-strip {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--ds-space-1);
-  padding: var(--ds-space-1) var(--ds-space-2) var(--ds-space-2);
-}
-.db-context-strip .ds-filter-token {
-  min-height: var(--ds-control-xs);
-  padding: 0 6px;
-  font-size: var(--ds-font-size-xs);
-}
-.view-options-menu {
-  position: relative;
-}
-.view-options-menu summary {
+
+.db-menu summary {
   list-style: none;
-  cursor: pointer;
 }
-.view-options-menu summary::-webkit-details-marker {
+
+.db-menu summary::-webkit-details-marker {
   display: none;
 }
-.view-options-panel {
+
+.db-menu-trigger {
+  width: var(--ds-control-sm);
+  height: var(--ds-control-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--ds-radius-sm);
+  color: var(--ds-text-muted);
+  cursor: pointer;
+}
+
+.db-menu-trigger:hover,
+.db-menu[open] .db-menu-trigger {
+  background: var(--ds-hover);
+  color: var(--ds-text);
+}
+
+.db-menu-panel {
   position: absolute;
   z-index: var(--ds-z-popover);
-  top: calc(100% + 4px);
-  left: 0;
-  min-width: 156px;
-  padding: var(--ds-space-2);
-  border: 1px solid var(--ds-border-subtle);
+  top: calc(100% + var(--ds-popover-offset));
+  right: 0;
+  min-width: 172px;
+  display: grid;
+  gap: var(--ds-segment-gap);
+  padding: var(--ds-space-1);
+  border: var(--ds-border-width) solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-sm);
   background: var(--ds-surface-0);
   box-shadow: var(--ds-shadow-popover);
 }
-.view-options-panel label {
+
+.db-menu-panel > button,
+.db-menu-panel > label,
+.db-menu-item {
+  min-height: var(--ds-control-md);
   display: flex;
   align-items: center;
   gap: var(--ds-space-2);
+  padding: 0 var(--ds-space-2);
+  border: none;
+  border-radius: var(--ds-radius-sm);
+  background: transparent;
   color: var(--ds-text);
+  cursor: pointer;
+  font: inherit;
   font-size: var(--ds-font-size-sm);
-  white-space: nowrap;
+  text-align: left;
+}
+
+.db-menu-panel > button:hover,
+.db-menu-panel > label:hover,
+.db-menu-item:hover {
+  background: var(--ds-hover);
+}
+
+.db-menu-item.danger {
+  color: var(--ds-danger);
+}
+
+.db-tables {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-row-gap-tight);
+  padding: var(--ds-space-1) 0 var(--ds-space-2) var(--ds-space-4);
+}
+.connection-write-help {
+  margin-top: calc(var(--ds-space-2) * -1);
 }
 .db-tables .table-filter {
-  margin-bottom: 4px;
+  margin-bottom: var(--ds-space-1);
 }
 .db-table {
   display: flex;
@@ -232,7 +256,7 @@
 .table-filter {
   width: 100%;
   padding: var(--ds-space-1) var(--ds-space-2);
-  border: 1px solid var(--ds-border-subtle);
+  border: var(--ds-border-width) solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-sm);
   background: var(--ds-surface-1);
   color: var(--ds-text);
@@ -256,36 +280,17 @@
   opacity: 1;
 }
 
-/* Schema refresh button in the explorer tree. */
-.db-refresh {
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  color: var(--ds-text-muted);
-  font-size: var(--ds-font-size-ui);
-  line-height: 1;
-  min-width: 24px;
-  min-height: 24px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-.db-refresh:hover {
-  color: var(--ds-accent-text);
-}
-.db-conn.selected .db-refresh {
-  color: var(--ds-text);
-}
-
 /* Sidebar footer (Settings entry) */
 .sidebar-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-1);
   padding: var(--ds-space-2);
-  border-top: 1px solid var(--ds-border-subtle);
+  border-top: var(--ds-border-width) solid var(--ds-border-subtle);
 }
 
 .foot-btn {
-  width: 100%;
+  flex: 1;
   display: flex;
   align-items: center;
   gap: var(--ds-space-2);
@@ -307,12 +312,31 @@
   color: var(--ds-text-muted);
 }
 
+.foot-add-btn {
+  width: var(--ds-control-md);
+  min-width: var(--ds-control-md);
+  height: var(--ds-control-md);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--ds-radius-sm);
+  background: transparent;
+  color: var(--ds-text-muted);
+  cursor: pointer;
+}
+
+.foot-add-btn:hover {
+  background: var(--ds-hover);
+  color: var(--ds-text);
+}
+
 /* Sidebar "Migrations" nav row (under an expanded connection) */
 .db-nav {
   display: flex;
   align-items: center;
   gap: var(--ds-space-2);
-  margin-bottom: 2px;
+  margin-bottom: var(--ds-optical-offset-xs);
   padding: var(--ds-space-1) var(--ds-space-2);
   border-radius: var(--ds-radius-sm);
   cursor: pointer;
@@ -335,4 +359,27 @@
 
 .db-nav.active .db-nav-ico {
   color: var(--ds-text-on-accent-muted);
+}
+
+@media (max-width: 760px) {
+  .ddl-overlay {
+    align-items: stretch;
+    padding: var(--ds-space-3);
+  }
+
+  .ddl-modal {
+    width: 100%;
+    max-height: none;
+  }
+
+  .ddl-head {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: var(--ds-space-2);
+  }
+
+  .ddl-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
 }

@@ -539,7 +539,7 @@ export default function TableData({
                     </div>
                   ))}
                 </div>
-                <div className="row-editor-actions">
+                <div className="row-editor-actions ds-action-row">
                   <button className="btn primary" onClick={armDelete}>
                     {t("tables.reviewDelete")}
                   </button>

@@ -2,6 +2,8 @@ import { getVersion } from "@tauri-apps/api/app";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updater";
 import { useEffect, useMemo, useState } from "react";
+import { Icon, type IconName } from "../../components/Icon";
+import InfoTip from "../../components/InfoTip";
 import { errMessage } from "../../ipc/types";
 import { useI18n } from "../../lib/i18n";
 import "./updates.css";
@@ -26,11 +28,35 @@ function pct(done: number, total: number | null) {
   return Math.min(100, Math.round((done / total) * 100));
 }
 
-export default function Updates() {
+function stateIcon(state: UpdateState): IconName {
+  switch (state) {
+    case "checking":
+      return "refresh";
+    case "available":
+    case "downloading":
+      return "download";
+    case "current":
+    case "ready":
+      return "check";
+    case "error":
+      return "alert";
+    case "idle":
+    default:
+      return "info";
+  }
+}
+
+export default function Updates({
+  initialUpdate = null,
+  onChecked,
+}: {
+  initialUpdate?: Update | null;
+  onChecked?: (update: Update | null) => void;
+}) {
   const { t } = useI18n();
-  const [state, setState] = useState<UpdateState>("idle");
+  const [state, setState] = useState<UpdateState>(initialUpdate ? "available" : "idle");
   const [currentVersion, setCurrentVersion] = useState<string>(t("common.unknown"));
-  const [update, setUpdate] = useState<Update | null>(null);
+  const [update, setUpdate] = useState<Update | null>(initialUpdate);
   const [error, setError] = useState<string | null>(null);
   const [downloaded, setDownloaded] = useState(0);
   const [contentLength, setContentLength] = useState<number | null>(null);
@@ -44,6 +70,7 @@ export default function Updates() {
       const [version, next] = await Promise.all([getVersion(), check()]);
       setCurrentVersion(version);
       setUpdate(next);
+      onChecked?.(next);
       setState(next ? "available" : "current");
     } catch (e) {
       setUpdate(null);
@@ -78,18 +105,46 @@ export default function Updates() {
   }
 
   useEffect(() => {
-    void refresh();
+    let alive = true;
+    void getVersion().then((version) => {
+      if (alive) setCurrentVersion(version);
+    });
+    if (!initialUpdate) void refresh();
+    return () => {
+      alive = false;
+    };
   }, []);
+
+  useEffect(() => {
+    if (!initialUpdate) return;
+    setUpdate(initialUpdate);
+    setState("available");
+    setError(null);
+  }, [initialUpdate]);
 
   const progress = useMemo(() => pct(downloaded, contentLength), [downloaded, contentLength]);
   const releaseNotes = update?.body?.trim();
+  const stateLabel =
+    state === "available"
+      ? t("updates.available")
+      : state === "current"
+        ? t("updates.current")
+        : state === "checking"
+          ? t("updates.checking")
+          : state === "downloading"
+            ? t("updates.downloading")
+            : state === "ready"
+              ? t("updates.ready")
+              : state === "error"
+                ? t("updates.error")
+                : t("updates.idle");
 
   return (
     <div className="screen updates">
       <div className="updates-head">
-        <div>
+        <div className="updates-title-row">
           <h2>{t("updates.title")}</h2>
-          <p className="muted">{t("updates.description")}</p>
+          <InfoTip label={t("updates.description")} />
         </div>
         <button className="btn small" disabled={state === "checking" || state === "downloading"} onClick={refresh}>
           {t("updates.checkAgain")}
@@ -113,12 +168,13 @@ export default function Updates() {
         </div>
         <div className="update-row">
           <span className="muted">{t("updates.status")}</span>
-          <span className={`badge update-state update-${state}`}>
-            {state === "available"
-              ? t("updates.available")
-              : state === "current"
-                ? t("updates.current")
-                : state}
+          <span
+            className={`badge update-state icon-only-badge update-${state}`}
+            title={stateLabel}
+            aria-label={stateLabel}
+            role="img"
+          >
+            <Icon name={stateIcon(state)} />
           </span>
         </div>
 

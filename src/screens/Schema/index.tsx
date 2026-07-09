@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { getCatalog } from "../../ipc/commands";
 import type { Catalog, CatalogTable, ConnectionProfile } from "../../ipc/types";
 import { errMessage } from "../../ipc/types";
+import { Icon } from "../../components/Icon";
+import InfoTip from "../../components/InfoTip";
 import { tableKey, tableLabel } from "../../lib/tableRef";
 import { useI18n } from "../../lib/i18n";
 import "./schema.css";
@@ -195,11 +197,25 @@ export default function SchemaExplorer({
     <div className="screen schema-screen">
       <div className="schema-head">
         <div>
-          <h2>{t("schema.title")}</h2>
-          <p className="muted">
-            {t("schema.tableCount", { count: catalog.tables.length })} ·{" "}
-            {t("schema.fkCount", { count: allRelationships.length })}
-          </p>
+          <div className="schema-title-row">
+            <h2>{t("schema.title")}</h2>
+            <span
+              className="badge schema-stat"
+              title={t("schema.tableCount", { count: catalog.tables.length })}
+              aria-label={t("schema.tableCount", { count: catalog.tables.length })}
+            >
+              <Icon name="table" />
+              {catalog.tables.length}
+            </span>
+            <span
+              className="badge schema-stat"
+              title={t("schema.fkCount", { count: allRelationships.length })}
+              aria-label={t("schema.fkCount", { count: allRelationships.length })}
+            >
+              <Icon name="chevronRight" />
+              {allRelationships.length}
+            </span>
+          </div>
         </div>
         <input
           className="schema-filter"
@@ -300,11 +316,16 @@ export default function SchemaExplorer({
             {selected ? (
               <>
                 <div className="schema-inspector-head">
-                  <div>
+                  <div className="schema-inspector-title">
                     <h3>{tableLabel(connection.engine, selected)}</h3>
-                    <p className="muted">
-                      {t("schema.columnCount", { count: selected.columns.length })}
-                    </p>
+                    <span
+                      className="badge schema-stat"
+                      title={t("schema.columnCount", { count: selected.columns.length })}
+                      aria-label={t("schema.columnCount", { count: selected.columns.length })}
+                    >
+                      <Icon name="table" />
+                      {selected.columns.length}
+                    </span>
                   </div>
                   <button className="btn small" onClick={() => onOpenTable(selected)}>
                     {t("schema.openData")}
@@ -360,7 +381,7 @@ export default function SchemaExplorer({
                 )}
               </>
             ) : (
-              <p className="muted">{t("schema.selectTable")}</p>
+              <InfoTip label={t("schema.selectTable")} />
             )}
           </aside>
         </div>

@@ -8,7 +8,7 @@
   display: inline-block;
   max-width: 60ch;
   overflow: hidden;
-  padding: 1px 6px;
+  padding: var(--ds-chip-pad-y) var(--ds-chip-pad-x);
   border-radius: var(--ds-radius-sm);
   background: var(--ds-hover-strong);
   font-family: var(--ds-font-mono);
@@ -21,7 +21,7 @@
 .grid-scroll {
   max-height: 60vh;
   overflow: auto;
-  border: 1px solid var(--ds-border-subtle);
+  border: var(--ds-border-width) solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-lg);
 }
 
@@ -58,8 +58,8 @@ table.grid {
 table.grid th,
 table.grid td {
   box-sizing: border-box;
-  border-bottom: 1px solid var(--ds-border-subtle);
-  border-right: 1px solid var(--ds-border-subtle);
+  border-bottom: var(--ds-border-width) solid var(--ds-border-subtle);
+  border-right: var(--ds-border-width) solid var(--ds-border-subtle);
 }
 table.grid thead th {
   position: sticky;
@@ -117,7 +117,7 @@ table.grid tbody tr.selected td {
 /* Selected cell (click to select, ⌘C to copy). Inset box-shadow draws an accent
    outline without shifting layout or fighting the cell's own borders. */
 table.grid tbody td.cell-sel {
-  box-shadow: inset 0 0 0 2px var(--ds-accent);
+  box-shadow: inset 0 0 0 var(--ds-border-width-strong) var(--ds-accent);
 }
 
 /* Always-visible scrollbars: custom WebKit styling opts out of macOS auto-hiding
@@ -129,7 +129,7 @@ table.grid tbody td.cell-sel {
 .grid-scroll::-webkit-scrollbar-thumb {
   background: var(--ds-text-muted);
   border-radius: var(--ds-radius-pill);
-  border: 3px solid transparent;
+  border: var(--ds-border-width-bold) solid transparent;
   background-clip: padding-box;
 }
 .grid-scroll::-webkit-scrollbar-thumb:hover {
@@ -189,7 +189,7 @@ table.grid td.clickable {
   font-size: var(--ds-font-size-sm);
   font-weight: 400;
   padding: 0 var(--ds-space-1);
-  border: 1px solid var(--ds-border-subtle);
+  border: var(--ds-border-width) solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-xs);
   background: var(--ds-surface-0);
   color: var(--ds-text);
@@ -217,7 +217,7 @@ table.grid td.clickable {
   width: 1px;
   align-self: stretch;
   background: var(--ds-border-subtle);
-  margin: 0 4px;
+  margin: 0 var(--ds-space-1);
 }
 .toolbar-menu {
   position: relative;
@@ -232,13 +232,13 @@ table.grid td.clickable {
 .toolbar-menu-panel {
   position: absolute;
   z-index: var(--ds-z-sticky);
-  top: calc(100% + 6px);
+  top: calc(100% + var(--ds-popover-offset-lg));
   left: 0;
   min-width: 152px;
   display: grid;
   gap: var(--ds-space-2);
   padding: var(--ds-space-2);
-  border: 1px solid var(--ds-border-subtle);
+  border: var(--ds-border-width) solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-sm);
   background: var(--ds-surface-0);
   box-shadow: var(--ds-shadow-panel);
@@ -252,7 +252,7 @@ table.grid td.clickable {
   max-width: 44%;
   flex-shrink: 0;
   overflow: auto;
-  border: 1px solid var(--ds-border-subtle);
+  border: var(--ds-border-width) solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-md);
   background: var(--ds-surface-0);
   padding: var(--ds-space-3);
@@ -309,13 +309,13 @@ table.grid td.clickable {
   align-items: center;
   gap: var(--ds-space-2);
   font-size: var(--ds-font-size-sm);
-  margin-bottom: 3px;
+  margin-bottom: var(--ds-optical-offset-sm);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .row-field.changed {
-  border-left: 2px solid var(--ds-accent);
+  border-left: var(--ds-border-width-strong) solid var(--ds-accent);
   padding-left: var(--ds-space-2);
 }
 .changed-badge {
@@ -324,16 +324,16 @@ table.grid td.clickable {
   color: var(--ds-accent-text);
   background: var(--ds-accent-soft);
   border-radius: var(--ds-radius-xs);
-  padding: 1px 4px;
+  padding: var(--ds-chip-pad-y) var(--ds-chip-pad-x-xs);
   text-transform: uppercase;
 }
 .pk-badge {
   font-size: var(--ds-font-size-2xs);
   font-weight: 700;
   color: var(--ds-accent-text);
-  border: 1px solid var(--ds-accent);
-  border-radius: 3px;
-  padding: 0 3px;
+  border: var(--ds-border-width) solid var(--ds-accent);
+  border-radius: var(--ds-optical-offset-sm);
+  padding: 0 var(--ds-chip-pad-x-2xs);
 }
 .row-field-input {
   display: flex;
@@ -346,7 +346,7 @@ table.grid td.clickable {
   min-width: 0;
   font: inherit;
   padding: var(--ds-space-1) var(--ds-space-2);
-  border: 1px solid var(--ds-border-subtle);
+  border: var(--ds-border-width) solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-sm);
   background: var(--ds-surface-0);
   color: var(--ds-text);
@@ -358,7 +358,7 @@ table.grid td.clickable {
   justify-content: center;
   width: var(--ds-control-md);
   height: var(--ds-control-md);
-  border: 1px solid var(--ds-border-subtle);
+  border: var(--ds-border-width) solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-sm);
   color: var(--ds-text-muted);
   background: var(--ds-surface-1);
@@ -380,18 +380,14 @@ table.grid td.clickable {
   cursor: not-allowed;
 }
 .null-toggle:focus-within {
-  outline: 2px solid var(--ds-accent);
-  outline-offset: 2px;
+  outline: var(--ds-focus-width) solid var(--ds-accent);
+  outline-offset: var(--ds-focus-offset);
 }
 .row-editor-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--ds-space-2);
-  flex-wrap: wrap;
   position: sticky;
   bottom: calc(var(--ds-space-3) * -1);
   background: var(--ds-surface-0);
-  border-top: 1px solid var(--ds-border-subtle);
+  border-top: var(--ds-border-width) solid var(--ds-border-subtle);
   margin: var(--ds-space-2) calc(var(--ds-space-3) * -1) calc(var(--ds-space-3) * -1);
   padding: var(--ds-space-3);
 }
@@ -404,5 +400,41 @@ table.grid td.clickable {
     width: auto;
     max-width: none;
     max-height: 42vh;
+  }
+}
+
+@media (max-width: 760px) {
+  .grid-toolbar {
+    align-items: stretch;
+  }
+
+  .grid-toolbar .btn,
+  .toolbar-menu,
+  .toolbar-menu summary {
+    width: 100%;
+  }
+
+  .toolbar-menu-panel {
+    left: 0;
+    right: 0;
+    min-width: 0;
+  }
+
+  .grid-panel {
+    max-height: min(360px, 44dvh);
+  }
+
+  .panel-head,
+  .panel-head-actions {
+    align-items: flex-start;
+  }
+
+  .panel-head {
+    flex-direction: column;
+  }
+
+  .panel-head-actions {
+    width: 100%;
+    flex-wrap: wrap;
   }
 }

@@ -69,3 +69,22 @@
     justify-content: flex-start;
   }
 }
+
+@media (max-width: 760px) {
+  .table-data {
+    gap: var(--ds-space-2);
+  }
+
+  .table-data-head .table-pager,
+  .table-query-strip {
+    width: 100%;
+  }
+
+  .table-data-head .table-pager {
+    flex-wrap: wrap;
+  }
+
+  .table-query-strip .column-policy {
+    max-width: none;
+  }
+}

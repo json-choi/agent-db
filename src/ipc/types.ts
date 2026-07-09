@@ -208,3 +208,27 @@ export function errMessage(e: unknown): string {
   }
   return String(e);
 }
+
+export interface AppErrorDetails {
+  kind: string | null;
+  message: string;
+  raw: string;
+}
+
+export function errDetails(e: unknown): AppErrorDetails {
+  if (e && typeof e === "object" && "message" in e) {
+    const shaped = e as Partial<AppErrorShape>;
+    let raw = String(e);
+    try {
+      raw = JSON.stringify(e, null, 2) ?? raw;
+    } catch {
+      // Fall back to String(e).
+    }
+    return {
+      kind: typeof shaped.kind === "string" ? shaped.kind : null,
+      message: String(shaped.message),
+      raw,
+    };
+  }
+  return { kind: null, message: String(e), raw: String(e) };
+}

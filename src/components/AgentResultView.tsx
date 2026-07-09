@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import DataGrid from "./DataGrid";
 import ResultToolbar from "./ResultToolbar";
 import { Icon } from "./Icon";
+import InfoTip from "./InfoTip";
 import { stamp } from "../lib/export";
 import { fullTime } from "../lib/relTime";
 import { useAgentFeed, type AgentActivity } from "../lib/agentFeed";
@@ -120,22 +121,25 @@ function AgentEmptyState() {
   ];
 
   return (
-    <div className="agent-empty-panel ds-trust-surface">
+    <div className="agent-empty-panel ds-surface ds-tone-trust">
       <div className="agent-empty-copy">
-        <h3>{t("agent.ledgerTitle")}</h3>
-        <p>{t("agent.emptyBody")}</p>
+        <div className="agent-empty-title">
+          <h3>{t("agent.ledgerTitle")}</h3>
+          <InfoTip label={t("agent.emptyBody")} />
+        </div>
       </div>
-      <div className="agent-empty-rows ds-ledger-grid" aria-label={t("agent.emptyCards")}>
+      <div className="agent-empty-rows ds-card-grid" aria-label={t("agent.emptyCards")}>
         {items.map((item) => (
           <div
-            className={`agent-empty-row ds-ledger-card ds-ledger-card-${item.tone}`}
+            className={`agent-empty-row ds-card ds-card-stack ds-tone-${item.tone}`}
             key={item.title}
+            title={t(item.body)}
           >
-            <div className="ds-ledger-card-header">
+            <div className="ds-card-title-row">
               <Icon name={item.icon} />
               <strong>{t(item.title)}</strong>
+              <InfoTip label={t(item.body)} />
             </div>
-            <p>{t(item.body)}</p>
           </div>
         ))}
       </div>
@@ -175,15 +179,22 @@ export default function AgentResultView() {
         <div>
           <div className="agent-title-row">
             <h2>{t("agent.workspace")}</h2>
-            <span className="ui-help" title={t("agent.contextHelp")} aria-label={t("agent.contextHelp")}>
-              ?
-            </span>
+            <InfoTip label={t("agent.contextHelp")} />
           </div>
         </div>
         <div className="agent-stats" aria-label={t("agent.session")}>
-          <span>{t("agent.toolCalls", { count: stats.calls })}</span>
-          <span>{t("agent.results", { count: stats.results })}</span>
-          <span>{t("agent.errorCount", { count: stats.errors })}</span>
+          <span title={t("agent.toolCalls", { count: stats.calls })} aria-label={t("agent.toolCalls", { count: stats.calls })}>
+            <Icon name="play" />
+            {stats.calls}
+          </span>
+          <span title={t("agent.results", { count: stats.results })} aria-label={t("agent.results", { count: stats.results })}>
+            <Icon name="database" />
+            {stats.results}
+          </span>
+          <span title={t("agent.errorCount", { count: stats.errors })} aria-label={t("agent.errorCount", { count: stats.errors })}>
+            <Icon name={stats.errors ? "alert" : "check"} />
+            {stats.errors}
+          </span>
         </div>
       </header>
 
@@ -279,41 +290,55 @@ export default function AgentResultView() {
           </aside>
         </div>
       ) : (
-        <div className="agent-audit-grid ds-policy-grid">
-          <section className="agent-policy-card ds-policy-card ds-policy-card-trust" title={t("agent.auditReadOnlyBody")}>
+        <div className="agent-audit-grid ds-card-grid">
+          <section className="agent-policy-card ds-card ds-card-row ds-tone-trust" title={t("agent.auditReadOnlyBody")}>
             <Icon name="database" />
             <div>
               <strong>{t("agent.auditReadOnly")}</strong>
-              <small>{t("agent.auditReadOnlyBody")}</small>
+              <InfoTip label={t("agent.auditReadOnlyBody")} />
             </div>
           </section>
-          <section className="agent-policy-card ds-policy-card ds-policy-card-danger" title={t("agent.auditBlockedWritesBody")}>
+          <section className="agent-policy-card ds-card ds-card-row ds-tone-danger" title={t("agent.auditBlockedWritesBody")}>
             <Icon name="circleSlash" />
             <div>
               <strong>{t("agent.auditBlockedWrites")}</strong>
-              <small>{t("agent.auditBlockedWritesBody")}</small>
+              <InfoTip label={t("agent.auditBlockedWritesBody")} />
             </div>
           </section>
-          <section className="agent-policy-card ds-policy-card" title={t("agent.auditHashChainBody")}>
+          <section className="agent-policy-card ds-card ds-card-row" title={t("agent.auditHashChainBody")}>
             <Icon name="check" />
             <div>
               <strong>{t("agent.auditHashChain")}</strong>
-              <small>{t("agent.auditHashChainBody")}</small>
+              <InfoTip label={t("agent.auditHashChainBody")} />
             </div>
           </section>
           <section className="agent-policy-card wide ds-panel">
             <div className="agent-section-head">
               <h3>{t("agent.policy")}</h3>
-              <span className={errorItems.length ? "badge status status-error" : "badge status status-ok"}>
-                {errorItems.length
-                  ? t("agent.auditErrors", { count: errorItems.length })
-                  : t("agent.auditNoErrors")}
+              <span
+                className={
+                  (errorItems.length ? "badge status status-error" : "badge status status-ok") +
+                  " icon-only-badge"
+                }
+                title={
+                  errorItems.length
+                    ? t("agent.auditErrors", { count: errorItems.length })
+                    : t("agent.auditNoErrors")
+                }
+                aria-label={
+                  errorItems.length
+                    ? t("agent.auditErrors", { count: errorItems.length })
+                    : t("agent.auditNoErrors")
+                }
+                role="img"
+              >
+                <Icon name={errorItems.length ? "alert" : "check"} />
               </span>
             </div>
             {errorItems.length ? (
               <Timeline feed={errorItems} selected={selected} onSelect={setSelected} />
             ) : (
-              <p className="muted">{t("agent.auditNoErrors")}</p>
+              <InfoTip label={t("agent.auditNoErrors")} />
             )}
           </section>
         </div>

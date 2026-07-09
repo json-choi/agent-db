@@ -35,12 +35,41 @@
   --ds-space-6: 24px;
   --ds-space-8: 32px;
 
+  /* Component rhythm */
+  --ds-action-gap: var(--ds-space-2);
+  --ds-control-gap: var(--ds-space-2);
+  --ds-icon-text-gap-tight: 6px;
+  --ds-row-gap-tight: 1px;
+  --ds-segment-gap: 2px;
+  --ds-optical-offset-xs: 2px;
+  --ds-optical-offset-sm: 3px;
+  --ds-control-pad-x: var(--ds-space-3);
+  --ds-control-pad-x-sm: var(--ds-space-2);
+  --ds-control-pad-x-xs: 6px;
+  --ds-chip-pad-y: 1px;
+  --ds-chip-pad-x: 6px;
+  --ds-chip-pad-x-sm: 5px;
+  --ds-chip-pad-x-xs: var(--ds-space-1);
+  --ds-chip-pad-x-2xs: 3px;
+  --ds-list-indent: 18px;
+  --ds-popover-offset: var(--ds-space-1);
+  --ds-popover-offset-lg: 6px;
+  --ds-motion-distance-sm: 6px;
+  --ds-active-offset: -1px;
+
   /* Shape and glass depth */
   --ds-radius-xs: 4px;
   --ds-radius-sm: 6px;
   --ds-radius-md: 8px;
   --ds-radius-lg: 8px;
   --ds-radius-pill: 999px;
+  --ds-border-width: 1px;
+  --ds-border-width-strong: 2px;
+  --ds-border-width-bold: 3px;
+  --ds-stroke-width: 1.5;
+  --ds-stroke-width-strong: 2.5;
+  --ds-focus-width: var(--ds-border-width-strong);
+  --ds-focus-offset: var(--ds-border-width-strong);
   --ds-z-base: 1;
   --ds-z-raised: 2;
   --ds-z-sticky: 6;
@@ -59,8 +88,8 @@
       rgba(255, 255, 255, 0) 100%
     );
   --ds-glass-edge:
-    inset 0 1px 0 rgba(255, 255, 255, 0.34),
-    inset 0 -1px 0 rgba(255, 255, 255, 0.08);
+    inset 0 var(--ds-border-width) 0 rgba(255, 255, 255, 0.34),
+    inset 0 calc(var(--ds-border-width) * -1) 0 rgba(255, 255, 255, 0.08);
   --ds-shadow-control: 0 1px 2px rgba(16, 24, 40, 0.06);
   --ds-shadow-panel:
     0 1px 2px rgba(16, 24, 40, 0.07);
@@ -73,11 +102,13 @@
   --ds-control-sm: 24px;
   --ds-control-md: 28px;
   --ds-control-lg: 32px;
+  --ds-icon-sm: 14px;
+  --ds-icon-md: 16px;
   --ds-sidebar-min: 180px;
   --ds-sidebar-default: 240px;
   --ds-sidebar-max: 520px;
   --ds-pane-pad: 16px;
-  --ds-line: 1px solid var(--ds-border-subtle);
+  --ds-line: var(--ds-border-width) solid var(--ds-border-subtle);
 
   /* Neutral surfaces and restrained glass shell */
   --ds-bg-app:
@@ -139,7 +170,7 @@
   --ds-hover: rgba(82, 96, 120, 0.1);
   --ds-hover-strong: rgba(82, 96, 120, 0.16);
   --ds-focus: var(--ds-primary);
-  --ds-focus-ring: 0 0 0 2px color-mix(in srgb, var(--ds-focus) 28%, transparent);
+  --ds-focus-ring: 0 0 0 var(--ds-focus-width) color-mix(in srgb, var(--ds-focus) 28%, transparent);
 
   font-family: var(--ds-font-sans);
   font-size: var(--ds-font-size-ui);
@@ -211,8 +242,8 @@
         rgba(255, 255, 255, 0) 100%
       );
     --ds-glass-edge:
-      inset 0 1px 0 rgba(255, 255, 255, 0.12),
-      inset 0 -1px 0 rgba(255, 255, 255, 0.03);
+      inset 0 var(--ds-border-width) 0 rgba(255, 255, 255, 0.12),
+      inset 0 calc(var(--ds-border-width) * -1) 0 rgba(255, 255, 255, 0.03);
     --ds-shadow-control: 0 1px 2px rgba(0, 0, 0, 0.16);
     --ds-shadow-panel:
       0 1px 2px rgba(0, 0, 0, 0.24),

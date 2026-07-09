@@ -2,14 +2,14 @@
   display: grid;
   /* Middle track is the drag divider; the real width is set inline from App state. */
   grid-template-columns: 240px 5px 1fr;
-  height: 100vh;
+  height: 100dvh;
   overflow: hidden;
 }
 
 .sidebar-resizer {
   cursor: col-resize;
   background: transparent;
-  margin-left: -1px; /* sit on the sidebar's border line */
+  margin-left: var(--ds-active-offset); /* sit on the sidebar's border line */
 }
 .sidebar-resizer:hover,
 .sidebar-resizer:active {
@@ -20,25 +20,13 @@
 .sidebar {
   background: var(--ds-bg-sidebar);
   background-image: var(--ds-glass-sheen);
-  border-right: 1px solid var(--ds-border-subtle);
+  border-right: var(--ds-border-width) solid var(--ds-border-subtle);
   box-shadow:
     inset -1px 0 0 var(--ds-border-subtle),
     var(--ds-glass-edge);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-}
-.sidebar-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--ds-space-2) var(--ds-space-3);
-  font-weight: 600;
-  border-bottom: 1px solid var(--ds-border-subtle);
-  background: var(--ds-surface-1);
-  background-image: var(--ds-glass-sheen);
-  backdrop-filter: var(--ds-glass-filter-soft);
-  -webkit-backdrop-filter: var(--ds-glass-filter-soft);
 }
 .empty {
   padding: var(--ds-space-3);
@@ -59,7 +47,7 @@
   align-items: flex-start;
   justify-content: space-between;
   padding: var(--ds-space-2) var(--ds-space-3);
-  border-bottom: 1px solid var(--ds-border-subtle);
+  border-bottom: var(--ds-border-width) solid var(--ds-border-subtle);
   background: var(--ds-surface-elevated);
   background-image: var(--ds-glass-sheen);
   box-shadow: var(--ds-shadow-panel);
@@ -68,36 +56,6 @@
 }
 .main-policy {
   flex-shrink: 0;
-}
-/* #10: clickable read↔write indicator in the main head. */
-.write-toggle {
-  max-width: 100%;
-  min-height: var(--ds-control-xs);
-  display: inline-flex;
-  align-items: center;
-  padding: 0 var(--ds-space-2);
-  font-size: var(--ds-font-size-xs);
-  font-weight: 650;
-  border-radius: 999px;
-  border: 1px solid var(--ds-border-subtle);
-  background: transparent;
-  cursor: pointer;
-  color: var(--ds-text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.write-toggle:disabled {
-  cursor: default;
-  opacity: 0.6;
-}
-.write-toggle.readonly {
-  color: var(--ds-text-muted);
-}
-.write-toggle.writes {
-  color: var(--ds-warning);
-  border-color: var(--ds-warning);
-  background: var(--ds-risk-bg);
 }
 .agent-jump {
   color: var(--ds-accent-text);
@@ -117,7 +75,7 @@
   line-height: var(--ds-line-body);
   background: var(--ds-surface-1);
   background-image: var(--ds-glass-sheen);
-  border-left: 1px solid var(--ds-border-subtle);
+  border-left: var(--ds-border-width) solid var(--ds-border-subtle);
   box-shadow:
     inset 1px 0 0 var(--ds-border-subtle),
     var(--ds-glass-edge);
@@ -137,14 +95,16 @@
 /* Tabs */
 .tabs {
   display: flex;
-  gap: 2px;
+  gap: var(--ds-segment-gap);
   padding: var(--ds-space-1) var(--ds-space-2) 0;
-  border-bottom: 1px solid var(--ds-border-subtle);
+  border-bottom: var(--ds-border-width) solid var(--ds-border-subtle);
   background: var(--ds-surface-1);
   background-image: var(--ds-glass-sheen);
   box-shadow: var(--ds-shadow-panel);
   backdrop-filter: var(--ds-glass-filter);
   -webkit-backdrop-filter: var(--ds-glass-filter);
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 .tab {
   border: none;
@@ -159,8 +119,8 @@
   align-items: center;
   gap: var(--ds-space-2);
   /* Reserve the active underline's space so switching tabs doesn't shift the row. */
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
+  border-bottom: var(--ds-border-width-strong) solid transparent;
+  margin-bottom: var(--ds-active-offset);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -175,7 +135,7 @@
 /* Agent tab is connection-independent — push it to the right, set off by a divider. */
 .tabs .tab.agent-tab {
   margin-left: auto;
-  border-left: 1px solid var(--ds-border-subtle);
+  border-left: var(--ds-border-width) solid var(--ds-border-subtle);
   padding-left: var(--ds-space-3);
 }
 /* Unseen-count pill next to the Agent tab label. */
@@ -190,7 +150,7 @@
   background: var(--ds-accent);
   color: var(--ds-text-inverse);
   border-radius: var(--ds-radius-pill);
-  padding: 0 5px;
+  padding: 0 var(--ds-chip-pad-x-sm);
 }
 .tab-body {
   flex: 1;
@@ -198,7 +158,7 @@
   overflow: auto;
   padding: var(--ds-pane-pad);
   background: var(--ds-surface-1);
-  box-shadow: inset 0 1px 0 var(--ds-border-subtle);
+  box-shadow: inset 0 var(--ds-border-width) 0 var(--ds-border-subtle);
 }
 /* Screens are full-width by default so results/tables grids use the whole pane.
    Reading-oriented screens cap their own width below. */
@@ -218,5 +178,42 @@
   }
   .main-policy {
     justify-content: flex-start;
+  }
+}
+
+@media (max-width: 760px) {
+  .app {
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: minmax(144px, 34dvh) minmax(0, 1fr);
+  }
+
+  .sidebar {
+    border-right: 0;
+    border-bottom: var(--ds-border-width) solid var(--ds-border-subtle);
+  }
+
+  .sidebar-resizer {
+    display: none;
+  }
+
+  .main {
+    min-height: 0;
+  }
+
+  .tabs .tab.agent-tab {
+    margin-left: 0;
+    border-left: 0;
+    padding-left: var(--ds-space-2);
+  }
+
+  .tab {
+    flex: 0 0 auto;
+  }
+
+  .tab-body,
+  .settings-body,
+  .main-view,
+  .editor-pane {
+    padding: var(--ds-space-3);
   }
 }

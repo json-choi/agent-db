@@ -11,9 +11,9 @@
 .settings-nav {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--ds-segment-gap);
   padding: var(--ds-space-2);
-  border-right: 1px solid var(--ds-border-subtle);
+  border-right: var(--ds-border-width) solid var(--ds-border-subtle);
 }
 
 .settings-head {
@@ -53,4 +53,40 @@
   min-width: 0;
   overflow: auto;
   padding: var(--ds-pane-pad);
+}
+
+.settings-title-row {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-2);
+}
+
+@media (max-width: 760px) {
+  .settings {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .settings-nav {
+    flex-direction: row;
+    align-items: center;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: var(--ds-border-width) solid var(--ds-border-subtle);
+  }
+
+  .settings-head {
+    flex: 0 0 auto;
+    gap: var(--ds-space-2);
+    padding: var(--ds-space-1) var(--ds-space-2);
+  }
+
+  .snav {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .settings-body {
+    padding: var(--ds-space-3);
+  }
 }

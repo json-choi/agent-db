@@ -32,7 +32,7 @@
   gap: var(--ds-space-2);
 }
 .audit-row {
-  border: 1px solid var(--ds-border-subtle);
+  border: var(--ds-border-width) solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-md);
   padding: var(--ds-space-3);
   background: var(--ds-surface-0);
@@ -48,7 +48,7 @@
   display: block;
   white-space: pre-wrap;
   margin: var(--ds-space-1) 0;
-  padding: 1px 6px;
+  padding: var(--ds-chip-pad-y) var(--ds-chip-pad-x);
   border-radius: var(--ds-radius-sm);
   background: var(--ds-hover-strong);
   font-family: var(--ds-font-mono);

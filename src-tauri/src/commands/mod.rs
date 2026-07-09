@@ -720,6 +720,12 @@ pub fn disconnect_platform(platform: String) -> AppResult<String> {
     crate::mcp::connect::disconnect(&platform).map_err(AppError::Config)
 }
 
+/// Open a supported local AI app after the frontend has copied a SQL prompt.
+#[tauri::command]
+pub fn open_agent_app(platform: String) -> AppResult<String> {
+    crate::mcp::connect::open_app(&platform).map_err(AppError::Config)
+}
+
 // ── native pickers ────────────────────────────────────────────────────────────
 // Rust-side dialog plugin (no webview capability wiring needed). The blocking_*
 // calls dispatch to the main thread; async commands keep them off the IPC pool.

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { listHistory } from "../../ipc/commands";
 import type { ConnectionProfile, HistoryEntry } from "../../ipc/types";
 import { errMessage } from "../../ipc/types";
+import { Icon, type IconName } from "../../components/Icon";
 import { useToast } from "../../components/Toast";
 import { relTime, fullTime } from "../../lib/relTime";
 import { useI18n } from "../../lib/i18n";
@@ -20,6 +21,12 @@ function duration(ms: number | null): string {
 function firstLine(sql: string): string {
   const line = sql.trim().split("\n")[0];
   return line.length > 120 ? `${line.slice(0, 120)}…` : line;
+}
+
+function statusIcon(status: string): IconName {
+  if (status === "ok" || status === "success" || status === "done") return "check";
+  if (status === "error" || status === "blocked" || status === "failed") return "alert";
+  return "info";
 }
 
 export default function History({
@@ -162,8 +169,13 @@ export default function History({
                   <span className="badge kind">{h.kind}</span>
                 </td>
                 <td>
-                  <span className={`badge status status-${h.status}`}>
-                    {h.status}
+                  <span
+                    className={`badge status icon-only-badge status-${h.status}`}
+                    title={h.status}
+                    aria-label={h.status}
+                    role="img"
+                  >
+                    <Icon name={statusIcon(h.status)} />
                   </span>
                 </td>
                 <td className="num">{h.rowCount ?? "—"}</td>

@@ -92,6 +92,7 @@ pub fn run() {
             commands::mcp_platforms,
             commands::connect_platform,
             commands::disconnect_platform,
+            commands::open_agent_app,
             commands::pick_folder,
             commands::pick_file,
             commands::analyze_migrations,

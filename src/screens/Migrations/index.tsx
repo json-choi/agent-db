@@ -15,6 +15,7 @@ import {
 import type { ConnectionProfile, MigrationReport, MigrationView } from "../../ipc/types";
 import { errMessage } from "../../ipc/types";
 import { Icon } from "../../components/Icon";
+import InfoTip from "../../components/InfoTip";
 import "./migrations.css";
 
 const keyFor = (id: string) => `dopedb.migrationsDir.${id}`;
@@ -275,10 +276,7 @@ export default function Migrations({
       </div>
 
       {!connection.projectDir && !report && (
-        <p className="muted">
-          Tip: set a <strong>Project folder</strong> on this connection (Edit) and DopeDB
-          will auto-detect its migrations folder.
-        </p>
+        <InfoTip label="Tip: set a Project folder on this connection (Edit) and DopeDB will auto-detect its migrations folder." />
       )}
 
       {watchErr && (
@@ -435,11 +433,9 @@ export default function Migrations({
       )}
 
       {!report && !err && (
-        <p className="muted">
-          Shows a change log per migration, its applied state, an auto-generated rollback (down)
-          for each — even for dropped columns/tables — and how the files drift from{" "}
-          <strong>{connection.database}</strong>.
-        </p>
+        <InfoTip
+          label={`Shows a change log per migration, its applied state, an auto-generated rollback (down) for each, and how the files drift from ${connection.database}.`}
+        />
       )}
     </div>
   );
@@ -562,7 +558,7 @@ function ConfirmPanel({
         </div>
       )}
 
-      <div className="mig-confirm-row">
+      <div className="mig-confirm-row ds-action-row">
         <button
           className="btn primary small"
           disabled={!reviewed || running || !script}

@@ -13,21 +13,6 @@
   line-height: var(--ds-line-body);
 }
 
-.review-status {
-  padding: var(--ds-space-2);
-  border: 1px solid var(--ds-border-subtle);
-  border-radius: var(--ds-radius-sm);
-  background: var(--ds-surface-1);
-  color: var(--ds-text-muted);
-  font-size: var(--ds-font-size-ui);
-  line-height: var(--ds-line-ui);
-}
-
-.review-status.blocked {
-  color: var(--ds-danger);
-  border-color: var(--ds-danger);
-}
-
 .review-disclosures {
   display: grid;
   gap: var(--ds-space-2);
@@ -36,7 +21,7 @@
 .generated-sql,
 .safety-details {
   overflow: hidden;
-  border: 1px solid var(--ds-border-subtle);
+  border: var(--ds-border-width) solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-sm);
   background: var(--ds-surface-1);
 }
@@ -50,7 +35,7 @@
 }
 
 .generated-sql .cm-editor {
-  border-top: 1px solid var(--ds-border-subtle);
+  border-top: var(--ds-border-width) solid var(--ds-border-subtle);
 }
 
 .safety-details > :not(summary) {
@@ -59,7 +44,7 @@
 
 .tables code {
   margin-right: var(--ds-space-2);
-  padding: 1px 6px;
+  padding: var(--ds-chip-pad-y) var(--ds-chip-pad-x);
   border-radius: var(--ds-radius-sm);
   background: var(--ds-hover-strong);
   font-family: var(--ds-font-mono);
@@ -77,7 +62,7 @@
   max-height: 216px;
   overflow: auto;
   padding: var(--ds-space-2);
-  border: 1px solid var(--ds-border-subtle);
+  border: var(--ds-border-width) solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-sm);
   background: var(--ds-surface-1);
   font-size: var(--ds-font-size-sm);

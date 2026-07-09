@@ -171,6 +171,11 @@ export function disconnectPlatform(platform: string): Promise<string> {
   return invoke("disconnect_platform", { platform });
 }
 
+// Open a local AI app after the SQL tab copies the prompt/context.
+export function openAgentApp(platform: string): Promise<string> {
+  return invoke("open_agent_app", { platform });
+}
+
 // Native pickers (null = user cancelled the dialog).
 export function pickFolder(): Promise<string | null> {
   return invoke("pick_folder");

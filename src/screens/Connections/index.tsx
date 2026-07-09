@@ -20,7 +20,9 @@ import type {
 import { errMessage } from "../../ipc/types";
 import { tableKey, tableLabel } from "../../lib/tableRef";
 import ConfirmButton from "../../components/ConfirmButton";
+import EngineMark from "../../components/EngineMark";
 import { Icon } from "../../components/Icon";
+import InfoTip from "../../components/InfoTip";
 import LazySqlViewer from "../../components/LazySqlViewer";
 import { useToast } from "../../components/Toast";
 import { useI18n } from "../../lib/i18n";
@@ -148,6 +150,8 @@ export function DatabaseExplorer({
   onOpenTable,
   onOpenMigrations,
   onNew,
+  onEdit,
+  onDeleted,
   onOpenSettings,
   migrationsOpen,
 }: {
@@ -158,10 +162,13 @@ export function DatabaseExplorer({
   onOpenTable: (conn: ConnectionProfile, table: CatalogTable) => void;
   onOpenMigrations: (conn: ConnectionProfile) => void;
   onNew: () => void;
+  onEdit: (conn: ConnectionProfile) => void;
+  onDeleted: (id: string) => void;
   onOpenSettings: () => void;
   migrationsOpen: boolean;
 }) {
   const { t } = useI18n();
+  const toast = useToast();
   // Per-connection: any node can be expanded independently of selection, so
   // catalogs/errors/filters are keyed by connection id (DataGrip-style tree).
   const [catalogs, setCatalogs] = useState<Record<string, Catalog>>({});
@@ -240,18 +247,18 @@ export function DatabaseExplorer({
     }
   }
 
+  async function removeConnection(conn: ConnectionProfile) {
+    try {
+      await deleteConnection(conn.id);
+      toast(t("connections.connectionDeleted"));
+      onDeleted(conn.id);
+    } catch (e) {
+      toast(errMessage(e), "error");
+    }
+  }
+
   return (
     <aside className="sidebar">
-      <div className="sidebar-head">
-        <span>{t("connections.databases")}</span>
-        <button className="btn small" onClick={onNew}>
-          {t("connections.add")}
-        </button>
-      </div>
-      <div className="explorer-toolbar">
-        <span className="ds-kicker">{t("connections.objectExplorer")}</span>
-        <span className="ds-badge">{t("connections.sourceCount", { count: connections.length })}</span>
-      </div>
       <div className="explorer">
         {connections.length === 0 && (
           <div className="muted empty">{t("connections.noConnections")}</div>
@@ -290,24 +297,43 @@ export function DatabaseExplorer({
                 >
                   <Icon name={open.has(c.id) ? "chevronDown" : "chevronRight"} />
                 </span>
+                <EngineMark engine={c.engine} />
                 <span className="db-conn-name">{c.name || t("app.unnamed")}</span>
                 {(c.env === "staging" || c.env === "prod") && (
                   <span className={`env-chip env-${c.env}`}>{c.env}</span>
                 )}
-                <span className="db-conn-engine muted">{c.engine}</span>
-                {open.has(c.id) && (
-                  <button
-                    className="db-refresh"
-                    title={t("connections.refreshSchemaTitle")}
-                    aria-label={t("connections.refreshSchema")}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void refreshSchema(c.id);
-                    }}
+                <details className="db-menu" onClick={(e) => e.stopPropagation()}>
+                  <summary
+                    className="db-menu-trigger"
+                    title={t("connections.connectionMenu")}
+                    aria-label={t("connections.connectionMenu")}
                   >
-                    {refreshing === c.id ? "…" : <Icon name="refresh" />}
-                  </button>
-                )}
+                    <Icon name="gear" />
+                  </summary>
+                  <div className="db-menu-panel">
+                    <button type="button" onClick={() => onEdit(c)}>
+                      {t("connections.edit")}
+                    </button>
+                    <button type="button" onClick={() => void refreshSchema(c.id)}>
+                      {refreshing === c.id ? t("mcp.working") : t("connections.refreshSchema")}
+                    </button>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={showRowCounts}
+                        onChange={(e) => setShowRowCounts(e.target.checked)}
+                      />
+                      {t("connections.showRowCounts")}
+                    </label>
+                    <ConfirmButton
+                      className="db-menu-item danger"
+                      confirmLabel={t("common.reallyDelete")}
+                      onConfirm={() => void removeConnection(c)}
+                    >
+                      {t("common.delete")}
+                    </ConfirmButton>
+                  </div>
+                </details>
               </div>
 
               {open.has(c.id) &&
@@ -323,9 +349,6 @@ export function DatabaseExplorer({
                     : [];
                   const tbls = all.filter((t) => t.kind !== "view");
                   const views = all.filter((t) => t.kind === "view");
-                  const schemaCount = cat
-                    ? new Set(cat.tables.map((item) => item.schema || "default")).size
-                    : 0;
                   const renderRow = (table: CatalogTable) => {
                     const key = tableKey(table);
                     return (
@@ -374,31 +397,6 @@ export function DatabaseExplorer({
                   };
                   return (
                     <div className="db-tables">
-                      {cat && (
-                        <div className="db-context-strip">
-                          <span className="ds-filter-token">
-                            <strong>{t("connections.schemaCount", { count: schemaCount })}</strong>
-                          </span>
-                          <span className="ds-filter-token">
-                            <strong>{t("connections.objectCount", { count: cat.tables.length })}</strong>
-                          </span>
-                          <details className="view-options-menu">
-                            <summary className="ds-filter-token" title={t("connections.viewOptionsHint")}>
-                              {t("connections.viewOptions")}
-                            </summary>
-                            <div className="view-options-panel">
-                              <label>
-                                <input
-                                  type="checkbox"
-                                  checked={showRowCounts}
-                                  onChange={(e) => setShowRowCounts(e.target.checked)}
-                                />
-                                {t("connections.showRowCounts")}
-                              </label>
-                            </div>
-                          </details>
-                        </div>
-                      )}
                       <div
                         className={migrationsOpen && isSel ? "db-nav active" : "db-nav"}
                         role="button"
@@ -493,6 +491,9 @@ export function DatabaseExplorer({
       </div>
 
       <div className="sidebar-foot">
+        <button className="foot-add-btn" onClick={onNew} title={t("connections.new")} aria-label={t("connections.new")}>
+          <Icon name="plus" />
+        </button>
         <button className="foot-btn" onClick={onOpenSettings}>
           <span className="gear"><Icon name="gear" /></span>{" "}
           {t("common.settings")}
@@ -510,12 +511,10 @@ export function ConnectionForm({
   initial,
   onSaved,
   onCancel,
-  onDeleted,
 }: {
   initial: ConnectionProfile | null;
   onSaved: (p: ConnectionProfile) => void;
   onCancel: () => void;
-  onDeleted: (id: string) => void;
 }) {
   const { t } = useI18n();
   const toast = useToast();
@@ -528,7 +527,6 @@ export function ConnectionForm({
   const [msg, setMsg] = useState<string | null>(null);
   const [msgErr, setMsgErr] = useState(false);
   const isNew = initial === null;
-
   function set<K extends keyof ConnectionProfile>(
     key: K,
     value: ConnectionProfile[K],
@@ -572,22 +570,6 @@ export function ConnectionForm({
     } finally {
       setBusy(false);
       setRunning(null);
-    }
-  }
-
-  async function remove() {
-    setBusy(true);
-    try {
-      await deleteConnection(form.id);
-      toast(t("connections.connectionDeleted"));
-      onDeleted(form.id);
-    } catch (e) {
-      const m = errMessage(e);
-      setMsg(m);
-      setMsgErr(true);
-      toast(m, "error");
-    } finally {
-      setBusy(false);
     }
   }
 
@@ -731,8 +713,10 @@ export function ConnectionForm({
       )}
 
       <label>
-        {t("connections.projectFolder")}{" "}
-        <span className="muted">{t("connections.projectFolderHint")}</span>
+        <span className="label-with-help">
+          {t("connections.projectFolder")}
+          <InfoTip label={t("connections.projectFolderHint")} />
+        </span>
         <div className="row">
           <input
             className="grow"
@@ -751,8 +735,10 @@ export function ConnectionForm({
       </label>
 
       <label>
-        {t("connections.environment")}{" "}
-        <span className="muted">{t("connections.environmentHint")}</span>
+        <span className="label-with-help">
+          {t("connections.environment")}
+          <InfoTip label={t("connections.environmentHint")} />
+        </span>
         <select
           value={form.env ?? ""}
           onChange={(e) => set("env", e.target.value || null)}
@@ -764,9 +750,7 @@ export function ConnectionForm({
         </select>
       </label>
 
-      <p className="muted">
-        {t("connections.writeAccessHint")}
-      </p>
+      <InfoTip label={t("connections.writeAccessHint")} className="connection-write-help" />
 
       <div className="form-actions">
         <button className="btn primary" disabled={busy} onClick={save}>
@@ -778,11 +762,6 @@ export function ConnectionForm({
         <button className="btn" disabled={busy} onClick={onCancel}>
           {t("common.cancel")}
         </button>
-        {!isNew && (
-          <ConfirmButton className="btn danger" disabled={busy} onConfirm={remove}>
-            {t("common.delete")}
-          </ConfirmButton>
-        )}
       </div>
 
       {msg && (

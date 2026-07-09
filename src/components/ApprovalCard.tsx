@@ -21,7 +21,7 @@ import type {
   SafetySettings,
 } from "../ipc/types";
 import { errMessage } from "../ipc/types";
-import { Icon } from "./Icon";
+import { Icon, type IconName } from "./Icon";
 import LazySqlViewer from "./LazySqlViewer";
 import "./ApprovalCard.css";
 
@@ -33,6 +33,30 @@ const ENGINE_LABEL: Record<Engine, string> = {
 
 function riskClass(risk: RiskLevel): string {
   return `badge risk-${risk}`;
+}
+
+function StatusGlyph({
+  label,
+  icon = "info",
+  tone,
+}: {
+  label: string;
+  icon?: IconName;
+  tone?: "ok" | "warning" | "danger";
+}) {
+  return (
+    <span
+      className={
+        "badge icon-only-badge" +
+        (tone === "ok" ? " status-ok" : tone === "danger" ? " status-error" : "")
+      }
+      title={label}
+      aria-label={label}
+      role="img"
+    >
+      <Icon name={icon} />
+    </span>
+  );
 }
 
 export default function ApprovalCard({
@@ -164,7 +188,7 @@ export default function ApprovalCard({
           )}
         </>
       ) : (
-        <span className="muted">Checking safety...</span>
+        <StatusGlyph label="Checking safety..." icon="refresh" />
       )}
     </div>
   );
@@ -180,7 +204,7 @@ export default function ApprovalCard({
     <div className="preview">
       <span className="label">Impact preview</span>
       {!preview ? (
-        <span className="muted"> estimating...</span>
+        <StatusGlyph label="Estimating impact..." icon="refresh" />
       ) : isWrite && !writesBlocked && previewN === null ? (
         // A runnable write with NO row estimate (skipped over threshold, or an EXPLAIN
         // that yielded no count) means approving a destructive statement blind — surface
@@ -240,8 +264,26 @@ export default function ApprovalCard({
       )}
 
       {compact && (
-        <div className={writesBlocked ? "review-status blocked" : "review-status"}>
-          {compactStatus}
+        <div
+          className={
+            "badge icon-only-badge" +
+            (writesBlocked ? " status-error" : previewN !== null ? " status-ok" : "")
+          }
+          title={compactStatus}
+          aria-label={compactStatus}
+          role="img"
+        >
+          <Icon
+            name={
+              writesBlocked
+                ? "circleSlash"
+                : !cls || !preview
+                  ? "refresh"
+                  : previewN !== null
+                    ? "check"
+                    : "info"
+            }
+          />
         </div>
       )}
 
@@ -254,32 +296,33 @@ export default function ApprovalCard({
       {error && <div className="error">{error}</div>}
       {/* Additive, not a terminal branch — the action buttons below stay reachable so a
           cancelled query can simply be run again. */}
-      {cancelled && <div className="muted">Query cancelled.</div>}
+      {cancelled && <StatusGlyph label="Query cancelled." icon="circleSlash" />}
 
       {decided === "approved" ? (
-        <div className="muted">Executed.</div>
+        <StatusGlyph label="Executed." icon="check" tone="ok" />
       ) : decided === "rejected" ? (
         // Not a dead-end: keep the statement visible above and let the user undo the
         // rejection to approve it, rather than forcing a re-issue.
-        <div className="approval-actions">
-          <span className="muted">Rejected.</span>
+        <div className="approval-actions ds-action-row">
+          <StatusGlyph label="Rejected." icon="circleSlash" tone="danger" />
           <button className="btn" onClick={() => setDecided(null)}>
             Reconsider
           </button>
         </div>
       ) : busy ? (
-        <div className="approval-actions">
-          <span className="muted">
-            {canAutoRun ? "Read-only — running…" : "Running…"} {elapsed}s
-          </span>
+        <div className="approval-actions ds-action-row">
+          <StatusGlyph
+            label={`${canAutoRun ? "Read-only — running…" : "Running…"} ${elapsed}s`}
+            icon="refresh"
+          />
           <button className="btn" onClick={cancel}>
             Cancel
           </button>
         </div>
       ) : canAutoRun && !cancelled ? (
-        <div className="muted">Read-only — auto-running…</div>
+        <StatusGlyph label="Read-only — auto-running…" icon="play" />
       ) : (
-        <div className="approval-actions">
+        <div className="approval-actions ds-action-row">
           {writesBlocked && !compact && (
             <div className="error">
               Writes are disabled for this connection (allow_writes = 0). Enable

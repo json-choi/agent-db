@@ -1,8 +1,28 @@
-/* SQL console — script-mode additions only. The single-statement flow reuses the
-   global .screen/.editor-box/.results/.approval styles in styles.css. */
+/* SQL console additions. Shared shell/results styles live in the design system. */
+
+.sqlconsole {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--ds-space-2);
+}
+
+.sql-agent-launchers {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--ds-space-1);
+  min-height: var(--ds-control-sm);
+}
+
+.sql-agent-btn {
+  min-width: 56px;
+  padding-inline: var(--ds-space-2);
+  font-size: var(--ds-font-size-xs);
+}
 
 .sql-actions {
   align-items: center;
+  min-height: var(--ds-control-lg);
 }
 .sql-actions .run-hint {
   margin-left: auto;
@@ -12,38 +32,70 @@
   color: var(--ds-text-muted);
 }
 
-.script-approval .script-note {
-  margin: var(--ds-space-2) 0;
-  font-size: var(--ds-font-size-ui);
+.sql-run-message {
+  margin-top: var(--ds-space-2);
 }
 
-.script-approval .stmt-list {
-  margin: 0 0 var(--ds-space-2);
-  padding-left: var(--ds-space-5);
-  max-height: 288px;
-  overflow: auto;
-}
-.script-approval .stmt-list li {
-  margin: var(--ds-space-1) 0;
-}
-.script-approval .stmt {
-  margin: 2px 0;
-  padding: var(--ds-space-2);
-  background: var(--ds-surface-0);
-  border: 1px solid var(--ds-border-subtle);
-  border-radius: var(--ds-radius-sm);
-  font-size: var(--ds-font-size-sm);
-  white-space: pre-wrap;
-  word-break: break-word;
-  overflow-x: auto;
+.sql-agent-error {
+  margin-bottom: var(--ds-space-1);
 }
 
-.script-approval .script-confirm {
+.sql-error-card {
+  display: grid;
+  gap: var(--ds-space-3);
+  margin: var(--ds-space-3) 0;
+  padding: var(--ds-space-3);
+  border: var(--ds-border-width) solid var(--ds-danger-border);
+  border-radius: var(--ds-radius-md);
+  background: var(--ds-danger-bg);
+  color: var(--ds-text);
+}
+
+.sql-error-head {
   display: flex;
   align-items: center;
-  gap: var(--ds-space-2);
+  justify-content: space-between;
+  gap: var(--ds-space-3);
+}
+
+.sql-error-head strong {
+  color: var(--ds-danger);
+}
+
+.sql-error-grid {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: start;
+  gap: var(--ds-space-2) var(--ds-space-3);
+}
+
+.sql-error-grid pre,
+.sql-error-context pre {
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: var(--ds-font-size-sm);
+}
+
+.sql-error-grid code,
+.sql-error-grid pre,
+.sql-error-context pre {
+  padding: var(--ds-space-2);
+  border: var(--ds-border-width) solid var(--ds-border-subtle);
+  border-radius: var(--ds-radius-sm);
+  background: var(--ds-surface-0);
+}
+
+.sql-error-context summary {
+  cursor: pointer;
+  color: var(--ds-text-muted);
   font-size: var(--ds-font-size-ui);
-  margin-right: auto;
+}
+
+.sql-error-context pre {
+  margin-top: var(--ds-space-2);
+  max-height: 280px;
 }
 
 /* EXPLAIN plan card (read-only preview above the results). */
@@ -65,7 +117,7 @@
   margin: var(--ds-space-2) 0 0;
   padding: var(--ds-space-2);
   background: var(--ds-surface-0);
-  border: 1px solid var(--ds-border-subtle);
+  border: var(--ds-border-width) solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-sm);
   font-size: var(--ds-font-size-sm);
   overflow-x: auto;
@@ -76,7 +128,7 @@
 .script-results .stmt-result {
   margin-top: var(--ds-space-4);
   padding-top: var(--ds-space-3);
-  border-top: 1px solid var(--ds-border-subtle);
+  border-top: var(--ds-border-width) solid var(--ds-border-subtle);
 }
 .script-results .stmt-num {
   display: inline-block;
@@ -87,4 +139,28 @@
 .script-results .stmt-rowmeta {
   margin: var(--ds-space-1) 0;
   font-size: var(--ds-font-size-sm);
+}
+
+@media (max-width: 760px) {
+  .sql-actions {
+    align-items: flex-start;
+  }
+
+  .sql-actions .run-hint {
+    flex-basis: 100%;
+    margin-left: 0;
+  }
+
+  .sql-agent-launchers {
+    flex-wrap: wrap;
+  }
+
+  .sql-error-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .sql-error-grid {
+    grid-template-columns: 1fr;
+  }
 }

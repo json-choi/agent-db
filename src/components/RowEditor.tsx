@@ -170,7 +170,7 @@ export default function RowEditor({
         })}
       </div>
       {error && <div className="error">{error}</div>}
-      <div className="row-editor-actions">
+      <div className="row-editor-actions ds-action-row">
         <button className="btn primary" disabled={isEdit && changedCount === 0} onClick={submit}>
           {actionText}
         </button>

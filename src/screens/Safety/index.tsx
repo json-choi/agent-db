@@ -4,6 +4,7 @@ import { getSafety, setSafety } from "../../ipc/commands";
 import type { SafetySettings } from "../../ipc/types";
 import { errMessage } from "../../ipc/types";
 import { Icon } from "../../components/Icon";
+import InfoTip from "../../components/InfoTip";
 import { useToast } from "../../components/Toast";
 import { useI18n, type I18nKey } from "../../lib/i18n";
 import "./safety.css";
@@ -70,58 +71,65 @@ export default function Safety({ connectionId }: { connectionId: string }) {
       <div className="safety-hero">
         <div className="safety-title-row">
           <h2>{t("safety.title")}</h2>
-          <span className="ui-help" title={t("safety.body")} aria-label={t("safety.body")}>
-            ?
-          </span>
+          <InfoTip label={t("safety.body")} />
         </div>
         <span
           className={
             settings.allowWrites
-              ? "safety-mode safety-mode-risk"
-              : "safety-mode safety-mode-safe"
+              ? "badge risk-medium"
+              : "badge status-ok"
           }
         >
           {settings.allowWrites ? t("safety.modeWrites") : t("safety.modeReadOnly")}
         </span>
       </div>
 
-      <div className="safety-policy-grid ds-policy-grid" aria-label={t("safety.policySummary")}>
-        <article className="safety-policy-card ds-policy-card ds-policy-card-trust">
+      <div className="safety-policy-grid ds-card-grid" aria-label={t("safety.policySummary")}>
+        <article className="safety-policy-card ds-card ds-card-row ds-tone-trust" title={t("safety.policyReadsBody")}>
           <Icon name="database" />
           <div>
-            <span>{t("safety.policyReads")}</span>
+            <span className="safety-policy-label">
+              {t("safety.policyReads")}
+              <InfoTip label={t("safety.policyReadsBody")} />
+            </span>
             <strong>{settings.autoRunReads ? t("safety.policyOn") : t("safety.policyManual")}</strong>
-            <small>{t("safety.policyReadsBody")}</small>
           </div>
         </article>
         <article
           className={
             settings.allowWrites
-              ? "safety-policy-card ds-policy-card ds-policy-card-risk"
-              : "safety-policy-card ds-policy-card"
+              ? "safety-policy-card ds-card ds-card-row ds-tone-risk"
+              : "safety-policy-card ds-card ds-card-row"
           }
+          title={t("safety.policyWritesBody")}
         >
           <Icon name={settings.allowWrites ? "alert" : "circleSlash"} />
           <div>
-            <span>{t("safety.policyWrites")}</span>
+            <span className="safety-policy-label">
+              {t("safety.policyWrites")}
+              <InfoTip label={t("safety.policyWritesBody")} />
+            </span>
             <strong>{settings.allowWrites ? t("safety.policyAllowed") : t("safety.policyBlocked")}</strong>
-            <small>{t("safety.policyWritesBody")}</small>
           </div>
         </article>
-        <article className="safety-policy-card ds-policy-card">
+        <article className="safety-policy-card ds-card ds-card-row" title={t("safety.policyApprovalBody")}>
           <Icon name="check" />
           <div>
-            <span>{t("safety.policyApproval")}</span>
+            <span className="safety-policy-label">
+              {t("safety.policyApproval")}
+              <InfoTip label={t("safety.policyApprovalBody")} />
+            </span>
             <strong>{settings.requireApproval ? t("safety.policyOn") : t("safety.policyOff")}</strong>
-            <small>{t("safety.policyApprovalBody")}</small>
           </div>
         </article>
-        <article className="safety-policy-card ds-policy-card">
+        <article className="safety-policy-card ds-card ds-card-row" title={t("safety.policyPreviewBody")}>
           <Icon name="refresh" />
           <div>
-            <span>{t("safety.policyPreview")}</span>
+            <span className="safety-policy-label">
+              {t("safety.policyPreview")}
+              <InfoTip label={t("safety.policyPreviewBody")} />
+            </span>
             <strong>{settings.explainPreview ? t("safety.policyOn") : t("safety.policyOff")}</strong>
-            <small>{t("safety.policyPreviewBody")}</small>
           </div>
         </article>
       </div>
@@ -139,9 +147,7 @@ export default function Safety({ connectionId }: { connectionId: string }) {
               <span>
                 <strong>{t(item.label)}</strong>
               </span>
-              <span className="ui-help" title={t(item.hint)} aria-label={t(item.hint)}>
-                ?
-              </span>
+              <InfoTip label={t(item.hint)} />
             </label>
           ))}
         </section>
@@ -166,9 +172,7 @@ export default function Safety({ connectionId }: { connectionId: string }) {
                   set(n.key, v as never);
                 }}
               />
-              <span className="ui-help" title={t(n.hint)} aria-label={t(n.hint)}>
-                ?
-              </span>
+              <InfoTip label={t(n.hint)} />
             </label>
           ))}
         </section>

@@ -13,16 +13,16 @@
 }
 
 .onboarding h1 {
-  margin: 0 0 var(--ds-space-2);
+  margin: 0;
   font-size: var(--ds-font-size-heading);
   line-height: var(--ds-line-tight);
 }
 
-.onboarding .lead {
-  max-width: 600px;
-  margin: 0 0 var(--ds-space-4);
-  font-size: var(--ds-font-size-body);
-  line-height: var(--ds-line-body);
+.onboarding-title-row {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-2);
+  margin-bottom: var(--ds-space-4);
 }
 
 .onboarding-steps {
@@ -37,7 +37,7 @@
   gap: var(--ds-space-2);
   min-height: 144px;
   padding: var(--ds-space-3);
-  border: 1px solid var(--ds-border-subtle);
+  border: var(--ds-border-width) solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-md);
   background: var(--ds-surface-0);
   box-shadow: var(--ds-shadow-panel);
@@ -57,12 +57,19 @@
 
 /* Onboarding card titles are headline-style, not the global uppercase h3. */
 .step-card h3 {
-  margin: var(--ds-space-1) 0 0;
+  margin: 0;
   color: var(--ds-text);
   font-size: var(--ds-font-size-title);
   letter-spacing: 0;
   text-transform: none;
   overflow-wrap: anywhere;
+}
+
+.step-title-row {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-2);
+  margin-top: var(--ds-space-1);
 }
 
 .step-card p {
@@ -79,8 +86,8 @@
 }
 
 .onboarding-foot {
+  display: inline-flex;
   margin-top: var(--ds-space-4);
-  font-size: var(--ds-font-size-ui);
 }
 
 @media (max-width: 760px) {

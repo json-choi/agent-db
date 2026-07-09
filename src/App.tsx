@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { getSafety, listConnections, setSafety as ipcSetSafety } from "./ipc/commands";
+import { check, type Update } from "@tauri-apps/plugin-updater";
+import {
+  getSafety,
+  listConnections,
+  mcpPlatforms,
+  mcpRuntimeStatus,
+} from "./ipc/commands";
 import type { CatalogTable, ConnectionProfile, SafetySettings } from "./ipc/types";
 import { errMessage } from "./ipc/types";
 import { tableKey, tableLabel } from "./lib/tableRef";
@@ -13,6 +19,8 @@ import Migrations from "./screens/Migrations";
 import Onboarding from "./screens/Onboarding";
 import Settings from "./screens/Settings";
 import AgentResultView from "./components/AgentResultView";
+import EngineMark from "./components/EngineMark";
+import { Icon } from "./components/Icon";
 import { ToastProvider, useToast } from "./components/Toast";
 import { AgentFeedProvider, useAgentFeed } from "./lib/agentFeed";
 import { useI18n, type I18nKey } from "./lib/i18n";
@@ -34,6 +42,7 @@ const TAB_LABELS: Record<Tab, I18nKey> = {
 
 // `null` = not editing; "new" = blank form; a profile = edit that profile.
 type Editing = ConnectionProfile | "new" | null;
+type McpBadgeState = "server" | "disconnected";
 
 export default function App() {
   return (
@@ -48,6 +57,7 @@ export default function App() {
 const SIDEBAR_MIN = 180;
 const SIDEBAR_MAX = 520;
 const SIDEBAR_DEFAULT = 240;
+const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
 
 function Shell() {
   const { t } = useI18n();
@@ -82,8 +92,16 @@ function Shell() {
   const [sqlDraft, setSqlDraft] = useState("SELECT 1;");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsSection, setSettingsSection] = useState<"mcp" | "safety" | undefined>(undefined);
+  const [settingsSection, setSettingsSection] = useState<
+    "mcp" | "safety" | "updates" | undefined
+  >(undefined);
   const [migrationsOpen, setMigrationsOpen] = useState(false);
+  const [mcpBadge, setMcpBadge] = useState<McpBadgeState | null>(null);
+  const [mcpBadgeReady, setMcpBadgeReady] = useState(false);
+  const [mcpRefreshTick, setMcpRefreshTick] = useState(0);
+  const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
+  const updateCheckInFlight = useRef(false);
+  const lastUpdateCheckAt = useRef(0);
 
   const selected = conns.find((c) => c.id === selectedId) ?? null;
 
@@ -103,6 +121,73 @@ function Shell() {
   useEffect(() => {
     void refresh();
   }, []);
+
+  async function refreshAvailableUpdate() {
+    if (updateCheckInFlight.current) return;
+    updateCheckInFlight.current = true;
+    try {
+      const next = await check();
+      lastUpdateCheckAt.current = Date.now();
+      setAvailableUpdate(next);
+    } catch {
+      lastUpdateCheckAt.current = Date.now();
+    } finally {
+      updateCheckInFlight.current = false;
+    }
+  }
+
+  useEffect(() => {
+    void refreshAvailableUpdate();
+    const iv = window.setInterval(() => void refreshAvailableUpdate(), UPDATE_CHECK_INTERVAL_MS);
+    const onVisibility = () => {
+      if (document.hidden) return;
+      if (Date.now() - lastUpdateCheckAt.current >= UPDATE_CHECK_INTERVAL_MS) {
+        void refreshAvailableUpdate();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearInterval(iv);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, []);
+
+  // Global MCP attention signal: if the local server/bridge is down, or no supported
+  // agent platform has DopeDB registered, keep a small setup affordance visible.
+  useEffect(() => {
+    let cancelled = false;
+
+    async function refreshMcpBadge() {
+      try {
+        const runtime = await mcpRuntimeStatus();
+        if (cancelled) return;
+        let serverNeedsAttention = !runtime.httpRunning || !runtime.bridgeRunning;
+        if (serverNeedsAttention) {
+          await new Promise((resolve) => window.setTimeout(resolve, 1500));
+          if (cancelled) return;
+          const retry = await mcpRuntimeStatus();
+          serverNeedsAttention = !retry.httpRunning || !retry.bridgeRunning;
+        }
+        const platforms = await mcpPlatforms();
+        if (cancelled) return;
+        const hasConnectedPlatform = platforms.some((p) => p.connected);
+        setMcpBadge(
+          serverNeedsAttention ? "server" : hasConnectedPlatform ? null : "disconnected",
+        );
+      } catch {
+        if (!cancelled) setMcpBadge("disconnected");
+      } finally {
+        if (!cancelled) setMcpBadgeReady(true);
+      }
+    }
+
+    void refreshMcpBadge();
+    const iv = window.setInterval(() => void refreshMcpBadge(), 30000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(iv);
+    };
+  }, [mcpRefreshTick]);
 
   // Nudge (not hijack) when a new result lands while the user is off the Agent tab. Skip
   // the mount baseline so it doesn't fire on load; guard on result id so it fires once per
@@ -163,32 +248,6 @@ function Shell() {
     if (selectedId) loadSafety(selectedId);
   };
 
-  // #10: quick read↔write toggle from the main head — the most-flipped setting, otherwise
-  // buried in Settings ▸ Safety. Persists via the IPC set_safety (not the local setter) so
-  // the backend gate actually changes, then refreshes. Enabling writes (the risky direction)
-  // confirms first. `togglingWrites` reflects the pending state so the control isn't double-hit.
-  const [togglingWrites, setTogglingWrites] = useState(false);
-  async function toggleWrites() {
-    if (!selectedId || !safety || togglingWrites) return;
-    const enabling = !safety.allowWrites;
-    if (
-      enabling &&
-      !window.confirm(
-        t("app.confirmAllowWrites", { name: selected?.name || t("app.thisConnection") }),
-      )
-    )
-      return;
-    setTogglingWrites(true);
-    try {
-      await ipcSetSafety(selectedId, { ...safety, allowWrites: enabling });
-      refreshSafety();
-    } catch (e) {
-      toast(errMessage(e), "error");
-    } finally {
-      setTogglingWrites(false);
-    }
-  }
-
   function loadSql(sql: string) {
     setSqlDraft(sql);
     setTab("sql");
@@ -201,6 +260,22 @@ function Shell() {
     setEditing(null);
   }
 
+  function openUpdateSettings() {
+    setSettingsSection("updates");
+    setSettingsOpen(true);
+    setMigrationsOpen(false);
+    setEditing(null);
+  }
+
+  function refreshMcpConnectionState() {
+    setMcpRefreshTick((tick) => tick + 1);
+  }
+
+  function syncAvailableUpdate(update: Update | null) {
+    lastUpdateCheckAt.current = Date.now();
+    setAvailableUpdate(update);
+  }
+
   function renderMain() {
     if (settingsOpen) {
       return (
@@ -208,12 +283,10 @@ function Shell() {
           connection={selected}
           initialSection={settingsSection}
           refreshSafety={refreshSafety}
+          onMcpChanged={refreshMcpConnectionState}
+          availableUpdate={availableUpdate}
+          onUpdateChecked={syncAvailableUpdate}
           onClose={() => setSettingsOpen(false)}
-          onOpenAgent={() => {
-            refreshSafety();
-            setSettingsOpen(false);
-            setTab("agent");
-          }}
         />
       );
     }
@@ -235,14 +308,6 @@ function Shell() {
               setEditing(null);
             }}
             onCancel={() => setEditing(null)}
-            onDeleted={async (id) => {
-              await refresh();
-              if (selectedId === id) {
-                setSelectedId(null);
-                setSelectedTable(null);
-              }
-              setEditing(null);
-            }}
           />
         </div>
       );
@@ -293,8 +358,8 @@ function Shell() {
           <header className="main-head ds-workbench-head">
             <div className="ds-workbench-title">
               <div className="ds-title-line">
+                <EngineMark engine={selected.engine} />
                 <strong>{selected.name || t("app.unnamed")}</strong>
-                <span className="ds-context-badge">{selected.engine}</span>
               </div>
               <div className="ds-meta-row">
                 <span>{selected.database}</span>
@@ -306,41 +371,19 @@ function Shell() {
                 )}
               </div>
             </div>
-            <div className="main-policy ds-command-group">
-              {safety && (
+            {unseen > 0 && (
+              <div className="main-policy ds-command-group">
                 <button
-                  className={
-                    "write-toggle" + (safety.allowWrites ? " writes" : " readonly")
-                  }
-                  disabled={togglingWrites}
-                  onClick={() => void toggleWrites()}
-                  title={
-                    safety.allowWrites
-                      ? t("app.writeWritesAllowedTitle")
-                      : t("app.writeReadOnlyTitle")
-                  }
+                  className="btn small agent-jump"
+                  onClick={() => setTab("agent")}
+                  title={t("app.agentUnseen", { count: unseen })}
+                  aria-label={t("app.agentUnseen", { count: unseen })}
                 >
-                  {togglingWrites
-                    ? "..."
-                    : safety.allowWrites
-                      ? t("app.writeWritesAllowed")
-                      : t("app.writeReadOnly")}
+                  <Icon name="alert" />
+                  {unseen}
                 </button>
-              )}
-              {safety?.autoRunReads && (
-                <span className="ds-badge">{t("safety.autoRunReads")}</span>
-              )}
-              {unseen > 0 ? (
-                <button className="btn small agent-jump" onClick={() => setTab("agent")}>
-                  {t("app.agentUnseen", { count: unseen })}
-                </button>
-              ) : (
-                <span className="ds-badge">{t("app.agentQuiet")}</span>
-              )}
-              <button className="btn small" onClick={() => setEditing(selected)}>
-                {t("app.edit")}
-              </button>
-            </div>
+              </div>
+            )}
           </header>
         )}
 
@@ -428,6 +471,15 @@ function Shell() {
     );
   }
 
+  const showMcpBadge = mcpBadgeReady && !!mcpBadge && !settingsOpen;
+  const showUpdateBadge = !!availableUpdate && !settingsOpen;
+  const mcpBadgeLabel =
+    mcpBadge === "server" ? t("mcp.badgeServerDown") : t("mcp.badgeDisconnected");
+  const mcpBadgeTitle =
+    mcpBadge === "server"
+      ? t("mcp.badgeServerDownTitle")
+      : t("mcp.badgeDisconnectedTitle");
+
   return (
     <div className="app" style={{ gridTemplateColumns: `${sidebarW}px 5px 1fr` }}>
       <DatabaseExplorer
@@ -463,6 +515,23 @@ function Shell() {
           setSettingsOpen(false);
           setMigrationsOpen(false);
         }}
+        onEdit={(conn) => {
+          setEditing(conn);
+          setSettingsOpen(false);
+          setMigrationsOpen(false);
+        }}
+        onDeleted={async (id) => {
+          await refresh();
+          if (selectedId === id) {
+            setSelectedId(null);
+            setSelectedTable(null);
+            setMigrationsOpen(false);
+          }
+          setEditing((current) => {
+            if (current && current !== "new" && current.id === id) return null;
+            return current;
+          });
+        }}
         onOpenSettings={() => {
           setSettingsSection(undefined);
           setSettingsOpen(true);
@@ -479,6 +548,35 @@ function Shell() {
         }}
       />
       <main className="main">{renderMain()}</main>
+      {(showUpdateBadge || showMcpBadge) && (
+        <div className="ds-attention-stack">
+          {showUpdateBadge && (
+            <button
+              className="ds-attention-badge ds-tone-trust"
+              onClick={openUpdateSettings}
+              title={t("updates.badgeTitle")}
+              aria-label={t("updates.badgeTitle")}
+            >
+              <Icon name="download" />
+              <span>{t("updates.badge", { version: availableUpdate?.version ?? "" })}</span>
+            </button>
+          )}
+          {showMcpBadge && (
+            <button
+              className={
+                "ds-attention-badge " +
+                (mcpBadge === "server" ? "ds-tone-danger" : "ds-tone-risk")
+              }
+              onClick={openMcpSettings}
+              title={mcpBadgeTitle}
+              aria-label={mcpBadgeTitle}
+            >
+              <Icon name={mcpBadge === "server" ? "alert" : "database"} />
+              <span>{mcpBadgeLabel}</span>
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

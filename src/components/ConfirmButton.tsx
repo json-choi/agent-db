@@ -38,7 +38,13 @@ export default function ConfirmButton({
   }
 
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "var(--ds-control-gap)",
+      }}
+    >
       <span className="muted">{confirmLabel ?? t("common.reallyDelete")}</span>
       <button
         className="btn danger small"

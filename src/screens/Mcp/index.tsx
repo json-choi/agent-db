@@ -15,6 +15,8 @@ import {
 import type { PlatformInfo } from "../../ipc/types";
 import { errMessage } from "../../ipc/types";
 import ConfirmButton from "../../components/ConfirmButton";
+import { Icon } from "../../components/Icon";
+import InfoTip from "../../components/InfoTip";
 import { useToast } from "../../components/Toast";
 import { useI18n } from "../../lib/i18n";
 import "./mcp.css";
@@ -24,7 +26,7 @@ interface Result {
   msg: string;
 }
 
-export default function Mcp({ onOpenAgent }: { onOpenAgent?: () => void }) {
+export default function Mcp({ onMcpChanged }: { onMcpChanged?: () => void }) {
   const { t } = useI18n();
   const toast = useToast();
   const [status, setStatus] = useState<McpStatus | null>(null);
@@ -77,6 +79,7 @@ export default function Mcp({ onOpenAgent }: { onOpenAgent?: () => void }) {
       setResults((r) => ({ ...r, [id]: { ok: true, msg } }));
       toast(toastLabel(platforms.find((p) => p.id === id)?.name ?? id));
       await refreshPlatforms();
+      onMcpChanged?.();
     } catch (e) {
       const msg = errMessage(e);
       setResults((r) => ({ ...r, [id]: { ok: false, msg } }));
@@ -118,7 +121,7 @@ export default function Mcp({ onOpenAgent }: { onOpenAgent?: () => void }) {
       {running ? (
         <div className="mcp-status">
           <span className="dot-on" /> {t("mcp.httpRunning")}{status && <> · <code>{status.url}</code></>}
-          <span className="muted"> (Claude Code · Cursor · VS Code)</span>
+          <InfoTip label="Claude Code · Cursor · VS Code" />
         </div>
       ) : (
         <div className="error">
@@ -131,7 +134,7 @@ export default function Mcp({ onOpenAgent }: { onOpenAgent?: () => void }) {
       <div className={bridge ? "mcp-status" : "error"}>
         {bridge ? <span className="dot-on" /> : null} {t("mcp.stdioBridge")}{" "}
         {bridge ? t("mcp.bridgeReady") : t("mcp.bridgeDown")}
-        <span className="muted"> (Claude Desktop · Codex)</span>
+        <InfoTip label="Claude Desktop · Codex" />
         {!bridge && runtime?.error ? ` — ${runtime.error}` : ""}
       </div>
 
@@ -147,8 +150,28 @@ export default function Mcp({ onOpenAgent }: { onOpenAgent?: () => void }) {
               <div className="plat-row">
                 <div className="plat-info">
                   <strong>{p.name}</strong>
-                  {p.connected && <span className="plat-tag">✓ {t("mcp.connected")}</span>}
-                  <span className="muted"> · {p.installed ? p.note : t("mcp.notInstalled")}</span>
+                  {p.connected && (
+                    <span
+                      className="badge status-ok icon-only-badge"
+                      title={t("mcp.connected")}
+                      aria-label={t("mcp.connected")}
+                      role="img"
+                    >
+                      <Icon name="check" />
+                    </span>
+                  )}
+                  {p.installed ? (
+                    <InfoTip label={p.note} />
+                  ) : (
+                    <span
+                      className="badge icon-only-badge"
+                      title={t("mcp.notInstalled")}
+                      aria-label={t("mcp.notInstalled")}
+                      role="img"
+                    >
+                      <Icon name="circleSlash" />
+                    </span>
+                  )}
                 </div>
                 <button
                   className={p.connected ? "btn small" : "btn small primary"}
@@ -212,15 +235,6 @@ export default function Mcp({ onOpenAgent }: { onOpenAgent?: () => void }) {
           </div>
         </details>
       )}
-
-      <p className="muted">
-        {t("mcp.liveMoved")}{" "}
-        {onOpenAgent && (
-          <button className="btn small" onClick={onOpenAgent}>
-            {t("mcp.openAgent")}
-          </button>
-        )}
-      </p>
     </div>
   );
 }

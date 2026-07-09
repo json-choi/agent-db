@@ -1,5 +1,6 @@
 // First-run onboarding — shown when no database is connected yet. Instead of a blank
 // screen, guide the user to connect a database or wire up the MCP server.
+import InfoTip from "../../components/InfoTip";
 import { useI18n } from "../../lib/i18n";
 import "./onboarding.css";
 
@@ -15,14 +16,18 @@ export default function Onboarding({
   return (
     <div className="onboarding">
       <div className="onboarding-inner">
-        <h1>{t("onboarding.title")}</h1>
-        <p className="lead muted">{t("onboarding.lead")}</p>
+        <div className="onboarding-title-row">
+          <h1>{t("onboarding.title")}</h1>
+          <InfoTip label={t("onboarding.lead")} />
+        </div>
 
         <div className="onboarding-steps">
           <div className="step-card">
             <div className="step-num">1</div>
-            <h3>{t("onboarding.databaseTitle")}</h3>
-            <p className="muted">{t("onboarding.databaseBody")}</p>
+            <div className="step-title-row">
+              <h3>{t("onboarding.databaseTitle")}</h3>
+              <InfoTip label={t("onboarding.databaseBody")} />
+            </div>
             <button className="btn primary" onClick={onNewConnection}>
               {t("onboarding.addConnection")}
             </button>
@@ -30,15 +35,17 @@ export default function Onboarding({
 
           <div className="step-card">
             <div className="step-num">2</div>
-            <h3>{t("onboarding.agentTitle")}</h3>
-            <p className="muted">{t("onboarding.agentBody")}</p>
+            <div className="step-title-row">
+              <h3>{t("onboarding.agentTitle")}</h3>
+              <InfoTip label={t("onboarding.agentBody")} />
+            </div>
             <button className="btn" onClick={onOpenMcp}>
               {t("onboarding.setupMcp")}
             </button>
           </div>
         </div>
 
-        <p className="onboarding-foot muted">{t("onboarding.foot")}</p>
+        <InfoTip label={t("onboarding.foot")} className="onboarding-foot" />
       </div>
     </div>
   );

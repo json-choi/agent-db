@@ -2,10 +2,12 @@
 // per-connection safety. Moved out of the top tab bar so tabs stay data-focused.
 import { useEffect, useRef, useState } from "react";
 import type { ConnectionProfile } from "../../ipc/types";
+import InfoTip from "../../components/InfoTip";
 import { useI18n } from "../../lib/i18n";
 import Mcp from "../Mcp";
 import Safety from "../Safety";
 import Updates from "../Updates";
+import type { Update } from "@tauri-apps/plugin-updater";
 import "./settings.css";
 
 type Section = "mcp" | "safety" | "updates" | "language";
@@ -15,15 +17,19 @@ export default function Settings({
   onClose,
   refreshSafety,
   initialSection,
-  onOpenAgent,
+  onMcpChanged,
+  availableUpdate,
+  onUpdateChecked,
 }: {
   connection: ConnectionProfile | null;
   onClose: () => void;
   // Re-loads the App's per-connection safety so Safety edits apply without reselecting.
   refreshSafety: () => void;
   initialSection?: Section;
-  // Jump from the MCP section to the app-level Agent tab (closes Settings).
-  onOpenAgent: () => void;
+  // Re-checks global MCP setup status after one-click platform changes.
+  onMcpChanged?: () => void;
+  availableUpdate?: Update | null;
+  onUpdateChecked?: (update: Update | null) => void;
 }) {
   const { lang, setLang, t } = useI18n();
   const [section, setSection] = useState<Section>(
@@ -91,12 +97,16 @@ export default function Settings({
       </aside>
 
       <div className="settings-body">
-        {section === "mcp" && <Mcp onOpenAgent={onOpenAgent} />}
-        {section === "updates" && <Updates />}
+        {section === "mcp" && <Mcp onMcpChanged={onMcpChanged} />}
+        {section === "updates" && (
+          <Updates initialUpdate={availableUpdate} onChecked={onUpdateChecked} />
+        )}
         {section === "language" && (
           <div className="screen form">
-            <h2>{t("settings.languageTitle")}</h2>
-            <p className="muted">{t("settings.languageBody")}</p>
+            <div className="settings-title-row">
+              <h2>{t("settings.languageTitle")}</h2>
+              <InfoTip label={t("settings.languageBody")} />
+            </div>
             <label>
               {t("language.label")}
               <select value={lang} onChange={(e) => setLang(e.target.value as typeof lang)}>

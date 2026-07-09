@@ -26,7 +26,7 @@
   color: var(--ds-text-muted);
   font-weight: 600;
   padding: var(--ds-space-2) var(--ds-space-3);
-  border-bottom: 1px solid var(--ds-border-subtle);
+  border-bottom: var(--ds-border-width) solid var(--ds-border-subtle);
 }
 .history-table th.num,
 .history-table td.num {
@@ -34,7 +34,7 @@
 }
 .history-row td {
   padding: var(--ds-space-2) var(--ds-space-3);
-  border-bottom: 1px solid var(--ds-border-subtle);
+  border-bottom: var(--ds-border-width) solid var(--ds-border-subtle);
   vertical-align: middle;
 }
 .history-row {
@@ -73,8 +73,23 @@
 
 /* Keyboard focus for the click-to-load rows (role=button). */
 .history-row:focus-visible {
-  outline: 2px solid var(--ds-accent);
-  outline-offset: -2px;
+  outline: var(--ds-focus-width) solid var(--ds-accent);
+  outline-offset: calc(var(--ds-focus-offset) * -1);
+}
+
+@media (max-width: 760px) {
+  .history {
+    padding: var(--ds-space-3);
+  }
+
+  .history-filters {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .history-table {
+    min-width: 720px;
+  }
 }
 
 /* Origin + status badges (reuse the shared .badge base from styles.css). */

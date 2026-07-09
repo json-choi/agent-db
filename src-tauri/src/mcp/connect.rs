@@ -285,6 +285,46 @@ pub fn disconnect(id: &str) -> Result<String, String> {
     }
 }
 
+pub fn open_app(id: &str) -> Result<String, String> {
+    let app = match id {
+        "codex" | "codex-desktop" => "Codex",
+        "claude-code" | "claude-desktop" => "Claude",
+        other => return Err(format!("unknown platform '{other}'")),
+    };
+    open_named_app(app)
+}
+
+#[cfg(target_os = "macos")]
+fn open_named_app(name: &str) -> Result<String, String> {
+    let status = Command::new("open")
+        .args(["-a", name])
+        .status()
+        .map_err(|e| e.to_string())?;
+    if status.success() {
+        Ok(format!("Opened {name}."))
+    } else {
+        Err(format!("{name} is not installed or could not be opened"))
+    }
+}
+
+#[cfg(windows)]
+fn open_named_app(name: &str) -> Result<String, String> {
+    let status = Command::new("cmd")
+        .args(["/C", "start", "", name])
+        .status()
+        .map_err(|e| e.to_string())?;
+    if status.success() {
+        Ok(format!("Opened {name}."))
+    } else {
+        Err(format!("{name} is not installed or could not be opened"))
+    }
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn open_named_app(name: &str) -> Result<String, String> {
+    Err(format!("Opening {name} from DopeDB is not supported on this OS yet"))
+}
+
 fn load_codex_config() -> Result<(PathBuf, String, DocumentMut), String> {
     let path = codex_config_path().ok_or("no home dir")?;
     let raw = if path.exists() {

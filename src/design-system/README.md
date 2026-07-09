@@ -120,20 +120,19 @@ Database workflow:
 
 Agent/safety workflow:
 
-- `ds-trust-surface`
-- `ds-risk-surface`
-- `ds-danger-surface`
-- `ds-ledger-grid`
-- `ds-ledger-card`
-- `ds-ledger-card-header`
-- `ds-ledger-card-trust`
-- `ds-ledger-card-risk`
-- `ds-ledger-card-danger`
-- `ds-policy-grid`
-- `ds-policy-card`
-- `ds-policy-card-trust`
-- `ds-policy-card-risk`
-- `ds-policy-card-danger`
+- `ds-surface`
+- `ds-surface-grid`
+- `ds-card-grid`
+- `ds-card-row`
+- `ds-card-stack`
+- `ds-card-title-row`
+- `ds-card-copy`
+- `ds-tone-trust`
+- `ds-tone-risk`
+- `ds-tone-danger`
+- `ds-action-row`
+- `ds-attention-stack`
+- `ds-attention-badge`
 
 ## 사용 예시
 
@@ -147,8 +146,8 @@ Agent/safety workflow:
     <span className="ds-context-badge">prod.public</span>
   </header>
 
-  <div className="ds-policy-grid">
-    <article className="ds-policy-card">
+  <div className="ds-card-grid">
+    <article className="ds-card ds-card-row ds-tone-trust">
       <span className="icon" />
       <div>
         <span className="muted">Schema access</span>
@@ -168,6 +167,8 @@ Agent/safety workflow:
 5. `Agent` 관련 화면은 chat보다 trust ledger가 먼저 보여야 한다.
 6. icon-only 버튼에는 반드시 `aria-label` 또는 `title`을 둔다.
 7. 신규 화면의 접근성 체크: focus ring, keyboard path, contrast, target size, reduced motion.
+8. `system.css`에는 화면 이름을 넣지 않는다. 반복되는 행은 `ds-action-row`, 반복 카드/표면은 `ds-card*`와 `ds-tone-*`로 조합한다.
+9. 새 토큰은 세 화면 이상에서 반복될 때만 추가한다. 한 화면의 미세 조정 값은 화면 CSS에 둔다.
 
 ## DataGrip 분석에서 반영한 것
 
