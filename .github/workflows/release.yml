@@ -99,15 +99,15 @@ jobs:
           mkdir -p release-alias
           case "$TARGET" in
             x86_64-pc-windows-msvc)
-              src="$(find "src-tauri/target/$TARGET/release/bundle/nsis" -maxdepth 1 -type f -name '*.exe' | head -n 1)"
+              pattern="DopeDB_*_x64-setup.exe"
               alias="DopeDB-windows-x64-setup.exe"
               ;;
             aarch64-apple-darwin)
-              src="$(find "src-tauri/target/$TARGET/release/bundle/dmg" -maxdepth 1 -type f -name '*.dmg' | head -n 1)"
+              pattern="DopeDB_*_aarch64.dmg"
               alias="DopeDB-macos-arm64.dmg"
               ;;
             x86_64-apple-darwin)
-              src="$(find "src-tauri/target/$TARGET/release/bundle/dmg" -maxdepth 1 -type f -name '*.dmg' | head -n 1)"
+              pattern="DopeDB_*_x64.dmg"
               alias="DopeDB-macos-x64.dmg"
               ;;
             *)
@@ -116,8 +116,10 @@ jobs:
               ;;
           esac
 
+          gh release download "$tag" --pattern "$pattern" --dir release-alias
+          src="$(find release-alias -maxdepth 1 -type f -name "$pattern" | head -n 1)"
           if [[ -z "${src:-}" || ! -f "$src" ]]; then
-            echo "No installer artifact found for $TARGET" >&2
+            echo "No release asset matching $pattern found for $TARGET" >&2
             exit 1
           fi
 
