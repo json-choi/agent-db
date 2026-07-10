@@ -16,6 +16,7 @@ import type { ConnectionProfile, MigrationReport, MigrationView } from "../../ip
 import { errMessage } from "../../ipc/types";
 import { Icon } from "../../components/Icon";
 import InfoTip from "../../components/InfoTip";
+import { useI18n } from "../../lib/i18n";
 import "./migrations.css";
 
 const keyFor = (id: string) => `dopedb.migrationsDir.${id}`;
@@ -55,6 +56,7 @@ export default function Migrations({
   connection: ConnectionProfile;
   onClose: () => void;
 }) {
+  const { t } = useI18n();
   const [dir, setDir] = useState("");
   const [report, setReport] = useState<MigrationReport | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -88,7 +90,7 @@ export default function Migrations({
         const r = await withTimeout(
           analyzeMigrations(d, connection.id),
           ANALYZE_TIMEOUT_MS,
-          "Migration analysis timed out. Choose the actual migrations folder instead of a broad project folder.",
+          t("migrations.analyzeTimeout"),
         );
         if (seq !== analyzeSeq.current) return false;
         setReport(r);
@@ -99,36 +101,36 @@ export default function Migrations({
         if (seq === analyzeSeq.current) {
           const msg = errMessage(e);
           setErr(msg);
-          if (/timed out/i.test(msg)) localStorage.removeItem(keyFor(connection.id));
+          if (msg === t("migrations.analyzeTimeout")) localStorage.removeItem(keyFor(connection.id));
         }
         return false;
       } finally {
         if (seq === analyzeSeq.current) setBusy(false);
       }
     },
-    [connection.id, persist],
+    [connection.id, persist, t],
   );
 
   const run = useCallback(
     async (d: string) => {
-      const t = d.trim();
-      if (!t) return;
-      setDir(t);
-      dirRef.current = t;
-      const analyzed = await analyze(t);
+      const trimmed = d.trim();
+      if (!trimmed) return;
+      setDir(trimmed);
+      dirRef.current = trimmed;
+      const analyzed = await analyze(trimmed);
       if (!analyzed) return;
       try {
         await withTimeout(
-          startMigrationWatch(t),
+          startMigrationWatch(trimmed),
           WATCH_TIMEOUT_MS,
-          "Migration folder watch timed out.",
+          t("migrations.watchTimeout"),
         );
         setWatchErr(null);
       } catch (e) {
         setWatchErr(errMessage(e)); // surface instead of swallowing
       }
     },
-    [analyze],
+    [analyze, t],
   );
 
   // Resolve the folder for the current connection: a stored override still matching the
@@ -149,7 +151,7 @@ export default function Migrations({
       void withTimeout(
         detectMigrationsDir(connection.projectDir),
         DETECT_TIMEOUT_MS,
-        "Migration folder auto-detect timed out. Choose the folder manually.",
+        t("migrations.detectTimeout"),
       )
         .then((found) => {
           const target = found ?? connection.projectDir ?? "";
@@ -162,7 +164,7 @@ export default function Migrations({
           setDir(connection.projectDir ?? "");
         });
     }
-  }, [connection.id, connection.projectDir, run]);
+  }, [connection.id, connection.projectDir, run, t]);
 
   useEffect(() => {
     resolve();
@@ -216,10 +218,13 @@ export default function Migrations({
     setActionErr(null);
     try {
       await runMigrationScript(connection.id, dirRef.current, confirm.version, confirm.direction, true);
-      const verb = confirm.direction === "apply" ? "applied" : "rolled back";
       setConfirm(null);
       setReviewed(false);
-      setSuccess(`Migration ${confirm.version} ${verb}.`);
+      setSuccess(
+        t(confirm.direction === "apply" ? "migrations.appliedSuccess" : "migrations.rolledBackSuccess", {
+          version: confirm.version,
+        }),
+      );
       await analyze(dirRef.current); // re-analyze so the applied badge flips
       setTimeout(() => setSuccess(null), 5000);
     } catch (e) {
@@ -244,9 +249,9 @@ export default function Migrations({
   return (
     <div className="screen migrations">
       <div className="mig-top">
-        <strong>Migrations</strong>
-        <button className="btn small" onClick={onClose} title="Close (Esc)">
-          Close
+        <strong>{t("migrations.title")}</strong>
+        <button className="btn small" onClick={onClose} title={t("migrations.closeTitle")}>
+          {t("common.close")}
         </button>
       </div>
 
@@ -256,33 +261,33 @@ export default function Migrations({
           value={dir}
           onChange={(e) => setDir(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && void run(dir)}
-          placeholder="/path/to/migrations  (auto-filled from the connection's project folder)"
+          placeholder={t("migrations.dirPlaceholder")}
         />
         <button
           className="btn small"
           disabled={busy}
           onClick={() => void pickFolder().then((d) => d && (setDir(d), void run(d)))}
         >
-          Browse…
+          {t("migrations.browse")}
         </button>
         <button className="btn primary small" disabled={busy || !dir.trim()} onClick={() => void run(dir)}>
-          {busy ? "Analyzing…" : "Analyze"}
+          {busy ? t("migrations.analyzing") : t("migrations.analyze")}
         </button>
         {localStorage.getItem(keyFor(connection.id)) && (
-          <button className="btn small" onClick={changeFolder} title="Clear the saved folder and re-detect">
-            Change folder
+          <button className="btn small" onClick={changeFolder} title={t("migrations.changeFolderTitle")}>
+            {t("migrations.changeFolder")}
           </button>
         )}
       </div>
 
       {!connection.projectDir && !report && (
-        <InfoTip label="Tip: set a Project folder on this connection (Edit) and DopeDB will auto-detect its migrations folder." />
+        <InfoTip label={t("migrations.projectDirTip")} />
       )}
 
       {watchErr && (
         <div className="mig-warn-banner">
-          <span>live re-analyze unavailable: {watchErr}</span>
-          <button onClick={() => setWatchErr(null)} title="Dismiss" aria-label="Close">
+          <span>{t("migrations.watchUnavailable", { error: watchErr })}</span>
+          <button onClick={() => setWatchErr(null)} title={t("migrations.dismiss")} aria-label={t("common.close")}>
             <Icon name="close" />
           </button>
         </div>
@@ -292,65 +297,57 @@ export default function Migrations({
 
       {report && !report.error && (
         <>
-          {anyPartial && (
-            <div className="mig-note">
-              Some migrations were only partially parsed — generated rollback SQL and drift below
-              are approximate.
-            </div>
-          )}
+          {anyPartial && <div className="mig-note">{t("migrations.partialParseNote")}</div>}
 
           {drift ? (
             <div className={inSync ? "drift ok" : "drift"}>
               {inSync ? (
-                <span>✓ Migrations match the live database schema.</span>
+                <span>{t("migrations.inSync")}</span>
               ) : (
                 <>
                   {drift.pendingTables.length > 0 && (
                     <div>
-                      <strong>Not in DB (pending):</strong>{" "}
-                      {drift.pendingTables.map((t) => (
-                        <code key={t}>{t}</code>
+                      <strong>{t("migrations.pendingTablesLabel")}</strong>{" "}
+                      {drift.pendingTables.map((tbl) => (
+                        <code key={tbl}>{tbl}</code>
                       ))}
                     </div>
                   )}
                   {drift.extraTables.length > 0 && (
                     <div>
-                      <strong>In DB, not in migrations:</strong>{" "}
-                      {drift.extraTables.map((t) => (
-                        <code key={t}>{t}</code>
+                      <strong>{t("migrations.extraTablesLabel")}</strong>{" "}
+                      {drift.extraTables.map((tbl) => (
+                        <code key={tbl}>{tbl}</code>
                       ))}
                     </div>
                   )}
                   {drift.columnDiffs.map((c) => (
                     <div key={c.table}>
                       <strong>{c.table}:</strong>
-                      {c.missingInDb.length > 0 && <> missing in DB {c.missingInDb.map((x) => <code key={x}>{x}</code>)}</>}
-                      {c.extraInDb.length > 0 && <> extra in DB {c.extraInDb.map((x) => <code key={x}>{x}</code>)}</>}
+                      {c.missingInDb.length > 0 && <> {t("migrations.missingInDb")} {c.missingInDb.map((x) => <code key={x}>{x}</code>)}</>}
+                      {c.extraInDb.length > 0 && <> {t("migrations.extraInDb")} {c.extraInDb.map((x) => <code key={x}>{x}</code>)}</>}
                     </div>
                   ))}
                 </>
               )}
             </div>
           ) : (
-            <div className="mig-drift-unavailable">
-              DB comparison unavailable — could not compare these migrations against the live
-              database.
-            </div>
+            <div className="mig-drift-unavailable">{t("migrations.driftUnavailable")}</div>
           )}
 
           <div className="mig-tracker muted">
             {report.tracker ? (
               <>
-                Tracking: <strong>{report.tracker}</strong>
+                {t("migrations.trackingLabel")} <strong>{report.tracker}</strong>
                 {report.trackerTable && <> ({report.trackerTable})</>}
               </>
             ) : (
-              <>No migration tracker detected — applied state is unknown.</>
+              <>{t("migrations.noTracker")}</>
             )}
           </div>
 
           <div className="mig-meta muted">
-            {migs.length} migrations · {report.dir}
+            {t("migrations.metaLine", { count: migs.length, dir: report.dir })}
           </div>
 
           <ul className="mig-list">
@@ -364,43 +361,47 @@ export default function Migrations({
                     <span className="mig-ver">{m.version}</span>
                     <span className="mig-name">{m.name}</span>
                     <span className="mig-badges">
-                      {m.applied === true && <span className="badge applied">applied</span>}
-                      {m.applied === false && <span className="badge pending">pending</span>}
-                      {m.applied == null && <span className="badge unknown">unknown</span>}
-                      <span className="badge kind">{m.changes.length} changes</span>
+                      {m.applied === true && <span className="badge applied">{t("migrations.appliedBadge")}</span>}
+                      {m.applied === false && <span className="badge pending">{t("migrations.pendingBadge")}</span>}
+                      {m.applied == null && <span className="badge unknown">{t("common.unknown")}</span>}
+                      <span className="badge kind">{t("migrations.changesCount", { count: m.changes.length })}</span>
                       {m.hasDownFile ? (
-                        <span className="badge">has down</span>
+                        <span className="badge">{t("migrations.hasDown")}</span>
                       ) : (
-                        <span className="badge risk-medium">no down file</span>
+                        <span className="badge risk-medium">{t("migrations.noDownFile")}</span>
                       )}
-                      {m.partialParse && <span className="badge risk-medium">partial parse</span>}
-                      {m.parseError && <span className="badge risk-high">parse error</span>}
+                      {m.partialParse && <span className="badge risk-medium">{t("migrations.partialParseBadge")}</span>}
+                      {m.parseError && <span className="badge risk-high">{t("migrations.parseErrorBadge")}</span>}
                     </span>
                   </button>
 
                   {isOpen && (
                     <div className="mig-body">
-                      {m.parseError && <div className="error">Parse: {m.parseError}</div>}
+                      {m.parseError && (
+                        <div className="error">
+                          {t("migrations.parseErrorLabel")} {m.parseError}
+                        </div>
+                      )}
                       <ul className="mig-changes">
                         {m.changes.map((c, i) => (
                           <li key={i} className={c.reversible ? "chg" : "chg manual"}>
                             <span className="chg-sum">{c.summary}</span>
-                            {!c.reversible && <span className="chg-flag">manual rollback</span>}
+                            {!c.reversible && <span className="chg-flag">{t("migrations.manualRollbackFlag")}</span>}
                           </li>
                         ))}
                       </ul>
                       {m.generatedDown ? (
                         <div className="mig-down">
                           <div className="mig-down-head">
-                            <span className="label">Generated rollback (down)</span>
+                            <span className="label">{t("migrations.generatedRollbackLabel")}</span>
                             <button className="btn small" onClick={() => copy(id, m.generatedDown)}>
-                              {copied === id ? "Copied" : "Copy"}
+                              {copied === id ? t("common.copied") : t("common.copy")}
                             </button>
                           </div>
                           <pre>{m.generatedDown}</pre>
                         </div>
                       ) : (
-                        <div className="muted">No auto-reversible changes in this migration.</div>
+                        <div className="muted">{t("migrations.noAutoReversible")}</div>
                       )}
 
                       <ActionRow
@@ -434,7 +435,7 @@ export default function Migrations({
 
       {!report && !err && (
         <InfoTip
-          label={`Shows a change log per migration, its applied state, an auto-generated rollback (down) for each, and how the files drift from ${connection.database}.`}
+          label={t("migrations.reportOverviewTip", { database: connection.database })}
         />
       )}
     </div>
@@ -454,6 +455,7 @@ function ActionRow({
   running: boolean;
   onOpen: (version: string, direction: "apply" | "rollback") => void;
 }) {
+  const { t } = useI18n();
   if (m.applied === true) {
     const enabled = m === rollbackTarget;
     return (
@@ -461,10 +463,14 @@ function ActionRow({
         <button
           className="btn danger small"
           disabled={!enabled || running}
-          title={enabled ? undefined : `Only the latest applied migration (${rollbackTarget?.version}) can be rolled back.`}
+          title={
+            enabled
+              ? undefined
+              : t("migrations.rollbackOnlyLatestHint", { version: rollbackTarget?.version ?? "" })
+          }
           onClick={() => onOpen(m.version, "rollback")}
         >
-          Roll back
+          {t("migrations.rollback")}
         </button>
       </div>
     );
@@ -475,10 +481,12 @@ function ActionRow({
       <button
         className="btn small"
         disabled={!enabled || running}
-        title={enabled ? undefined : `Apply the earliest pending migration (${applyTarget?.version}) first.`}
+        title={
+          enabled ? undefined : t("migrations.applyEarliestHint", { version: applyTarget?.version ?? "" })
+        }
         onClick={() => onOpen(m.version, "apply")}
       >
-        Apply
+        {t("migrations.apply")}
       </button>
     </div>
   );
@@ -503,6 +511,7 @@ function ConfirmPanel({
   onCancel: () => void;
   onExecute: () => void;
 }) {
+  const { t } = useI18n();
   const script = confirm.direction === "apply" ? m.applyScript : m.rollbackScript;
   const manualLines = (script ?? "").split("\n").filter((l) => l.trimStart().startsWith("-- MANUAL:"));
   const irreversible = m.changes.filter((c) => !c.reversible).map((c) => c.summary);
@@ -511,7 +520,10 @@ function ConfirmPanel({
   return (
     <div className="mig-confirm">
       <div className="label">
-        {confirm.direction === "apply" ? "Apply" : "Roll back"} migration <strong>{m.version}</strong>
+        {t(
+          confirm.direction === "apply" ? "migrations.applyMigrationLabel" : "migrations.rollbackMigrationLabel",
+          { version: m.version },
+        )}
       </div>
 
       {script ? (
@@ -523,14 +535,14 @@ function ConfirmPanel({
           ))}
         </pre>
       ) : (
-        <div className="muted">No script available for this migration.</div>
+        <div className="muted">{t("migrations.noScriptAvailable")}</div>
       )}
 
       <div className="mig-warn">
-        <strong>This executes against the live database.</strong>
+        <strong>{t("migrations.executesLiveWarning")}</strong>
         {irreversible.length > 0 && (
           <>
-            <div>Not automatically reversible:</div>
+            <div>{t("migrations.notReversibleLabel")}</div>
             <ul>
               {irreversible.map((s, i) => (
                 <li key={i}>{s}</li>
@@ -540,21 +552,22 @@ function ConfirmPanel({
         )}
         {manualLines.length > 0 && (
           <div>
-            Some tracking bookkeeping is marked <code>-- MANUAL</code> and must be completed by hand
-            (highlighted above).
+            {t("migrations.manualBookkeepingNotePrefix")}
+            <code>-- MANUAL</code>
+            {t("migrations.manualBookkeepingNoteSuffix")}
           </div>
         )}
       </div>
 
       <label className="mig-review">
         <input type="checkbox" checked={reviewed} onChange={(e) => setReviewed(e.target.checked)} />
-        I reviewed this script
+        {t("migrations.reviewedLabel")}
       </label>
 
       {actionErr && (
         <div className="error">
           {actionErr}
-          {writesDisabled && <div className="mig-hint">Enable writes for this connection in Settings ▸ Safety.</div>}
+          {writesDisabled && <div className="mig-hint">{t("migrations.enableWritesHint")}</div>}
         </div>
       )}
 
@@ -564,10 +577,10 @@ function ConfirmPanel({
           disabled={!reviewed || running || !script}
           onClick={onExecute}
         >
-          {running ? "Executing…" : "Execute"}
+          {running ? t("migrations.executing") : t("migrations.execute")}
         </button>
         <button className="btn small" disabled={running} onClick={onCancel}>
-          Cancel
+          {t("common.cancel")}
         </button>
       </div>
     </div>

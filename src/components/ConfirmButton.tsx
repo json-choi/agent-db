@@ -59,6 +59,7 @@ export default function ConfirmButton({
       </button>
       <button
         className="btn small"
+        autoFocus
         disabled={disabled}
         onClick={() => {
           window.clearTimeout(timer.current);

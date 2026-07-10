@@ -1,5 +1,10 @@
 
 
+/* Title left, refresh right — the shared .form-actions row is justify-content: flex-end. */
+.audit .form-actions h2 {
+  margin-right: auto;
+}
+
 /* Audit action badges (className is `action-<action>`; targeted by substring so the
    colon-bearing script:execute variants match too). */
 .badge.action {

@@ -197,10 +197,12 @@ export interface MigrationReport {
   trackerTable: string | null;
 }
 
-// The `{ kind, message }` object AppError serializes to.
+// The `{ kind, message, position? }` object AppError serializes to.
 interface AppErrorShape {
   kind: string;
   message: string;
+  /** 1-based character offset into the executed SQL (Postgres only). */
+  position?: number;
 }
 
 export function errMessage(e: unknown): string {
@@ -213,6 +215,7 @@ export function errMessage(e: unknown): string {
 export interface AppErrorDetails {
   kind: string | null;
   message: string;
+  position: number | null;
   raw: string;
 }
 
@@ -228,8 +231,9 @@ export function errDetails(e: unknown): AppErrorDetails {
     return {
       kind: typeof shaped.kind === "string" ? shaped.kind : null,
       message: String(shaped.message),
+      position: typeof shaped.position === "number" ? shaped.position : null,
       raw,
     };
   }
-  return { kind: null, message: String(e), raw: String(e) };
+  return { kind: null, message: String(e), position: null, raw: String(e) };
 }

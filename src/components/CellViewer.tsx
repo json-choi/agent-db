@@ -2,7 +2,9 @@
 // parses to) an object/array, wrapped plain text otherwise. Copy button lifts the
 // displayed text to the clipboard.
 import { useEffect } from "react";
+import { useI18n } from "../lib/i18n";
 import { Icon } from "./Icon";
+import { useToast } from "./Toast";
 import "./grid.css";
 
 function render(value: unknown): { text: string; json: boolean } {
@@ -30,6 +32,8 @@ export default function CellViewer({
   onClose: () => void;
 }) {
   const { text, json } = render(value);
+  const { t } = useI18n();
+  const toast = useToast();
   // Close on Escape — DataGrid uses Escape to clear cell selection, so leaving the panel
   // stuck open while the selection clears is jarring.
   useEffect(() => {
@@ -44,10 +48,18 @@ export default function CellViewer({
       <div className="panel-head">
         <strong>{column}</strong>
         <div className="panel-head-actions">
-          <button className="btn small" onClick={() => void navigator.clipboard.writeText(text)}>
-            <Icon name="copy" /> Copy
+          <button
+            className="btn small"
+            onClick={() =>
+              navigator.clipboard
+                .writeText(text)
+                .then(() => toast(t("common.copied")))
+                .catch(() => toast(t("results.copyFailed"), "error"))
+            }
+          >
+            <Icon name="copy" /> {t("common.copy")}
           </button>
-          <button className="btn small" onClick={onClose} aria-label="Close">
+          <button className="btn small" onClick={onClose} aria-label={t("common.close")}>
             <Icon name="close" />
           </button>
         </div>

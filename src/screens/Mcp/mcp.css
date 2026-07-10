@@ -83,6 +83,7 @@
   padding: var(--ds-space-1) var(--ds-space-2);
   border-radius: var(--ds-radius-sm);
   font-size: var(--ds-font-size-ui);
+  cursor: pointer;
 }
 
 .act:hover {

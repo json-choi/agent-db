@@ -24,6 +24,11 @@
   align-items: center;
   min-height: var(--ds-control-lg);
 }
+/* Fixed gap, not margin-right: auto — run-hint's auto margin already owns the
+   push-right, and two auto margins would center the button group between them. */
+.sql-actions h2 {
+  margin-right: var(--ds-space-3);
+}
 .sql-actions .run-hint {
   margin-left: auto;
   font-size: var(--ds-font-size-sm);
@@ -35,6 +40,9 @@
 .sql-run-message {
   margin-top: var(--ds-space-2);
 }
+
+/* Dim prior results while a query is in flight, instead of clearing them. */
+.sql-results.busy { opacity: .55; pointer-events: none; transition: opacity .12s ease; }
 
 .sql-agent-error {
   margin-bottom: var(--ds-space-1);

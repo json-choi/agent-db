@@ -190,7 +190,7 @@ export default function TableData({
     try {
       setPrepared({
         sql: buildDelete(engine, table, pendingDelete),
-        rationale: `Delete selected row from ${table.name}.`,
+        rationale: t("rowEditor.rationaleDelete", { table: table.name }),
         collapseSql: true,
       });
       setPendingDelete(null);
@@ -240,6 +240,8 @@ export default function TableData({
           </div>
           <div className="ds-meta-row">
             <span>{t("tables.cols", { count: table.columns.length })}</span>
+            <span className="ds-meta-dot" />
+            <span>LIMIT {pageSize.toLocaleString()}</span>
             {result && (
               <>
                 <span className="ds-meta-dot" />
@@ -320,10 +322,6 @@ export default function TableData({
         <span className={sort ? "ds-filter-token active" : "ds-filter-token"}>
           <strong>ORDER BY</strong>
           {sort ? `${sort.col} ${sort.dir.toUpperCase()}` : t("tables.unsorted")}
-        </span>
-        <span className="ds-filter-token">
-          <strong>LIMIT</strong>
-          {pageSize.toLocaleString()}
         </span>
         <span className={safety.allowWrites ? "ds-filter-token risk" : "ds-filter-token"}>
           <strong>{t("tables.writePolicy")}</strong>

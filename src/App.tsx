@@ -178,12 +178,17 @@ function Shell() {
     document.addEventListener("mousemove", move);
     document.addEventListener("mouseup", up);
   };
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(() =>
+    localStorage.getItem("selectedId"),
+  );
   const [selectedTable, setSelectedTable] = useState<CatalogTable | null>(null);
   const [editing, setEditing] = useState<Editing>(null);
   const [safety, setSafety] = useState<SafetySettings | null>(null);
   const [safetyError, setSafetyError] = useState<string | null>(null);
-  const [tab, setTab] = useState<Tab>("data");
+  const [tab, setTab] = useState<Tab>(() => {
+    const saved = localStorage.getItem("tab");
+    return (TABS as string[]).includes(saved ?? "") ? (saved as Tab) : "data";
+  });
   const [sqlDraft, setSqlDraft] = useState("SELECT 1;");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -197,6 +202,15 @@ function Shell() {
   const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
   const updateCheckInFlight = useRef(false);
   const lastUpdateCheckAt = useRef(0);
+
+  // Persist tab/selectedId so a restart resumes where the user left off (mirrors sidebarW).
+  useEffect(() => {
+    localStorage.setItem("tab", tab);
+  }, [tab]);
+  useEffect(() => {
+    if (selectedId) localStorage.setItem("selectedId", selectedId);
+    else localStorage.removeItem("selectedId");
+  }, [selectedId]);
 
   const selected = conns.find((c) => c.id === selectedId) ?? null;
 
@@ -468,8 +482,8 @@ function Shell() {
 
     return (
       <>
-        {selected && (
-          <header className="main-head ds-workbench-head">
+        {selected && tab !== "agent" && (
+          <header className="main-head ds-workbench-head" data-tauri-drag-region="deep">
             <div className="ds-workbench-title">
               <div className="ds-title-line app-title-line">
                 <EngineMark engine={selected.engine} />
@@ -551,6 +565,7 @@ function Shell() {
               <SchemaExplorer
                 connection={selected}
                 selectedTable={selectedTable}
+                title={t("tabs.data")}
                 onOpenTable={(table) => {
                   setSelectedTable(table);
                   setTab("data");

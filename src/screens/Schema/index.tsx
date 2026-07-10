@@ -117,10 +117,12 @@ export default function SchemaExplorer({
   connection,
   selectedTable,
   onOpenTable,
+  title,
 }: {
   connection: ConnectionProfile;
   selectedTable: CatalogTable | null;
   onOpenTable: (table: CatalogTable) => void;
+  title?: string;
 }) {
   const { t } = useI18n();
   const [catalog, setCatalog] = useState<Catalog | null>(null);
@@ -190,31 +192,32 @@ export default function SchemaExplorer({
     ]),
   );
 
-  if (error) return <div className="screen schema-screen error">{error}</div>;
-  if (!catalog) return <div className="screen schema-screen muted loading">{t("schema.loading")}</div>;
-
   return (
     <div className="screen schema-screen">
       <div className="schema-head">
         <div>
           <div className="schema-title-row">
-            <h2>{t("schema.title")}</h2>
-            <span
-              className="badge schema-stat"
-              title={t("schema.tableCount", { count: catalog.tables.length })}
-              aria-label={t("schema.tableCount", { count: catalog.tables.length })}
-            >
-              <Icon name="table" />
-              {catalog.tables.length}
-            </span>
-            <span
-              className="badge schema-stat"
-              title={t("schema.fkCount", { count: allRelationships.length })}
-              aria-label={t("schema.fkCount", { count: allRelationships.length })}
-            >
-              <Icon name="chevronRight" />
-              {allRelationships.length}
-            </span>
+            <h2>{title ?? t("schema.title")}</h2>
+            {catalog && (
+              <>
+                <span
+                  className="badge schema-stat"
+                  title={t("schema.tableCount", { count: catalog.tables.length })}
+                  aria-label={t("schema.tableCount", { count: catalog.tables.length })}
+                >
+                  <Icon name="table" />
+                  {catalog.tables.length}
+                </span>
+                <span
+                  className="badge schema-stat"
+                  title={t("schema.fkCount", { count: allRelationships.length })}
+                  aria-label={t("schema.fkCount", { count: allRelationships.length })}
+                >
+                  <Icon name="chevronRight" />
+                  {allRelationships.length}
+                </span>
+              </>
+            )}
           </div>
         </div>
         <input
@@ -226,10 +229,14 @@ export default function SchemaExplorer({
         />
       </div>
 
-      {catalog.tables.length === 0 ? (
-        <div className="placeholder muted">{t("schema.empty")}</div>
+      {error ? (
+        <div className="error">{error}</div>
+      ) : !catalog ? (
+        <div className="muted loading">{t("schema.loading")}</div>
+      ) : catalog.tables.length === 0 ? (
+        <div className="muted empty">{t("schema.empty")}</div>
       ) : tables.length === 0 ? (
-        <div className="placeholder muted">{t("schema.noMatch")}</div>
+        <div className="muted empty">{t("schema.noMatch")}</div>
       ) : (
         <div className="schema-layout">
           <div className="schema-canvas-wrap">

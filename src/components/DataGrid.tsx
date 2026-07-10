@@ -8,10 +8,11 @@
 // Columns are drag-resizable: first drag snapshots every column's rendered width and
 // flips the table to fixed layout so only the dragged column moves. Double-click a
 // handle to reset all widths (back to auto layout). Widths reset per column set.
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import type { QueryResult } from "../ipc/types";
 import type { GridSort } from "../lib/sqlBuild";
 import { Icon } from "./Icon";
+import { useI18n } from "../lib/i18n";
 import "./grid.css";
 
 function cell(v: unknown): string {
@@ -58,6 +59,7 @@ export default function DataGrid({
   onSelectRow?: (i: number) => void;
   onCellClick?: (value: unknown, rowIndex: number, col: string) => void;
 }) {
+  const { t } = useI18n();
   const interactive = !!onSelectRow || !!onCellClick;
   // Column widths keyed by header-cell index (0 = rownum). Empty map = auto layout.
   const [widths, setWidths] = useState<Record<number, number>>({});
@@ -77,6 +79,25 @@ export default function DataGrid({
   const totalW = fixed
     ? Object.values(widths).reduce((a, b) => a + b, 0)
     : undefined;
+
+  // Right-align numeric columns. NUMERIC/MONEY arrive as plain decimal strings (the
+  // Rust side serializes them lossless), so detect by value shape — and per column,
+  // not per cell, so a text column with the odd digit-only value can't render ragged.
+  const numericCols = useMemo(() => {
+    const numRe = /^-?\d+(\.\d+)?$/;
+    return result.columns.map(
+      (_, j) =>
+        result.rows.some((r) => r[j] != null) &&
+        result.rows.every((r) => {
+          const v = r[j];
+          return (
+            v == null ||
+            typeof v === "number" ||
+            (typeof v === "string" && numRe.test(v))
+          );
+        }),
+    );
+  }, [result]);
 
   function startResize(
     e: { preventDefault(): void; stopPropagation(): void; clientX: number },
@@ -117,8 +138,17 @@ export default function DataGrid({
     document.addEventListener("mouseup", up);
   }
 
+  // Click and Enter (see below) both land here so keyboard nav opens the same viewer a click does.
+  function selectCell(i: number, j: number) {
+    setSel({ row: i, col: j });
+    onSelectRow?.(i);
+    onCellClick?.(result.rows[i]?.[j], i, result.columns[j]);
+  }
+
   // ⌘C/Ctrl+C copies the selected cell — but yield to a real text selection so users
-  // can still copy dragged-over text normally. Esc clears the cell selection.
+  // can still copy dragged-over text normally. Esc clears the cell selection. Arrow keys
+  // roving-select a cell (mirrors App.tsx's tab-bar pattern: move sel, then focus the td —
+  // valid even at tabIndex=-1, only Tab-order membership depends on that). Enter opens it.
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
     if (e.key === "Escape" && sel) {
       setSel(null);
@@ -128,6 +158,36 @@ export default function DataGrid({
       if ((window.getSelection()?.toString() ?? "") !== "") return; // real selection wins
       e.preventDefault();
       void navigator.clipboard.writeText(copyText(result.rows[sel.row]?.[sel.col]));
+      return;
+    }
+    if (
+      (e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === "ArrowLeft" || e.key === "ArrowRight") &&
+      result.rows.length > 0
+    ) {
+      e.preventDefault();
+      const cur = sel ?? { row: 0, col: 0 };
+      const row =
+        e.key === "ArrowUp"
+          ? Math.max(0, cur.row - 1)
+          : e.key === "ArrowDown"
+            ? Math.min(result.rows.length - 1, cur.row + 1)
+            : cur.row;
+      const col =
+        e.key === "ArrowLeft"
+          ? Math.max(0, cur.col - 1)
+          : e.key === "ArrowRight"
+            ? Math.min(result.columns.length - 1, cur.col + 1)
+            : cur.col;
+      setSel({ row, col });
+      tableRef.current
+        ?.querySelector<HTMLTableCellElement>(
+          `tbody tr:nth-child(${row + 1}) td:nth-child(${col + 2})`,
+        )
+        ?.focus();
+      return;
+    }
+    if (e.key === "Enter" && sel) {
+      selectCell(sel.row, sel.col);
     }
   }
 
@@ -185,7 +245,7 @@ export default function DataGrid({
                 )}
                 <span
                   className="col-resizer"
-                  title="Drag to resize · double-click resets all columns"
+                  title={t("grid.resizeHint")}
                   onMouseDown={(e) => startResize(e, j + 1)}
                   onClick={(e) => e.stopPropagation()}
                   onDoubleClick={(e) => {
@@ -204,8 +264,8 @@ export default function DataGrid({
                   <input
                     className="filter-input"
                     value={filters?.[c] ?? ""}
-                    placeholder="filter"
-                    aria-label={`Filter ${c}`}
+                    placeholder={t("grid.filterPlaceholder")}
+                    aria-label={t("grid.filterLabel", { col: c })}
                     onChange={(e) => onFilter(c, e.target.value)}
                   />
                 </th>
@@ -239,23 +299,24 @@ export default function DataGrid({
               </td>
               {row.map((v, j) => {
                 const text = cell(v);
+                const isSel = sel?.row === i && sel.col === j;
                 return (
                   <td
                     key={j}
                     className={
                       (v === null ? "nullcell" : "") +
+                      (numericCols[j] ? " numcell" : "") +
                       (interactive ? " clickable" : "") +
-                      (sel?.row === i && sel.col === j ? " cell-sel" : "")
+                      (isSel ? " cell-sel" : "")
                     }
                     // fixed layout clips by width not length, so any value can be truncated → always title it
                     title={
                       fixed || text.length > 40 || text.includes("\n") ? text : undefined
                     }
-                    onClick={() => {
-                      setSel({ row: i, col: j });
-                      onSelectRow?.(i);
-                      onCellClick?.(v, i, result.columns[j]);
-                    }}
+                    // Roving tabindex: only the selected cell is a tab stop; arrows move it (onKeyDown above).
+                    tabIndex={isSel ? 0 : -1}
+                    aria-selected={isSel}
+                    onClick={() => selectCell(i, j)}
                   >
                     {text}
                   </td>

@@ -277,8 +277,6 @@ export default function Sql({
     setLimit(STEP);
     setResultKind(script ? "script" : "single");
     setLastAttempt({ sql, at });
-    if (script) setScriptOut(null);
-    else setRun(null);
 
     try {
       if (script) {
@@ -293,6 +291,10 @@ export default function Sql({
       else {
         const details = errDetails(e);
         setRunErr({ ...details, sql, at: new Date().toLocaleTimeString() });
+        // Clear the attempted kind so a failed run can't leave the previous
+        // result sitting under the error card looking current.
+        if (script) setScriptOut(null);
+        else setRun(null);
       }
     } finally {
       queryId.current = null;
@@ -449,6 +451,7 @@ export default function Sql({
         />
       </div>
       <div className="form-actions sql-actions">
+        <h2>{t("sql.title")}</h2>
         <button
           className="btn primary"
           disabled={!draft.trim() || running}
@@ -530,19 +533,42 @@ export default function Sql({
       )}
       {cancelled && <div className="muted sql-run-message">{t("sql.cancelled")}</div>}
 
-      {resultKind === "single" && run && (
-        <Outcome
-          run={run}
-          limit={limit}
-          maxRows={safety.maxRows}
-          onMore={() => setLimit((l) => l + STEP)}
-        />
-      )}
-      {resultKind === "script" && scriptOut && (
-        <ScriptResults outcome={scriptOut.outcome} at={scriptOut.at} />
-      )}
+      <div className={running && (run || scriptOut) ? "sql-results busy" : "sql-results"}>
+        {resultKind === "single" && run && (
+          <Outcome
+            run={run}
+            limit={limit}
+            maxRows={safety.maxRows}
+            onMore={() => setLimit((l) => l + STEP)}
+          />
+        )}
+        {resultKind === "script" && scriptOut && (
+          <ScriptResults outcome={scriptOut.outcome} at={scriptOut.at} />
+        )}
+      </div>
     </div>
   );
+}
+
+// Postgres reports a 1-based character offset into the executed SQL. Map it to the
+// offending line and render that line with a caret under the exact column. PG counts
+// code points while JS strings index UTF-16 code units, so work on a code-point array
+// (keeps the caret honest when astral chars, e.g. emoji in literals, precede the error).
+function errorPosition(sql: string, position: number) {
+  const cps = Array.from(sql);
+  const i = Math.min(Math.max(position - 1, 0), cps.length);
+  const lineStart = i === 0 ? 0 : cps.lastIndexOf("\n", i - 1) + 1;
+  const lineEnd = cps.indexOf("\n", i);
+  const column = i - lineStart;
+  return {
+    line: cps.slice(0, i).filter((c) => c === "\n").length + 1,
+    column: column + 1,
+    snippet:
+      cps.slice(lineStart, lineEnd === -1 ? cps.length : lineEnd).join("") +
+      "\n" +
+      " ".repeat(column) +
+      "^",
+  };
 }
 
 function SqlErrorCard({
@@ -553,6 +579,8 @@ function SqlErrorCard({
   prompt: string;
 }) {
   const { t } = useI18n();
+  const pos =
+    error.position !== null ? errorPosition(error.sql, error.position) : null;
   return (
     <div className="sql-error-card" role="alert">
       <div className="sql-error-head">
@@ -566,6 +594,16 @@ function SqlErrorCard({
         <code>{error.kind ?? t("common.unknown")}</code>
         <span className="muted">{t("sql.errorMessage")}</span>
         <pre>{error.message}</pre>
+        {pos && (
+          <>
+            <span className="muted">{t("sql.errorPosition")}</span>
+            <pre>
+              {t("sql.errorPositionAt", { line: pos.line, column: pos.column })}
+              {"\n"}
+              {pos.snippet}
+            </pre>
+          </>
+        )}
       </div>
       <details className="sql-error-context">
         <summary>{t("sql.errorContext")}</summary>

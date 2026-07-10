@@ -3,6 +3,7 @@
 // and hands the SQL up via onSubmit — the parent routes it through ApprovalCard so the
 // safety pipeline (classify/preview/approve/audit) applies. Never executes directly.
 import { useMemo, useState } from "react";
+import { useI18n } from "../lib/i18n";
 import { Icon } from "./Icon";
 import type { CatalogTable, Engine } from "../ipc/types";
 import { buildInsert, buildUpdate, isNumericType, pkColumns } from "../lib/sqlBuild";
@@ -22,10 +23,6 @@ function shortValue(value: string | null): string {
   return value.length > 28 ? `${value.slice(0, 25)}...` : value;
 }
 
-function plural(n: number, one: string, many = `${one}s`): string {
-  return `${n} ${n === 1 ? one : many}`;
-}
-
 export default function RowEditor({
   engine,
   table,
@@ -41,6 +38,7 @@ export default function RowEditor({
   onSubmit: (write: RowEditorSubmission) => void;
   onCancel: () => void;
 }) {
+  const { t } = useI18n();
   // Only seed columns present in `initial` (edit/duplicate). A fresh insert (initial={})
   // starts empty so untouched columns are OMITTED from the INSERT — letting serial PKs and
   // column defaults fire instead of forcing an invalid '' into every field.
@@ -65,11 +63,18 @@ export default function RowEditor({
   function rationaleForEdit(): string {
     if (changedColumns.length === 1) {
       const c = changedColumns[0];
-      return `Change ${c.name}: ${shortValue(initial[c.name] ?? null)} -> ${shortValue(vals[c.name] ?? null)}.`;
+      return t("rowEditor.rationaleFieldChange", {
+        col: c.name,
+        from: shortValue(initial[c.name] ?? null),
+        to: shortValue(vals[c.name] ?? null),
+      });
     }
     const names = changedColumns.slice(0, 4).map((c) => c.name);
-    const rest = changedColumns.length > names.length ? `, +${changedColumns.length - names.length} more` : "";
-    return `Change ${plural(changedColumns.length, "field")}: ${names.join(", ")}${rest}.`;
+    const rest =
+      changedColumns.length > names.length
+        ? t("rowEditor.rationaleMore", { count: changedColumns.length - names.length })
+        : "";
+    return t("rowEditor.rationaleFieldsChange", { count: changedColumns.length, names: names.join(", "), rest });
   }
 
   function submit() {
@@ -89,10 +94,16 @@ export default function RowEditor({
         rationale = rationaleForEdit();
       } else {
         sql = buildInsert(engine, table, vals);
-        rationale =
+        rationale = t(
           mode === "duplicate"
-            ? `Insert a duplicated row into ${table.name} with ${plural(changedColumns.length, "column")}.`
-            : `Insert a new row into ${table.name} with ${plural(changedColumns.length, "column")}.`;
+            ? changedColumns.length === 1
+              ? "rowEditor.rationaleDuplicate"
+              : "rowEditor.rationaleDuplicatePlural"
+            : changedColumns.length === 1
+              ? "rowEditor.rationaleInsert"
+              : "rowEditor.rationaleInsertPlural",
+          { table: table.name, count: changedColumns.length },
+        );
       }
       setError(null);
       onSubmit({ sql, rationale, collapseSql: true });
@@ -101,12 +112,14 @@ export default function RowEditor({
     }
   }
 
-  const title = isEdit ? "Edit row" : mode === "duplicate" ? "Duplicate row" : "Insert row";
+  const title = t(
+    isEdit ? "rowEditor.titleEdit" : mode === "duplicate" ? "rowEditor.titleDuplicate" : "rowEditor.titleInsert",
+  );
   const actionText = isEdit
     ? changedCount
-      ? `Review ${plural(changedCount, "change")}`
-      : "No changes"
-    : "Review row";
+      ? t(changedCount === 1 ? "rowEditor.reviewChange" : "rowEditor.reviewChangePlural", { count: changedCount })
+      : t("rowEditor.noChanges")
+    : t("rowEditor.reviewRow");
   return (
     <div
       className="row-editor"
@@ -122,9 +135,15 @@ export default function RowEditor({
       <div className="panel-head">
         <div className="row-editor-title">
           <strong>{title}</strong>
-          {isEdit && <span className="muted">{plural(changedCount, "change")}</span>}
+          {isEdit && (
+            <span className="muted">
+              {t(changedCount === 1 ? "rowEditor.changeCount" : "rowEditor.changeCountPlural", {
+                count: changedCount,
+              })}
+            </span>
+          )}
         </div>
-        <button className="btn small" onClick={onCancel} aria-label="Close">
+        <button className="btn small" onClick={onCancel} aria-label={t("common.close")}>
           <Icon name="close" />
         </button>
       </div>
@@ -137,8 +156,8 @@ export default function RowEditor({
             <div className={changed ? "row-field changed" : "row-field"} key={c.name}>
               <label title={c.dataType}>
                 {c.name}
-                {c.pk && <span className="pk-badge">PK</span>}
-                {changed && <span className="changed-badge">Changed</span>}
+                {c.pk && <span className="pk-badge">{t("schema.pk")}</span>}
+                {changed && <span className="changed-badge">{t("rowEditor.changedBadge")}</span>}
               </label>
               <div className="row-field-input">
                 <input
@@ -153,11 +172,11 @@ export default function RowEditor({
                     (isNull ? " active" : "") +
                     (readonly || !c.nullable ? " disabled" : "")
                   }
-                  title={c.nullable ? "SQL NULL" : "column is NOT NULL"}
+                  title={c.nullable ? "SQL NULL" : t("rowEditor.notNullTitle")}
                 >
                   <input
                     type="checkbox"
-                    aria-label={`Set ${c.name} to SQL NULL`}
+                    aria-label={t("rowEditor.setNullAria", { col: c.name })}
                     checked={isNull}
                     disabled={readonly || !c.nullable}
                     onChange={(e) => set(c.name, e.target.checked ? null : "")}
@@ -175,7 +194,7 @@ export default function RowEditor({
           {actionText}
         </button>
         <button className="btn" onClick={onCancel}>
-          Cancel
+          {t("common.cancel")}
         </button>
       </div>
     </div>

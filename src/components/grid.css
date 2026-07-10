@@ -48,6 +48,11 @@
   font-style: italic;
 }
 
+.grid td.numcell {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 /* border-collapse:separate + border-spacing:0 stops sticky-header borders from
    vanishing in WebKit; cells keep single borders via bottom+right only. */
 table.grid {

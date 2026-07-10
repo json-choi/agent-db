@@ -47,13 +47,13 @@
 
 /* Environment chip on the connection row (staging/prod only; prod = danger). */
 .env-chip {
-  font-size: var(--ds-font-size-2xs);
+  font-size: var(--ds-font-size-xs);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.03em;
   padding: var(--ds-chip-pad-y) var(--ds-chip-pad-x);
-  border-radius: var(--ds-radius-xs);
-  border: var(--ds-border-width) solid var(--ds-warning);
+  border-radius: var(--ds-radius-pill);
+  border: var(--ds-border-width) solid color-mix(in srgb, var(--ds-warning) var(--ds-status-border-mix), var(--ds-border-subtle));
   color: var(--ds-warning);
 }
 .env-chip.env-prod {
@@ -62,11 +62,11 @@
   background: var(--ds-danger);
 }
 .env-chip.env-dev {
-  border-color: var(--ds-success);
+  border-color: color-mix(in srgb, var(--ds-success) var(--ds-status-border-mix), var(--ds-border-subtle));
   color: var(--ds-success);
 }
 .env-chip.env-staging {
-  border-color: var(--ds-warning);
+  border-color: color-mix(in srgb, var(--ds-warning) var(--ds-status-border-mix), var(--ds-border-subtle));
   color: var(--ds-warning);
 }
 
@@ -144,9 +144,9 @@
   gap: var(--ds-segment-gap);
   padding: 0 var(--ds-chip-pad-x);
   border: var(--ds-border-width) solid var(--ds-border-subtle);
-  border-radius: var(--ds-radius-xs);
+  border-radius: var(--ds-radius-pill);
   color: var(--ds-text-muted);
-  font-size: var(--ds-font-size-2xs);
+  font-size: var(--ds-font-size-xs);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   line-height: 1;
@@ -449,6 +449,7 @@
   padding: var(--ds-space-1) var(--ds-space-2);
   border-radius: var(--ds-radius-sm);
   cursor: pointer;
+  user-select: none;
   font-size: var(--ds-font-size-ui);
 }
 .db-table:hover {

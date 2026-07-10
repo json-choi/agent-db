@@ -54,8 +54,9 @@ export default function Audit({ connectionId }: { connectionId: string }) {
   return (
     <div className="screen audit">
       <div className="form-actions">
-        <button className="btn small" onClick={refresh}>
-          {t("common.refresh")}
+        <h2>{t("audit.title")}</h2>
+        <button className="btn small" onClick={refresh} disabled={loading}>
+          {loading ? "..." : t("common.refresh")}
         </button>
       </div>
       {msg && <div className="error">{msg}</div>}

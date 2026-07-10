@@ -235,6 +235,7 @@ h3,
   text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
+  transition: background 0.12s ease, border-color 0.12s ease;
 }
 
 .btn:hover:not(:disabled),
@@ -357,13 +358,13 @@ h3,
 .ds-status-ok,
 .badge.risk-low {
   color: var(--ds-success);
-  border-color: color-mix(in srgb, var(--ds-success) 72%, var(--ds-border-subtle));
+  border-color: color-mix(in srgb, var(--ds-success) var(--ds-status-border-mix), var(--ds-border-subtle));
 }
 
 .badge.risk-medium,
 .ds-status-warning {
   color: var(--ds-warning);
-  border-color: color-mix(in srgb, var(--ds-warning) 72%, var(--ds-border-subtle));
+  border-color: color-mix(in srgb, var(--ds-warning) var(--ds-status-border-mix), var(--ds-border-subtle));
 }
 
 .badge.status-error,
@@ -371,7 +372,7 @@ h3,
 .badge.risk-high,
 .ds-status-danger {
   color: var(--ds-danger);
-  border-color: color-mix(in srgb, var(--ds-danger) 72%, var(--ds-border-subtle));
+  border-color: color-mix(in srgb, var(--ds-danger) var(--ds-status-border-mix), var(--ds-border-subtle));
 }
 
 .badge.nowhere,

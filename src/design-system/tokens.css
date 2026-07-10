@@ -143,6 +143,9 @@
   --ds-critical: #bd574d;
   --ds-critical-soft: rgba(189, 87, 77, 0.14);
 
+  /* Softened status-color borders: one mix ratio shared by every tone chip/badge. */
+  --ds-status-border-mix: 72%;
+
   /* Intent aliases: keep UI semantics while limiting the palette. */
   --ds-accent: var(--ds-primary);
   --ds-accent-text: var(--ds-primary-text);

@@ -2,16 +2,12 @@
   display: flex;
   flex-direction: column;
   gap: var(--ds-space-3);
-  padding: var(--ds-space-4);
   overflow: auto;
 }
 .history-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-}
-.history-title {
-  font-weight: 600;
 }
 .history-table {
   width: 100%;
@@ -78,10 +74,6 @@
 }
 
 @media (max-width: 760px) {
-  .history {
-    padding: var(--ds-space-3);
-  }
-
   .history-filters {
     align-items: stretch;
     flex-direction: column;

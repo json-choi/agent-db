@@ -364,6 +364,7 @@ export function DatabaseExplorer({
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [refreshing, setRefreshing] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
   const [tablesOpen, setTablesOpen] = useState(true);
   const [viewsOpen, setViewsOpen] = useState(true);
   const [showRowCounts, setShowRowCounts] = useState(true);
@@ -462,12 +463,15 @@ export function DatabaseExplorer({
   }
 
   async function removeConnection(conn: ConnectionProfile) {
+    setDeleting(conn.id);
     try {
       await deleteConnection(conn.id);
       toast(t("connections.connectionDeleted"));
       onDeleted(conn.id);
     } catch (e) {
       toast(errMessage(e), "error");
+    } finally {
+      setDeleting(null);
     }
   }
 
@@ -830,7 +834,11 @@ export function DatabaseExplorer({
               <button type="button" onClick={() => onEdit(c)}>
                 {t("connections.edit")}
               </button>
-              <button type="button" onClick={() => void refreshSchema(c.id)}>
+              <button
+                type="button"
+                disabled={refreshing === c.id}
+                onClick={() => void refreshSchema(c.id)}
+              >
                 {refreshing === c.id ? t("mcp.working") : t("connections.refreshSchema")}
               </button>
               <label>
@@ -844,6 +852,7 @@ export function DatabaseExplorer({
               <ConfirmButton
                 className="db-menu-item danger"
                 confirmLabel={t("common.reallyDelete")}
+                disabled={deleting === c.id}
                 onConfirm={() => void removeConnection(c)}
               >
                 {t("common.delete")}
@@ -1067,8 +1076,8 @@ export function DatabaseExplorer({
 
   return (
     <aside className="sidebar">
-      <div className="sidebar-top">
-        <div className="sidebar-top-copy" data-tauri-drag-region>
+      <div className="sidebar-top" data-tauri-drag-region="deep">
+        <div className="sidebar-top-copy">
           <span className="sidebar-top-title">{t("connections.sidebarTitle")}</span>
         </div>
         <button

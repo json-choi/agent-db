@@ -6,6 +6,7 @@
 // Nothing here is trusted for safety — the Rust core re-enforces every gate (L2).
 
 import { useEffect, useRef, useState } from "react";
+import { useI18n, type I18nKey } from "../lib/i18n";
 import {
   cancelQuery,
   classifySql,
@@ -34,6 +35,12 @@ const ENGINE_LABEL: Record<Engine, string> = {
 function riskClass(risk: RiskLevel): string {
   return `badge risk-${risk}`;
 }
+
+const RISK_LABEL: Record<RiskLevel, I18nKey> = {
+  low: "approval.riskLow",
+  medium: "approval.riskMedium",
+  high: "approval.riskHigh",
+};
 
 function StatusGlyph({
   label,
@@ -78,6 +85,7 @@ export default function ApprovalCard({
   onExecuted: (outcome: ExecOutcome) => void;
   onReject?: () => void;
 }) {
+  const { t } = useI18n();
   const [cls, setCls] = useState<Classification | null>(null);
   const [preview, setPreview] = useState<PreviewReport | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -159,8 +167,8 @@ export default function ApprovalCard({
       setElapsed(0);
       return;
     }
-    const t = setInterval(() => setElapsed((s) => s + 1), 1000);
-    return () => clearInterval(t);
+    const timer = setInterval(() => setElapsed((s) => s + 1), 1000);
+    return () => clearInterval(timer);
   }, [busy]);
 
   // Auto-run reads (per settings) exactly once, after classification lands.
@@ -180,50 +188,54 @@ export default function ApprovalCard({
       {cls ? (
         <>
           <span className="badge kind">{cls.kind.toUpperCase()}</span>
-          <span className={riskClass(cls.risk)}>{cls.risk} risk</span>
+          <span className={riskClass(cls.risk)}>{t(RISK_LABEL[cls.risk])}</span>
           <span className="badge dialect">{ENGINE_LABEL[engine]}</span>
-          {cls.noWhere && <span className="badge nowhere">NO WHERE</span>}
+          {cls.noWhere && (
+            <span className="badge nowhere">{t("approval.noWhere")}</span>
+          )}
           {cls.statementCount > 1 && (
-            <span className="badge nowhere">{cls.statementCount} statements</span>
+            <span className="badge nowhere">
+              {t("sql.statementCount", { count: cls.statementCount })}
+            </span>
           )}
         </>
       ) : (
-        <StatusGlyph label="Checking safety..." icon="refresh" />
+        <StatusGlyph label={t("approval.checkingSafety")} icon="refresh" />
       )}
     </div>
   );
   const tablesBlock = cls && cls.tables.length > 0 && (
     <div className="tables">
-      <span className="label">Target tables:</span>{" "}
-      {cls.tables.map((t) => (
-        <code key={t}>{t}</code>
+      <span className="label">{t("approval.targetTables")}</span>{" "}
+      {cls.tables.map((tbl) => (
+        <code key={tbl}>{tbl}</code>
       ))}
     </div>
   );
   const previewBlock = (
     <div className="preview">
-      <span className="label">Impact preview</span>
+      <span className="label">{t("approval.impactPreview")}</span>
       {!preview ? (
-        <StatusGlyph label="Estimating impact..." icon="refresh" />
+        <StatusGlyph label={t("approval.estimatingImpact")} icon="refresh" />
       ) : isWrite && !writesBlocked && previewN === null ? (
         // A runnable write with NO row estimate (skipped over threshold, or an EXPLAIN
         // that yielded no count) means approving a destructive statement blind — surface
         // it. Not for writes-disabled (can't run) or reads (a null estimate is benign).
         <span className="impact-warn">
           {" "}
-          <Icon name="alert" /> Impact could not be estimated — affected row count unknown
+          <Icon name="alert" /> {t("approval.impactUnknown")}
           {preview.note && <em className="muted"> — {preview.note}</em>}
         </span>
       ) : (
         <span>
           {" "}
-          {preview.mode === "explain" && "EXPLAIN plan"}
-          {preview.mode === "execRollback" && "executed + rolled back (exact)"}
-          {preview.mode === "skipped" && "skipped (over threshold)"}
+          {preview.mode === "explain" && t("approval.modeExplain")}
+          {preview.mode === "execRollback" && t("approval.modeExecRollback")}
+          {preview.mode === "skipped" && t("approval.modeSkipped")}
           {previewN !== null && (
             <>
               {" — "}
-              <strong>{previewN.toLocaleString()}</strong> rows
+              <strong>{previewN.toLocaleString()}</strong> {t("approval.rows")}
             </>
           )}
           {preview.note && <em className="muted"> — {preview.note}</em>}
@@ -233,7 +245,7 @@ export default function ApprovalCard({
   );
   const planBlock = preview?.plan && (
     <details className="plan">
-      <summary>Query plan</summary>
+      <summary>{t("sql.queryPlan")}</summary>
       <pre>{preview.plan}</pre>
     </details>
   );
@@ -243,14 +255,17 @@ export default function ApprovalCard({
     </div>
   ));
   const compactStatus = writesBlocked
-    ? "Writes are disabled. Enable writes in Safety to apply this change."
+    ? t("approval.writesDisabledCompact")
     : !cls
-      ? "Checking safety..."
+      ? t("approval.checkingSafety")
       : !preview
-        ? "Checking impact..."
+        ? t("approval.checkingImpact")
         : previewN !== null
-          ? `${previewN.toLocaleString()} row${previewN === 1 ? "" : "s"} in scope.`
-          : "Ready to review. Details are available below.";
+          ? t(
+              previewN === 1 ? "approval.rowsInScope" : "approval.rowsInScopePlural",
+              { count: previewN.toLocaleString() },
+            )
+          : t("approval.readyToReview");
 
   return (
     <div className="card approval">
@@ -258,7 +273,9 @@ export default function ApprovalCard({
 
       {rationale && (
         <div className="restatement">
-          <div className="label">{compact ? "Change" : "Review"}</div>
+          <div className="label">
+            {compact ? t("approval.change") : t("approval.review")}
+          </div>
           <p>{rationale}</p>
         </div>
       )}
@@ -296,45 +313,46 @@ export default function ApprovalCard({
       {error && <div className="error">{error}</div>}
       {/* Additive, not a terminal branch — the action buttons below stay reachable so a
           cancelled query can simply be run again. */}
-      {cancelled && <StatusGlyph label="Query cancelled." icon="circleSlash" />}
+      {cancelled && <StatusGlyph label={t("sql.cancelled")} icon="circleSlash" />}
 
       {decided === "approved" ? (
-        <StatusGlyph label="Executed." icon="check" tone="ok" />
+        <StatusGlyph label={t("approval.executed")} icon="check" tone="ok" />
       ) : decided === "rejected" ? (
         // Not a dead-end: keep the statement visible above and let the user undo the
         // rejection to approve it, rather than forcing a re-issue.
         <div className="approval-actions ds-action-row">
-          <StatusGlyph label="Rejected." icon="circleSlash" tone="danger" />
+          <StatusGlyph label={t("approval.rejected")} icon="circleSlash" tone="danger" />
           <button className="btn" onClick={() => setDecided(null)}>
-            Reconsider
+            {t("approval.reconsider")}
           </button>
         </div>
       ) : busy ? (
         <div className="approval-actions ds-action-row">
           <StatusGlyph
-            label={`${canAutoRun ? "Read-only — running…" : "Running…"} ${elapsed}s`}
+            label={`${canAutoRun ? t("approval.readOnlyRunning") : t("approval.running")} ${elapsed}s`}
             icon="refresh"
           />
           <button className="btn" onClick={cancel}>
-            Cancel
+            {t("common.cancel")}
           </button>
         </div>
       ) : canAutoRun && !cancelled ? (
-        <StatusGlyph label="Read-only — auto-running…" icon="play" />
+        <StatusGlyph label={t("approval.readOnlyAutoRunning")} icon="play" />
       ) : (
         <div className="approval-actions ds-action-row">
           {writesBlocked && !compact && (
-            <div className="error">
-              Writes are disabled for this connection (allow_writes = 0). Enable
-              them in Safety to approve.
-            </div>
+            <div className="error">{t("approval.writesDisabledBody")}</div>
           )}
           <button
             className="btn primary"
             disabled={busy || !cls || writesBlocked}
             onClick={() => execute(true)}
           >
-            {isWrite ? (compact ? "Apply change" : "Approve & run write") : "Run"}
+            {isWrite
+              ? compact
+                ? t("approval.applyChange")
+                : t("approval.approveAndRunWrite")
+              : t("sql.run")}
           </button>
           <button
             className="btn"
@@ -344,14 +362,14 @@ export default function ApprovalCard({
               onReject?.();
             }}
           >
-            Reject
+            {t("approval.reject")}
           </button>
         </div>
       )}
       {compact && (
         <div className="review-disclosures">
           <details className="safety-details">
-            <summary>Safety details</summary>
+            <summary>{t("approval.safetyDetails")}</summary>
             {approvalHead}
             {tablesBlock}
             {previewBlock}
@@ -359,7 +377,7 @@ export default function ApprovalCard({
             {notesBlock}
           </details>
           <details className="generated-sql">
-            <summary>Generated SQL</summary>
+            <summary>{t("approval.generatedSql")}</summary>
             {sqlBlock}
           </details>
         </div>

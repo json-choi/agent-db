@@ -85,7 +85,7 @@ export default function History({
   return (
     <div className="screen history">
       <div className="history-head">
-        <span className="history-title">{t("history.title")}</span>
+        <h2>{t("history.title")}</h2>
         <button className="btn small" onClick={refresh} disabled={loading}>
           {loading ? "..." : t("common.refresh")}
         </button>
