@@ -14,8 +14,7 @@ import { ConnectionForm, DatabaseExplorer } from "./screens/Connections";
 import TableData from "./screens/Tables";
 import SchemaExplorer from "./screens/Schema";
 import Sql from "./screens/Sql";
-import History from "./screens/History";
-import Audit from "./screens/Audit";
+import Activity from "./screens/Activity";
 import Migrations from "./screens/Migrations";
 import Onboarding from "./screens/Onboarding";
 import Settings from "./screens/Settings";
@@ -28,16 +27,15 @@ import { useI18n, type I18nKey } from "./lib/i18n";
 
 // App-level tabs. Agent is a live feed/result surface, connection-independent; the rest
 // are per-connection data views. Migrations lives in the sidebar; Settings behind ⚙.
-type Tab = "data" | "schema" | "sql" | "agent" | "history" | "audit";
+type Tab = "data" | "schema" | "sql" | "agent" | "activity";
 // Agent is last: it's connection-independent, so it sits apart from the per-connection
 // data tabs (the .agent-tab class pushes it right with a divider via shared CSS).
-const TABS: Tab[] = ["data", "schema", "sql", "history", "audit", "agent"];
+const TABS: Tab[] = ["data", "schema", "sql", "activity", "agent"];
 const TAB_LABELS: Record<Tab, I18nKey> = {
   data: "tabs.data",
   schema: "tabs.schema",
   sql: "tabs.sql",
-  history: "tabs.history",
-  audit: "tabs.audit",
+  activity: "tabs.activity",
   agent: "tabs.agent",
 };
 
@@ -185,8 +183,12 @@ function Shell() {
   const [editing, setEditing] = useState<Editing>(null);
   const [safety, setSafety] = useState<SafetySettings | null>(null);
   const [safetyError, setSafetyError] = useState<string | null>(null);
+  // A user who last had the old Audit tab open should land in its expanded details
+  // after the two top-level tabs are consolidated into Activity.
+  const legacyAuditOpen = useRef(localStorage.getItem("tab") === "audit");
   const [tab, setTab] = useState<Tab>(() => {
     const saved = localStorage.getItem("tab");
+    if (saved === "history" || saved === "audit") return "activity";
     return (TABS as string[]).includes(saved ?? "") ? (saved as Tab) : "data";
   });
   const [sqlDraft, setSqlDraft] = useState("SELECT 1;");
@@ -469,7 +471,7 @@ function Shell() {
       <div className="muted">{t("app.loading")}</div>
     );
 
-    // Data/SQL/History/Audit need a connection; Agent is connection-independent and always
+    // Per-connection views need a connection; Agent is connection-independent and always
     // renders its live feed. With no connection selected, the tab bar still shows so Agent
     // stays reachable — the data tabs fall back to a "pick a connection" placeholder.
     const needsConn = (
@@ -598,10 +600,20 @@ function Shell() {
             ) : (
               safetyFallback
             ))}
-          {tab === "history" &&
-            (selected ? <History connection={selected} onLoadSql={loadSql} /> : needsConn)}
-          {tab === "audit" &&
-            (selected ? <Audit connectionId={selected.id} /> : needsConn)}
+          {tab === "activity" &&
+            (selected ? (
+              <Activity
+                key={selected.id}
+                connection={selected}
+                onLoadSql={loadSql}
+                initialAuditOpen={legacyAuditOpen.current}
+                onInitialAuditOpenConsumed={() => {
+                  legacyAuditOpen.current = false;
+                }}
+              />
+            ) : (
+              needsConn
+            ))}
         </section>
       </>
     );

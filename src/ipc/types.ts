@@ -42,6 +42,8 @@ export interface Classification {
   noWhere: boolean;
   tables: string[];
   notes: string[];
+  /** True only for a single cleanly-parsed write the L3 exec+ROLLBACK preview can undo. */
+  rollbackSafe: boolean;
 }
 
 type PreviewMode = "explain" | "execRollback" | "skipped";
@@ -97,6 +99,16 @@ export interface AuditEntry {
   error: string | null;
   prevHash: string | null;
   hash: string;
+}
+
+export interface AuditVerdict {
+  ok: boolean;
+  firstBadIndex: number | null;
+}
+
+export interface AuditSnapshot {
+  entries: AuditEntry[];
+  verdict: AuditVerdict;
 }
 
 export interface HistoryEntry {

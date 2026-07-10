@@ -88,6 +88,7 @@ pub fn run() {
             commands::set_safety,
             commands::list_audit,
             commands::audit_verify,
+            commands::audit_snapshot,
             commands::list_history,
             commands::mcp_status,
             commands::mcp_platforms,

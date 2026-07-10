@@ -117,6 +117,25 @@ pub async fn list(store: &Store, connection_id: Uuid) -> AppResult<Vec<AuditEntr
     rows.iter().map(row_to_audit).collect()
 }
 
+/// Audit rows and their verification result from one ordered database read.
+/// Entries are returned newest-first for the UI, while verification runs over the
+/// exact same rows in insertion order so the verdict cannot describe a different
+/// snapshot if another audit record is appended concurrently.
+pub async fn snapshot(
+    store: &Store,
+    connection_id: Uuid,
+) -> AppResult<(Vec<AuditEntry>, bool, Option<i64>)> {
+    let rows = sqlx::query("SELECT * FROM audit_log WHERE connection_id = ?1 ORDER BY rowid ASC")
+        .bind(connection_id.to_string())
+        .fetch_all(store.pool())
+        .await?;
+
+    let mut entries: Vec<AuditEntry> = rows.iter().map(row_to_audit).collect::<AppResult<_>>()?;
+    let (ok, first_bad_index) = verify_entries(&entries);
+    entries.reverse();
+    Ok((entries, ok, first_bad_index))
+}
+
 /// Recompute the chain in insertion order and confirm every stored hash matches.
 /// Returns `(false, Some(index))` at the first row that was edited, reordered, or had
 /// its `prev_hash` broken (index = 0-based insertion-order position); `(true, None)`
@@ -129,12 +148,16 @@ pub async fn verify_chain(store: &Store, connection_id: Uuid) -> AppResult<(bool
     .fetch_all(store.pool())
     .await?;
 
+    let entries: Vec<AuditEntry> = rows.iter().map(row_to_audit).collect::<AppResult<_>>()?;
+    Ok(verify_entries(&entries))
+}
+
+fn verify_entries(entries: &[AuditEntry]) -> (bool, Option<i64>) {
     let mut expected_prev: Option<String> = None;
-    for (i, r) in rows.iter().enumerate() {
-        let e = row_to_audit(r)?;
+    for (i, e) in entries.iter().enumerate() {
         // The stored prev_hash must equal the running tail…
         if e.prev_hash != expected_prev {
-            return Ok((false, Some(i as i64)));
+            return (false, Some(i as i64));
         }
         // …and the stored hash must match a fresh recomputation.
         let fields = AuditFields {
@@ -150,11 +173,11 @@ pub async fn verify_chain(store: &Store, connection_id: Uuid) -> AppResult<(bool
             error: e.error.as_deref(),
         };
         if chain::compute_hash(e.prev_hash.as_deref(), &fields) != e.hash {
-            return Ok((false, Some(i as i64)));
+            return (false, Some(i as i64));
         }
-        expected_prev = Some(e.hash);
+        expected_prev = Some(e.hash.clone());
     }
-    Ok((true, None))
+    (true, None)
 }
 
 fn row_to_audit(r: &sqlx::sqlite::SqliteRow) -> AppResult<AuditEntry> {
@@ -243,6 +266,18 @@ mod tests {
 
         let (ok, bad) = verify_chain(&store, conn).await.unwrap();
         assert!(ok, "chain must verify unbroken (first bad index {bad:?})");
+        let (entries, snapshot_ok, snapshot_bad) = snapshot(&store, conn).await.unwrap();
+        assert!(
+            snapshot_ok,
+            "snapshot must verify (first bad index {snapshot_bad:?})"
+        );
+        assert_eq!(entries.len(), N, "snapshot returns every audit row");
+        assert!(
+            entries
+                .windows(2)
+                .all(|pair| pair[0].prev_hash.as_deref() == Some(pair[1].hash.as_str())),
+            "snapshot rows must be newest-first"
+        );
         let n: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_log")
             .fetch_one(store.pool())
             .await

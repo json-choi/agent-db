@@ -83,7 +83,7 @@ main_y = content_top
 draw.rectangle((main_x, main_y, W - margin, H - margin), fill="#fbfbf7")
 
 tabs_y = main_y + 22
-tabs = ["Data", "SQL", "History", "Audit", "Agent"]
+tabs = ["Data", "Schema", "SQL", "Activity", "Agent"]
 tx = main_x + 36
 for tab in tabs:
     tw = 34 + len(tab) * 14

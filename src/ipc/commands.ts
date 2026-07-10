@@ -5,6 +5,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AuditEntry,
+  AuditSnapshot,
   Catalog,
   Classification,
   ConnectionProfile,
@@ -132,6 +133,12 @@ export function listAudit(id: string): Promise<AuditEntry[]> {
 // insertion-order (oldest-first) position of the first tampered row, or null when ok.
 export function auditVerify(id: string): Promise<{ ok: boolean; firstBadIndex: number | null }> {
   return invoke("audit_verify", { connectionId: id });
+}
+
+// Rows and verdict come from one ordered backend read, so the integrity result always
+// describes the exact audit entries rendered by the Activity detail panel.
+export function auditSnapshot(id: string): Promise<AuditSnapshot> {
+  return invoke("audit_snapshot", { connectionId: id });
 }
 
 export function listHistory(id: string): Promise<HistoryEntry[]> {

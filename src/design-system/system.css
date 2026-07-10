@@ -103,7 +103,7 @@ h3 {
 }
 
 .table-data-head,
-.history-head,
+.activity-head,
 .updates-head,
 .schema-head,
 .agent-head,
@@ -135,14 +135,14 @@ h3 {
 
 .result-sql,
 .tables code,
-.audit-sql,
+.activity-audit-sql,
 .mcp-field pre,
 .mcp-token code,
 .mig-script,
 .mig-down pre,
 .mig-ver,
 .chg,
-.history-table code,
+.activity-query-table code,
 .context-sql,
 .act-ts,
 .act-detail {
@@ -948,7 +948,7 @@ h3 {
 
 @media (max-width: 760px) {
   .table-data-head,
-  .history-head,
+  .activity-head,
   .updates-head,
   .schema-head,
   .agent-head,

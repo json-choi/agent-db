@@ -688,6 +688,19 @@ pub async fn audit_verify(
     Ok(serde_json::json!({ "ok": ok, "firstBadIndex": first_bad_index }))
 }
 
+/// Fetch the displayed audit rows and verify that exact ordered snapshot in one read.
+#[tauri::command]
+pub async fn audit_snapshot(
+    state: State<'_, AppState>,
+    connection_id: Uuid,
+) -> AppResult<serde_json::Value> {
+    let (entries, ok, first_bad_index) = audit::snapshot(&state.store, connection_id).await?;
+    Ok(serde_json::json!({
+        "entries": entries,
+        "verdict": { "ok": ok, "firstBadIndex": first_bad_index }
+    }))
+}
+
 #[tauri::command]
 pub async fn list_history(state: State<'_, AppState>, id: Uuid) -> AppResult<Vec<HistoryEntry>> {
     state.store.list_history(id).await
