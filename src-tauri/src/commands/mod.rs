@@ -19,7 +19,7 @@ use crate::error::{AppError, AppResult};
 use crate::executor;
 use crate::introspect;
 use crate::model::{
-    AuditEntry, Classification, ConnectionProfile, Dashboard, DashboardDraft, Engine, ExecOutcome,
+    Classification, ConnectionProfile, Dashboard, DashboardDraft, Engine, ExecOutcome,
     HistoryEntry, PreviewMode, PreviewReport, QueryKind, QueryResult, SafetySettings,
 };
 use crate::safety::{classify, decide, preview, GateDecision, PoolRef};
@@ -805,11 +805,6 @@ pub async fn set_safety(
 }
 
 // ── logs ─────────────────────────────────────────────────────────────────────
-
-#[tauri::command]
-pub async fn list_audit(state: State<'_, AppState>, id: Uuid) -> AppResult<Vec<AuditEntry>> {
-    audit::list(&state.store, id).await
-}
 
 /// Verify the hash-chain for a connection's audit log. Returns `{ ok, firstBadIndex }`
 /// where `firstBadIndex` is the insertion-order position of the first tampered row.

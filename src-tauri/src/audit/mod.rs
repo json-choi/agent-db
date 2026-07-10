@@ -106,17 +106,6 @@ pub async fn record(store: &Store, args: RecordArgs) -> AppResult<AuditEntry> {
     })
 }
 
-/// All audit entries for a connection, newest first.
-pub async fn list(store: &Store, connection_id: Uuid) -> AppResult<Vec<AuditEntry>> {
-    let rows = sqlx::query(
-        "SELECT * FROM audit_log WHERE connection_id = ?1 ORDER BY rowid DESC",
-    )
-    .bind(connection_id.to_string())
-    .fetch_all(store.pool())
-    .await?;
-    rows.iter().map(row_to_audit).collect()
-}
-
 /// Audit rows and their verification result from one ordered database read.
 /// Entries are returned newest-first for the UI, while verification runs over the
 /// exact same rows in insertion order so the verdict cannot describe a different

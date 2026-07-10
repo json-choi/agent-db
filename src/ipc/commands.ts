@@ -4,7 +4,6 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
-  AuditEntry,
   AuditSnapshot,
   Catalog,
   Classification,
@@ -132,10 +131,6 @@ export function getSafety(id: string): Promise<SafetySettings> {
 
 export function setSafety(id: string, settings: SafetySettings): Promise<void> {
   return invoke("set_safety", { id, settings });
-}
-
-export function listAudit(id: string): Promise<AuditEntry[]> {
-  return invoke("list_audit", { id });
 }
 
 // Backend hash-chain verification (rowid order + real SHA-256 recompute). Authoritative —

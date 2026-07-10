@@ -43,7 +43,7 @@ function schemaGroupLabel(conn: ConnectionProfile): string {
   return conn.schemaGroup?.trim() ?? "";
 }
 
-export function schemaGroupKey(conn: ConnectionProfile): string | null {
+function schemaGroupKey(conn: ConnectionProfile): string | null {
   const label = schemaGroupLabel(conn);
   return label ? label.toLocaleLowerCase() : null;
 }

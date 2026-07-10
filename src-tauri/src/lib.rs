@@ -91,7 +91,6 @@ pub fn run() {
             commands::run_script,
             commands::get_safety,
             commands::set_safety,
-            commands::list_audit,
             commands::audit_verify,
             commands::audit_snapshot,
             commands::list_history,
