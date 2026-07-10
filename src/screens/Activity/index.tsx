@@ -1,26 +1,13 @@
 // Unified activity view. Query history stays optimized for replay, while the
 // append-only audit log remains available as lazy-loaded security detail.
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type SyntheticEvent,
-} from "react";
-import {
-  auditSnapshot as fetchAuditSnapshot,
-  auditVerify,
-  listHistory,
-} from "../../ipc/commands";
-import type {
-  AuditSnapshot,
-  ConnectionProfile,
-  HistoryEntry,
-} from "../../ipc/types";
+import { useEffect, useMemo, useState, type SyntheticEvent } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import type { ConnectionProfile } from "../../ipc/types";
 import { errMessage } from "../../ipc/types";
 import { Icon, type IconName } from "../../components/Icon";
+import Skeleton from "../../components/Skeleton";
 import { useToast } from "../../components/Toast";
+import { auditSnapshotQuery, auditVerdictQuery, historyQuery, qk } from "../../lib/queries";
 import { fullTime, relTime } from "../../lib/relTime";
 import { useI18n } from "../../lib/i18n";
 import "./activity.css";
@@ -61,29 +48,15 @@ export default function Activity({
 }) {
   const { t } = useI18n();
   const toast = useToast();
+  const queryClient = useQueryClient();
 
-  const [rows, setRows] = useState<HistoryEntry[]>([]);
-  const [historyError, setHistoryError] = useState<string | null>(null);
-  const [historyLoading, setHistoryLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(true);
   const [text, setText] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [originFilter, setOriginFilter] = useState("");
-
-  const [verdict, setVerdict] = useState<AuditSnapshot["verdict"] | null>(null);
-  const [integrityError, setIntegrityError] = useState<string | null>(null);
-  const [auditSnapshot, setAuditSnapshot] = useState<AuditSnapshot | null>(null);
-  const [auditDetailsError, setAuditDetailsError] = useState<string | null>(null);
-  const [auditDetailsLoading, setAuditDetailsLoading] = useState(false);
   const [auditOpen, setAuditOpen] = useState(initialAuditOpen);
-
-  // Audit rows can be numerous, so verification happens immediately but the full list
-  // is fetched only after the disclosure is opened. Once requested, Refresh keeps it
-  // synchronized with the verdict.
-  const auditListWanted = useRef(initialAuditOpen);
-  const auditListInFlight = useRef(false);
-  const refreshRequest = useRef(0);
-  const auditRequest = useRef(0);
+  // Audit rows can be numerous, so verification runs immediately while the full list stays
+  // unfetched until the disclosure is opened. After that it refreshes with everything else.
+  const [auditWanted, setAuditWanted] = useState(initialAuditOpen);
 
   useEffect(() => {
     if (initialAuditOpen) onInitialAuditOpenConsumed?.();
@@ -91,121 +64,33 @@ export default function Activity({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const refresh = useCallback(async () => {
-    const request = ++refreshRequest.current;
-    const auditToken = ++auditRequest.current;
-    const includeAuditRows = auditListWanted.current;
+  // The query history paints as soon as it settles; a large hash-chain verification runs
+  // beside it and never holds up the replay surface.
+  const history = useQuery(historyQuery(connection.id));
+  const verdictResult = useQuery(auditVerdictQuery(connection.id));
+  const snapshot = useQuery(auditSnapshotQuery(connection.id, auditWanted));
 
-    setRefreshing(true);
-    setHistoryLoading(true);
-    setHistoryError(null);
-    setIntegrityError(null);
-    if (includeAuditRows) {
-      auditListInFlight.current = true;
-      setAuditDetailsLoading(true);
-      setAuditDetailsError(null);
-    }
-
-    // Apply the primary query history as soon as it settles; a large hash-chain
-    // verification must not hold the replay surface behind it.
-    const historyTask = listHistory(connection.id).then(
-      (nextRows) => {
-        if (request === refreshRequest.current) {
-          setRows(nextRows);
-          setHistoryLoading(false);
-          setRefreshing(false);
-        }
-      },
-      (error) => {
-        if (request === refreshRequest.current) {
-          setHistoryError(errMessage(error));
-          setHistoryLoading(false);
-          setRefreshing(false);
-        }
-      },
-    );
-
-    const auditTask = includeAuditRows
-      ? fetchAuditSnapshot(connection.id).then(
-          (nextSnapshot) => {
-            if (auditToken !== auditRequest.current) return;
-            setVerdict(nextSnapshot.verdict);
-            setAuditSnapshot(nextSnapshot);
-          },
-          (error) => {
-            if (auditToken !== auditRequest.current) return;
-            // Keep the last-good snapshot (mirrors the history handler above) —
-            // a transient refresh failure must not blank a verified trail.
-            setIntegrityError(errMessage(error));
-            setAuditDetailsError(errMessage(error));
-          },
-        )
-      : auditVerify(connection.id).then(
-          (nextVerdict) => {
-            if (auditToken === auditRequest.current) setVerdict(nextVerdict);
-          },
-          (error) => {
-            if (auditToken === auditRequest.current) setIntegrityError(errMessage(error));
-          },
-        );
-
-    await Promise.allSettled([historyTask, auditTask]);
-
-    // A keyed Activity instance normally handles connection changes; the sequences also
-    // prevent slower manual/lazy requests from overwriting newer results.
-    if (request !== refreshRequest.current) return;
-
-    if (includeAuditRows && auditToken === auditRequest.current) {
-      auditListInFlight.current = false;
-      setAuditDetailsLoading(false);
-    }
-  }, [connection.id]);
-
-  useEffect(() => {
-    void refresh();
-    return () => {
-      refreshRequest.current += 1;
-      auditRequest.current += 1;
-    };
-  }, [refresh]);
-
-  const loadAuditDetails = useCallback(async () => {
-    if (auditListInFlight.current || auditSnapshot !== null) return;
-    const auditToken = ++auditRequest.current;
-    auditListWanted.current = true;
-    auditListInFlight.current = true;
-    setAuditDetailsLoading(true);
-    setAuditDetailsError(null);
-
-    const result = await fetchAuditSnapshot(connection.id).then(
-      (nextSnapshot) => ({ ok: true as const, value: nextSnapshot }),
-      (error) => ({ ok: false as const, error }),
-    );
-
-    if (auditToken !== auditRequest.current) return;
-
-    if (result.ok) {
-      setAuditSnapshot(result.value);
-      setVerdict(result.value.verdict);
-      setIntegrityError(null);
-    } else {
-      setAuditSnapshot(null);
-      setAuditDetailsError(errMessage(result.error));
-      setIntegrityError(errMessage(result.error));
-    }
-
-    auditListInFlight.current = false;
-    setAuditDetailsLoading(false);
-  }, [auditSnapshot, connection.id]);
+  // Invalidation (not refetch) so the audit list is skipped while its disclosure is closed.
+  function refresh() {
+    void queryClient.invalidateQueries({ queryKey: qk.history(connection.id) });
+    void queryClient.invalidateQueries({ queryKey: qk.audit(connection.id) });
+  }
 
   function handleAuditToggle(event: SyntheticEvent<HTMLDetailsElement>) {
     const open = event.currentTarget.open;
     setAuditOpen(open);
-    if (open) {
-      auditListWanted.current = true;
-      void loadAuditDetails();
-    }
+    if (open) setAuditWanted(true);
   }
+
+  const rows = history.data ?? [];
+  const historyError = history.error ? errMessage(history.error) : null;
+  const historyLoading = history.isPending;
+  // A failed refresh keeps the last-good rows: a transient error must not blank a
+  // verified trail. React Query retains `data` across a failed refetch for exactly this.
+  const auditSnapshot = snapshot.data ?? null;
+  const auditDetailsError = snapshot.error ? errMessage(snapshot.error) : null;
+  const auditDetailsLoading = snapshot.isFetching;
+  const integrityError = auditDetailsError ?? (verdictResult.error ? errMessage(verdictResult.error) : null);
 
   const statuses = useMemo(
     () => [...new Set(rows.map((row) => row.status))].sort(),
@@ -231,6 +116,9 @@ export default function Activity({
 
   const auditEntries = auditSnapshot?.entries ?? null;
   const detailVerdict = auditSnapshot?.verdict ?? null;
+  // The snapshot verdict describes exactly the rows on screen, so it wins over the
+  // standalone verification whenever the list has been loaded.
+  const verdict = detailVerdict ?? verdictResult.data ?? null;
   // firstBadIndex is oldest-first; the displayed entries are newest-first.
   const tamperedId =
     detailVerdict && !detailVerdict.ok && detailVerdict.firstBadIndex != null && auditEntries
@@ -241,13 +129,7 @@ export default function Activity({
     : null;
 
   const chainBroken = verdict !== null && !verdict.ok;
-  const tamperedTs =
-    chainBroken &&
-    detailVerdict &&
-    !detailVerdict.ok &&
-    detailVerdict.firstBadIndex === verdict?.firstBadIndex
-      ? tamperedEntry?.ts ?? null
-      : null;
+  const tamperedTs = chainBroken ? tamperedEntry?.ts ?? null : null;
   const integrityTitle = integrityError
     ? t("activity.auditUnavailable")
     : verdict === null
@@ -259,7 +141,7 @@ export default function Activity({
         : t("activity.auditVerified");
   const integrityTone = integrityError || chainBroken ? "ds-tone-danger" : "ds-tone-trust";
   const integrityIcon: IconName = integrityError || chainBroken ? "alert" : verdict ? "check" : "info";
-  const busy = refreshing || auditDetailsLoading;
+  const busy = history.isFetching || verdictResult.isFetching || snapshot.isFetching;
 
   return (
     <div className="screen activity">
@@ -268,7 +150,7 @@ export default function Activity({
           <h2>{t("activity.title")}</h2>
           <p className="muted">{t("activity.description")}</p>
         </div>
-        <button className="btn small" onClick={() => void refresh()} disabled={busy}>
+        <button className="btn small" onClick={refresh} disabled={busy}>
           {busy ? "..." : t("common.refresh")}
         </button>
       </header>
@@ -317,9 +199,7 @@ export default function Activity({
               {t("activity.auditLoadError", { error: auditDetailsError })}
             </div>
           )}
-          {auditDetailsLoading && auditEntries === null && (
-            <div className="muted loading">{t("common.loading")}</div>
-          )}
+          {auditDetailsLoading && auditEntries === null && <Skeleton lines={4} />}
           {!auditDetailsLoading && auditEntries?.length === 0 && !auditDetailsError && (
             <div className="muted empty">{t("activity.auditEmpty")}</div>
           )}
@@ -429,9 +309,7 @@ export default function Activity({
             {t("activity.historyLoadError", { error: historyError })}
           </div>
         )}
-        {historyLoading && rows.length === 0 && !historyError && (
-          <div className="muted loading">{t("common.loading")}</div>
-        )}
+        {historyLoading && !historyError && <Skeleton lines={5} />}
         {!historyLoading && !historyError && rows.length === 0 && (
           <div className="muted empty">
             {t("activity.empty", {

@@ -2,15 +2,15 @@
 // drag-and-drop. Split out of the old Connections/index.tsx (see ConnectionForm.tsx
 // for the connection create/edit form that used to live alongside it).
 import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
+import { useQueries, useQueryClient } from "@tanstack/react-query";
 import {
   deleteConnection,
-  getCatalog,
   getTableDdl,
-  refreshCatalog,
   setConnectionSchemaGroup,
 } from "../../ipc/commands";
 import type { Catalog, CatalogTable, ConnectionProfile } from "../../ipc/types";
 import { errMessage } from "../../ipc/types";
+import { catalogQuery, fetchFreshCatalog, qk } from "../../lib/queries";
 import {
   buildConnectionSections,
   compareCatalogs,
@@ -29,8 +29,6 @@ import { useToast } from "../../components/Toast";
 import { useI18n } from "../../lib/i18n";
 import "./connections.css";
 
-const SCHEMA_LOAD_TIMEOUT_MS = 12_000;
-
 type DropTarget =
   | { kind: "connection"; id: string }
   | { kind: "group"; key: string };
@@ -41,14 +39,6 @@ type DragStart = {
   x: number;
   y: number;
 };
-
-function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
-  let timer: number | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = window.setTimeout(() => reject(new Error(message)), ms);
-  });
-  return Promise.race([promise, timeout]).finally(() => window.clearTimeout(timer));
-}
 
 function stripEnvTokens(value: string): string {
   return value
@@ -193,10 +183,13 @@ export function DatabaseExplorer({
 }) {
   const { t } = useI18n();
   const toast = useToast();
+  const queryClient = useQueryClient();
   // Per-connection: any node can be expanded independently of selection, so
   // catalogs/errors/filters are keyed by connection id (DataGrip-style tree).
-  const [catalogs, setCatalogs] = useState<Record<string, Catalog>>({});
-  const [errs, setErrs] = useState<Record<string, string>>({});
+  // Catalogs come from the shared query cache, so expanding a node here also warms
+  // the Schema view and the SQL editor's autocomplete for that connection.
+  const [wanted, setWanted] = useState<Set<string>>(new Set());
+  const [refreshErrs, setRefreshErrs] = useState<Record<string, string>>({});
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [refreshing, setRefreshing] = useState<string | null>(null);
@@ -212,7 +205,6 @@ export function DatabaseExplorer({
   const [dragPreview, setDragPreview] = useState<{ id: string; x: number; y: number } | null>(
     null,
   );
-  const loadedRef = useRef(new Set<string>());
   const dragStartRef = useRef<DragStart | null>(null);
   const activeDragIdRef = useRef<string | null>(null);
   const suppressClickRef = useRef(false);
@@ -226,24 +218,36 @@ export function DatabaseExplorer({
     return map;
   }, [sections]);
 
+  const wantedIds = useMemo(() => [...wanted].sort(), [wanted]);
+  const { catalogs, loadErrs } = useQueries({
+    queries: wantedIds.map((id) => catalogQuery(id)),
+    combine: (results) => {
+      const catalogs: Record<string, Catalog> = {};
+      const loadErrs: Record<string, string> = {};
+      results.forEach((result, index) => {
+        const id = wantedIds[index];
+        if (result.data) catalogs[id] = result.data;
+        else if (result.error) loadErrs[id] = errMessage(result.error);
+      });
+      return { catalogs, loadErrs };
+    },
+  });
+  const errs = { ...loadErrs, ...refreshErrs };
+
+  // Expanding a node subscribes to its catalog; the query cache decides whether that is a
+  // fetch or a free read. Retries are not automatic (see the query defaults), so a node
+  // that failed refetches when the user expands it again.
   function ensureLoaded(id: string) {
-    if (loadedRef.current.has(id)) return;
-    loadedRef.current.add(id);
-    setErrs((m) => {
+    setWanted((ids) => (ids.has(id) ? ids : new Set(ids).add(id)));
+    setRefreshErrs((m) => {
+      if (!(id in m)) return m;
       const n = { ...m };
       delete n[id];
       return n;
     });
-    withTimeout(
-      getCatalog(id),
-      SCHEMA_LOAD_TIMEOUT_MS,
-      "Schema loading timed out. Check the database connection or retry.",
-    )
-      .then((c) => setCatalogs((m) => ({ ...m, [id]: c })))
-      .catch((e) => {
-        loadedRef.current.delete(id); // allow retry on next expand
-        setErrs((m) => ({ ...m, [id]: errMessage(e) }));
-      });
+    if (queryClient.getQueryState(qk.catalog(id))?.status === "error") {
+      void queryClient.refetchQueries({ queryKey: qk.catalog(id) });
+    }
   }
 
   function ensureGroupLoaded(id: string) {
@@ -276,23 +280,19 @@ export function DatabaseExplorer({
 
   // Force a live re-introspection — the schema cache is written once and never
   // expires, so a table list can go stale (e.g. tables added after first connect).
+  // Writing the result into the shared cache updates every surface reading this catalog.
   async function refreshSchema(id: string) {
     setRefreshing(id);
-    setErrs((m) => {
+    setRefreshErrs((m) => {
       const n = { ...m };
       delete n[id];
       return n;
     });
     try {
-      const c = await withTimeout(
-        refreshCatalog(id),
-        SCHEMA_LOAD_TIMEOUT_MS,
-        "Schema refresh timed out. Check the database connection or retry.",
-      );
-      setCatalogs((m) => ({ ...m, [id]: c }));
-      loadedRef.current.add(id);
+      queryClient.setQueryData(qk.catalog(id), await fetchFreshCatalog(id));
+      setWanted((ids) => (ids.has(id) ? ids : new Set(ids).add(id)));
     } catch (e) {
-      setErrs((m) => ({ ...m, [id]: errMessage(e) }));
+      setRefreshErrs((m) => ({ ...m, [id]: errMessage(e) }));
     } finally {
       setRefreshing(null);
     }
@@ -302,6 +302,13 @@ export function DatabaseExplorer({
     setDeleting(conn.id);
     try {
       await deleteConnection(conn.id);
+      setWanted((ids) => {
+        if (!ids.has(conn.id)) return ids;
+        const next = new Set(ids);
+        next.delete(conn.id);
+        return next;
+      });
+      queryClient.removeQueries({ queryKey: qk.catalog(conn.id) });
       toast(t("connections.connectionDeleted"));
       onDeleted(conn.id);
     } catch (e) {

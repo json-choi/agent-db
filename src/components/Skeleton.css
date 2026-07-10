@@ -1,0 +1,54 @@
+/* Bars stay invisible for 200ms so a fast load never flashes a skeleton. */
+.skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-3);
+  width: 100%;
+  padding: var(--ds-space-2) 0;
+}
+
+.skeleton-bar {
+  height: 14px;
+  border-radius: var(--ds-radius-xs);
+  opacity: 0;
+  background: linear-gradient(
+    90deg,
+    var(--ds-surface-2) 25%,
+    var(--ds-surface-1) 37%,
+    var(--ds-surface-2) 63%
+  );
+  background-size: 400% 100%;
+  animation:
+    skeleton-reveal 160ms ease-out 200ms forwards,
+    skeleton-shimmer 1400ms ease-in-out 200ms infinite;
+}
+
+.skeleton-bar:nth-child(3n + 2) {
+  width: 82%;
+}
+
+.skeleton-bar:nth-child(3n) {
+  width: 64%;
+}
+
+@keyframes skeleton-reveal {
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes skeleton-shimmer {
+  from {
+    background-position: 100% 50%;
+  }
+  to {
+    background-position: 0 50%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-bar {
+    animation: skeleton-reveal 0s linear 200ms forwards;
+    background: var(--ds-surface-2);
+  }
+}

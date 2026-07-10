@@ -1,23 +1,16 @@
 // Persistent dashboard library for one database connection. Selecting a saved
 // definition reruns its SQL through the existing read-only execution boundary.
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  cancelQuery,
-  deleteDashboard,
-  listDashboards,
-  runDashboard,
-} from "../../ipc/commands";
-import type {
-  ConnectionProfile,
-  Dashboard,
-  DashboardKind,
-  QueryResult,
-} from "../../ipc/types";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { deleteDashboard } from "../../ipc/commands";
+import type { ConnectionProfile, Dashboard, DashboardKind } from "../../ipc/types";
 import { errMessage } from "../../ipc/types";
 import ConfirmButton from "../../components/ConfirmButton";
 import DashboardVisualizationView from "../../components/DashboardVisualization";
 import { Icon } from "../../components/Icon";
+import Skeleton from "../../components/Skeleton";
 import { useToast } from "../../components/Toast";
+import { dashboardRunQuery, dashboardsQuery, qk } from "../../lib/queries";
 import { useI18n, type I18nKey } from "../../lib/i18n";
 import "./dashboards.css";
 
@@ -47,108 +40,67 @@ export default function Dashboards({
 }) {
   const { t } = useI18n();
   const toast = useToast();
-  const [dashboards, setDashboards] = useState<Dashboard[]>([]);
+  const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [result, setResult] = useState<QueryResult | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [running, setRunning] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [runError, setRunError] = useState<string | null>(null);
-  const listRequest = useRef(0);
-  const runRequest = useRef(0);
-  const selectedIdRef = useRef<string | null>(null);
   const appliedFocusId = useRef<string | null>(null);
-  const activeQueryId = useRef<string | null>(null);
 
+  const list = useQuery(dashboardsQuery(connection.id));
+  const dashboards = useMemo(() => list.data ?? [], [list.data]);
   const selected = useMemo(
     () => dashboards.find((dashboard) => dashboard.id === selectedId) ?? null,
     [dashboards, selectedId],
   );
+  // Selecting a dashboard runs it. The result is cached per dashboard, so leaving the tab
+  // and coming back repaints the chart instead of re-querying the database.
+  const run = useQuery(dashboardRunQuery(selected?.id ?? null));
 
-  async function execute(dashboard: Dashboard) {
-    const request = ++runRequest.current;
-    if (activeQueryId.current) void cancelQuery(activeQueryId.current);
-    const queryId = window.crypto.randomUUID();
-    activeQueryId.current = queryId;
-    selectedIdRef.current = dashboard.id;
-    setSelectedId(dashboard.id);
-    setResult(null);
-    setRunError(null);
-    setRunning(true);
-    try {
-      const nextResult = await runDashboard(dashboard.id, queryId);
-      if (request !== runRequest.current) return;
-      setResult(nextResult);
-    } catch (error) {
-      if (request === runRequest.current) setRunError(errMessage(error));
-    } finally {
-      if (activeQueryId.current === queryId) activeQueryId.current = null;
-      if (request === runRequest.current) setRunning(false);
-    }
-  }
+  const remove = useMutation({
+    mutationFn: deleteDashboard,
+    onSuccess: (_, removedId) => {
+      queryClient.removeQueries({ queryKey: qk.dashboardRun(removedId) });
+      void queryClient.invalidateQueries({ queryKey: qk.dashboards(connection.id) });
+      setSelectedId((current) => (current === removedId ? null : current));
+      toast(t("dashboard.deleted"));
+    },
+  });
 
+  // Switching connections drops the selection; the focus effect below may immediately
+  // restore one when the app navigated here to show a specific dashboard.
   useEffect(() => {
-    const request = ++listRequest.current;
-    ++runRequest.current;
-    setLoading(true);
-    setLoadError(null);
-    setRunError(null);
-    setResult(null);
-    selectedIdRef.current = null;
     setSelectedId(null);
     appliedFocusId.current = null;
-
-    listDashboards(connection.id)
-      .then((items) => {
-        if (request !== listRequest.current) return;
-        setDashboards(items);
-      })
-      .catch((error) => {
-        if (request === listRequest.current) setLoadError(errMessage(error));
-      })
-      .finally(() => {
-        if (request === listRequest.current) setLoading(false);
-      });
-
-    return () => {
-      const active = activeQueryId.current;
-      activeQueryId.current = null;
-      if (active) void cancelQuery(active);
-      ++listRequest.current;
-      ++runRequest.current;
-    };
   }, [connection.id]);
 
   useEffect(() => {
     if (!focusId || appliedFocusId.current === focusId) return;
-    const focused = dashboards.find((dashboard) => dashboard.id === focusId);
-    if (!focused) return;
+    if (!dashboards.some((dashboard) => dashboard.id === focusId)) return;
     appliedFocusId.current = focusId;
     onFocusConsumed();
-    void execute(focused);
+    setSelectedId(focusId);
   }, [dashboards, focusId, onFocusConsumed]);
 
-  async function removeSelected() {
-    if (!selected || deleting) return;
-    const deletingId = selected.id;
-    setDeleting(true);
-    setRunError(null);
-    try {
-      await deleteDashboard(deletingId);
-      setDashboards((items) => items.filter((item) => item.id !== deletingId));
-      if (selectedIdRef.current === deletingId) {
-        selectedIdRef.current = null;
-        setSelectedId(null);
-        setResult(null);
-      }
-      toast(t("dashboard.deleted"));
-    } catch (error) {
-      setRunError(errMessage(error));
-    } finally {
-      setDeleting(false);
+  // Re-selecting the active dashboard is a rerun. Selecting a different one abandons the
+  // in-flight read: cancelQueries aborts the query signal, which cancels it server-side.
+  function execute(dashboard: Dashboard) {
+    remove.reset(); // a failed delete must not keep reporting itself over the next run
+    if (dashboard.id === selectedId) {
+      void queryClient.invalidateQueries({ queryKey: qk.dashboardRun(dashboard.id) });
+      return;
     }
+    if (selectedId) void queryClient.cancelQueries({ queryKey: qk.dashboardRun(selectedId) });
+    setSelectedId(dashboard.id);
   }
+
+  const loading = list.isPending;
+  const loadError = list.error ? errMessage(list.error) : null;
+  const running = run.isFetching;
+  const deleting = remove.isPending;
+  const result = run.data ?? null;
+  const runError = remove.error
+    ? errMessage(remove.error)
+    : run.error
+      ? errMessage(run.error)
+      : null;
 
   return (
     <div className="dashboards-screen screen">
@@ -172,8 +124,8 @@ export default function Dashboards({
       )}
 
       {loading ? (
-        <section className="dashboard-state ds-panel" aria-busy="true">
-          <span className="loading">{t("dashboard.loading")}</span>
+        <section className="dashboard-state ds-panel">
+          <Skeleton lines={3} />
         </section>
       ) : loadError ? null : dashboards.length === 0 ? (
         <section className="dashboard-state dashboard-empty ds-panel">
@@ -258,7 +210,7 @@ export default function Dashboards({
                       className="btn danger small"
                       disabled={running || deleting}
                       confirmLabel={t("dashboard.deleteConfirm")}
-                      onConfirm={() => void removeSelected()}
+                      onConfirm={() => remove.mutate(selected.id)}
                     >
                       <Icon name="trash" />
                       {t("common.delete")}
@@ -272,7 +224,7 @@ export default function Dashboards({
                 </details>
 
                 {runError && <div className="error" role="alert">{runError}</div>}
-                {running ? (
+                {running && !result ? (
                   <div className="dashboard-state dashboard-running" aria-busy="true">
                     <span className="loading">{t("dashboard.running")}</span>
                   </div>

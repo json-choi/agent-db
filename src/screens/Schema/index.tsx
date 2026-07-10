@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { getCatalog } from "../../ipc/commands";
+import { useQuery } from "@tanstack/react-query";
 import type { Catalog, CatalogTable, ConnectionProfile } from "../../ipc/types";
 import { errMessage } from "../../ipc/types";
 import { Icon } from "../../components/Icon";
 import InfoTip from "../../components/InfoTip";
+import Skeleton from "../../components/Skeleton";
+import { catalogQuery } from "../../lib/queries";
 import { tableKey, tableLabel } from "../../lib/tableRef";
 import { useI18n } from "../../lib/i18n";
 import "./schema.css";
@@ -125,37 +127,27 @@ export default function SchemaExplorer({
   title?: string;
 }) {
   const { t } = useI18n();
-  const [catalog, setCatalog] = useState<Catalog | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // Shared with the sidebar tree and the SQL editor's autocomplete — whichever surface
+  // loads a connection's catalog first warms it for the others.
+  const { data: catalog, error: catalogError } = useQuery(catalogQuery(connection.id));
+  const error = catalogError ? errMessage(catalogError) : null;
   const [filter, setFilter] = useState("");
   const [selectedKey, setSelectedKey] = useState<string | null>(
     selectedTable ? tableKey(selectedTable) : null,
   );
 
+  // Reconcile the selection whenever a new catalog lands or the caller names a table:
+  // prefer the requested table, keep the current one if it still exists, else the first.
   useEffect(() => {
-    let alive = true;
-    setCatalog(null);
-    setError(null);
-    getCatalog(connection.id)
-      .then((next) => {
-        if (!alive) return;
-        setCatalog(next);
-        const preferred = selectedTable ? tableKey(selectedTable) : null;
-        setSelectedKey((current) => {
-          if (preferred && next.tables.some((table) => tableKey(table) === preferred)) {
-            return preferred;
-          }
-          if (current && next.tables.some((table) => tableKey(table) === current)) {
-            return current;
-          }
-          return next.tables[0] ? tableKey(next.tables[0]) : null;
-        });
-      })
-      .catch((e) => alive && setError(errMessage(e)));
-    return () => {
-      alive = false;
-    };
-  }, [connection.id, selectedTable]);
+    if (!catalog) return;
+    const preferred = selectedTable ? tableKey(selectedTable) : null;
+    const has = (key: string) => catalog.tables.some((table) => tableKey(table) === key);
+    setSelectedKey((current) => {
+      if (preferred && has(preferred)) return preferred;
+      if (current && has(current)) return current;
+      return catalog.tables[0] ? tableKey(catalog.tables[0]) : null;
+    });
+  }, [catalog, selectedTable]);
 
   const allRelationships = useMemo(
     () => (catalog ? relationshipsFor(catalog) : []),
@@ -232,7 +224,7 @@ export default function SchemaExplorer({
       {error ? (
         <div className="error">{error}</div>
       ) : !catalog ? (
-        <div className="muted loading">{t("schema.loading")}</div>
+        <Skeleton lines={6} />
       ) : catalog.tables.length === 0 ? (
         <div className="muted empty">{t("schema.empty")}</div>
       ) : tables.length === 0 ? (

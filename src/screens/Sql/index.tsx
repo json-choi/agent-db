@@ -3,8 +3,8 @@
 // Multi-statement scripts execute through the backend script runner and return
 // per-statement results. ⌘↩ runs the current draft or selected SQL.
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import type {
-  Catalog,
   ConnectionProfile,
   ExecOutcome,
   PlatformInfo,
@@ -15,7 +15,6 @@ import { errDetails, errMessage, type AppErrorDetails } from "../../ipc/types";
 import {
   cancelQuery,
   classifySql,
-  getCatalog,
   mcpPlatforms,
   openAgentApp,
   previewSql,
@@ -23,6 +22,7 @@ import {
   runSql,
 } from "../../ipc/commands";
 import type { PreviewReport } from "../../ipc/types";
+import { catalogQuery } from "../../lib/queries";
 import { splitStatements } from "../../lib/sqlStatements";
 import { Icon } from "../../components/Icon";
 import InfoTip from "../../components/InfoTip";
@@ -346,29 +346,9 @@ export default function Sql({
     return () => clearInterval(timer);
   }, [running]);
 
-  // #8: feed schema-aware autocomplete. Same introspected Catalog the sidebar tree uses
-  // (columns per table). Cache by connection id; failure just leaves completion off.
-  const catalogCache = useRef<Record<string, Catalog>>({});
-  const [catalog, setCatalog] = useState<Catalog | undefined>(undefined);
-  useEffect(() => {
-    const id = connection.id;
-    const cached = catalogCache.current[id];
-    if (cached) {
-      setCatalog(cached);
-      return;
-    }
-    setCatalog(undefined);
-    let alive = true;
-    getCatalog(id)
-      .then((c) => {
-        catalogCache.current[id] = c;
-        if (alive) setCatalog(c);
-      })
-      .catch(() => {}); // no catalog → editor still works, just no schema hints
-    return () => {
-      alive = false;
-    };
-  }, [connection.id]);
+  // #8: feed schema-aware autocomplete. Same introspected Catalog the sidebar tree and the
+  // Schema view read, served from the shared query cache. Failure just leaves completion off.
+  const { data: catalog } = useQuery(catalogQuery(connection.id));
 
   useEffect(() => {
     let alive = true;

@@ -4,13 +4,12 @@
 // same sqlBuild helpers. Row edits (insert/update/delete) are generated as SQL and
 // routed through ApprovalCard, so the full safety pipeline (classify/preview/approve/
 // audit) applies — reads still auto-run and never need approval.
-import { useCallback, useEffect, useRef, useState } from "react";
-import { runSql } from "../../ipc/commands";
+import { useEffect, useState } from "react";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import type {
   CatalogTable,
   ConnectionProfile,
   ExecOutcome,
-  QueryResult,
   SafetySettings,
 } from "../../ipc/types";
 import { errMessage } from "../../ipc/types";
@@ -19,20 +18,27 @@ import { Icon } from "../../components/Icon";
 import CellViewer from "../../components/CellViewer";
 import RowEditor, { type RowEditorSubmission } from "../../components/RowEditor";
 import ApprovalCard from "../../components/ApprovalCard";
+import Skeleton from "../../components/Skeleton";
 import { useToast } from "../../components/Toast";
+import { tableRowsQuery } from "../../lib/queries";
 import { tableKey, tableLabel } from "../../lib/tableRef";
 import { downloadCsv, downloadJson, stamp } from "../../lib/export";
 import { useI18n } from "../../lib/i18n";
 import {
-  buildCountQuery,
   buildDelete,
-  buildPageQuery,
   cellToInput,
   hasNonScalarPk,
   pkColumns,
   type GridSort,
 } from "../../lib/sqlBuild";
 import "./tables.css";
+
+const FILTER_DEBOUNCE_MS = 250;
+
+function sameFilters(a: Record<string, string>, b: Record<string, string>) {
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length && keys.every((k) => a[k] === b[k]);
+}
 
 const PAGE = 100;
 
@@ -56,13 +62,13 @@ export default function TableData({
   const { t } = useI18n();
   const toast = useToast();
   const engine = connection.engine;
-  const [result, setResult] = useState<QueryResult | null>(null);
-  const [total, setTotal] = useState<number | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [writeErr, setWriteErr] = useState<string | null>(null);
   const [page, setPage] = useState(0);
   const [sort, setSort] = useState<GridSort | null>(null);
   const [filters, setFilters] = useState<Record<string, string>>({});
+  // Typing in a filter must not fire a query per keystroke, so the query reads the settled
+  // value while the inputs stay controlled by `filters`.
+  const [appliedFilters, setAppliedFilters] = useState<Record<string, string>>({});
   const [selected, setSelected] = useState<number | null>(null);
   const [cellSel, setCellSel] = useState<CellSel | null>(null);
   const [editor, setEditor] = useState<Editor | null>(null);
@@ -70,72 +76,73 @@ export default function TableData({
   // Readable confirm gate for DELETE: PK pairs of the target row, mirroring how
   // insert/edit/duplicate pass through RowEditor before arming the ApprovalCard.
   const [pendingDelete, setPendingDelete] = useState<Record<string, string | null> | null>(null);
-  // Reads run on a POOLED connection, so overlapping loads (fast filter typing, table
-  // switch) can resolve out of order. Each load takes a ticket; only the latest one paints.
-  const reqId = useRef(0);
   const [structure, setStructure] = useState(false);
 
   const pageSize = Math.min(PAGE, safety.maxRows || PAGE);
   const key = tableKey(table);
-  // Row editing needs a PK we can match on. No PK, or a PK whose rendered cell value can't
-  // round-trip to a literal (binary/json/array/composite), both disable it — same as noPk.
-  const nonScalarPk = hasNonScalarPk(table);
-  const canEdit = pkColumns(table).length > 0 && !nonScalarPk;
-  const activeFilters = Object.values(filters).filter((v) => v.trim()).length;
 
-  const load = useCallback(
-    async (p: number) => {
-      const my = ++reqId.current;
-      setBusy(true);
-      setErr(null);
-      const pageSql = buildPageQuery(engine, table, {
-        filters,
-        sort,
-        limit: pageSize,
-        offset: p * pageSize,
-      });
-      const countSql = buildCountQuery(engine, table, filters);
-      try {
-        const [pageOut, countOut] = await Promise.all([
-          runSql(connection.id, pageSql, true),
-          runSql(connection.id, countSql, true),
-        ]);
-        if (my !== reqId.current) return; // a newer load already superseded us — drop stale rows
-        setResult(pageOut.result ?? null);
-        setPage(p);
-        setSelected(null);
-        setCellSel(null); // the old cell viewer points at rows that just went away
-        const n = countOut.result?.rows?.[0]?.[0];
-        setTotal(n == null ? null : Number(n));
-      } catch (e) {
-        if (my !== reqId.current) return; // stale error from a superseded load
-        setErr(errMessage(e));
-      } finally {
-        if (my === reqId.current) setBusy(false);
-      }
-    },
-    [connection.id, engine, table, pageSize, sort, filters],
-  );
-
-  // Reset view state whenever the selected table changes.
-  useEffect(() => {
-    reqId.current++; // invalidate any in-flight load from the previous table
+  // Reset the whole view when the selected table changes. Done during render (not in an
+  // effect) so the row query never fires once with the new table and the old table's
+  // filters, sort, or page.
+  const [viewKey, setViewKey] = useState(key);
+  if (viewKey !== key) {
+    setViewKey(key);
+    setPage(0);
     setSort(null);
     setFilters({});
+    setAppliedFilters({});
     setSelected(null);
     setCellSel(null);
     setEditor(null);
     setPrepared(null);
     setPendingDelete(null);
     setStructure(false);
-  }, [key]);
+    setWriteErr(null);
+  }
 
-  // Any query-shape change (table / sort / filters, all folded into `load`'s identity)
-  // resets to page 0. Debounced so typing in a filter doesn't fire a query per keystroke.
+  const rowsQuery = useQuery({
+    ...tableRowsQuery({
+      connectionId: connection.id,
+      engine,
+      table,
+      filters: appliedFilters,
+      sort,
+      pageSize,
+      page,
+    }),
+    // Paging and filtering repaint the previous page (dimmed) instead of blanking the grid.
+    placeholderData: keepPreviousData,
+  });
+
+  const result = rowsQuery.data?.result ?? null;
+  const total = rowsQuery.data?.total ?? null;
+  const busy = rowsQuery.isFetching;
+  const err = writeErr ?? (rowsQuery.error ? errMessage(rowsQuery.error) : null);
+
+  // Settling a filter always returns to the first page; both land in one render so only the
+  // final query key is ever fetched. The equality guard keeps this inert on mount and on a
+  // table switch, where a stray timer would otherwise yank the user back to page 0.
   useEffect(() => {
-    const t = window.setTimeout(() => void load(0), 250);
-    return () => window.clearTimeout(t);
-  }, [load]);
+    if (sameFilters(filters, appliedFilters)) return;
+    const timer = window.setTimeout(() => {
+      setAppliedFilters(filters);
+      setPage(0);
+    }, FILTER_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [filters, appliedFilters]);
+  // Row editing needs a PK we can match on. No PK, or a PK whose rendered cell value can't
+  // round-trip to a literal (binary/json/array/composite), both disable it — same as noPk.
+  const nonScalarPk = hasNonScalarPk(table);
+  const canEdit = pkColumns(table).length > 0 && !nonScalarPk;
+  const activeFilters = Object.values(filters).filter((v) => v.trim()).length;
+
+  // Fresh rows landed, so any row/cell the user had selected now points at data that may
+  // no longer be there, and a stale write error no longer describes what is on screen.
+  useEffect(() => {
+    setSelected(null);
+    setCellSel(null);
+    setWriteErr(null);
+  }, [rowsQuery.dataUpdatedAt]);
 
   const rows = result?.rowCount ?? 0;
   const from = rows === 0 ? 0 : page * pageSize + 1;
@@ -152,6 +159,7 @@ export default function TableData({
           ? { col, dir: "desc" }
           : null,
     );
+    setPage(0);
   }
 
   const selRow = selected != null && result ? result.rows[selected] : null;
@@ -195,7 +203,7 @@ export default function TableData({
       });
       setPendingDelete(null);
     } catch (e) {
-      setErr(errMessage(e));
+      setWriteErr(errMessage(e));
     }
   }
 
@@ -221,7 +229,8 @@ export default function TableData({
     setPrepared(null);
     setEditor(null);
     setPendingDelete(null);
-    void load(page);
+    setWriteErr(null);
+    void rowsQuery.refetch();
   }
 
   const noEditTitle = nonScalarPk
@@ -262,13 +271,13 @@ export default function TableData({
           </div>
         </div>
         <div className="table-pager ds-command-group" aria-label={t("tables.pagination")}>
-          <button className="btn small" disabled={busy || !hasPrev} onClick={() => void load(0)}>
+          <button className="btn small" disabled={busy || !hasPrev} onClick={() => setPage(0)}>
             « {t("common.first")}
           </button>
           <button
             className="btn small"
             disabled={busy || !hasPrev}
-            onClick={() => void load(page - 1)}
+            onClick={() => setPage(page - 1)}
           >
             ‹ {t("common.prev")}
           </button>
@@ -279,14 +288,14 @@ export default function TableData({
           <button
             className="btn small"
             disabled={busy || !hasNext}
-            onClick={() => void load(page + 1)}
+            onClick={() => setPage(page + 1)}
           >
             {t("common.next")} ›
           </button>
           <button
             className="btn small"
             disabled={busy || lastPage == null || !hasNext}
-            onClick={() => lastPage != null && void load(lastPage)}
+            onClick={() => lastPage != null && setPage(lastPage)}
           >
             {t("tables.last")} »
           </button>
@@ -295,7 +304,7 @@ export default function TableData({
             disabled={busy}
             aria-label={t("common.refresh")}
             title={t("common.refresh")}
-            onClick={() => void load(page)}
+            onClick={() => void rowsQuery.refetch()}
           >
             {busy ? "…" : <Icon name="refresh" />}
           </button>
@@ -499,7 +508,8 @@ export default function TableData({
             </div>
           )
         ) : (
-          !err && <div className={busy ? "muted loading" : "muted"}>{busy ? t("tables.loadingRows") : t("tables.noRows")}</div>
+          // No cached page for this table yet — the only place a cold load is visible.
+          !err && (busy ? <Skeleton lines={8} /> : <div className="muted">{t("tables.noRows")}</div>)
         )}
 
         {panelOpen && (
