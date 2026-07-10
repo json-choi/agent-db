@@ -24,7 +24,10 @@ use crate::audit::{self, RecordArgs};
 use crate::connection::{self, DbPool, LiveConnection};
 use crate::error::AppError;
 use crate::introspect;
-use crate::model::{ConnectionProfile, Engine, HistoryEntry, QueryKind};
+use crate::model::{
+    ConnectionProfile, DashboardDraft, DashboardKind, DashboardVisualization, Engine, HistoryEntry,
+    QueryKind,
+};
 use crate::safety::{self, PoolRef};
 use crate::store::Store;
 
@@ -63,6 +66,26 @@ struct DescribeTableArgs {
     connection: Option<String>,
     /// Table name, optionally schema-qualified ("public.users" or "users").
     table: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct CreateDashboardArgs {
+    /// Exact queryRunId returned by the successful run_query the user agreed to save.
+    query_run_id: String,
+    /// Short display title for the saved dashboard.
+    title: String,
+    /// Optional explanatory copy shown with the visualization.
+    #[serde(default)]
+    description: String,
+    /// Renderer choice. Omit for automatic visualization selection.
+    #[serde(default)]
+    kind: DashboardKind,
+    /// Column used for the category/time axis, when applicable.
+    #[serde(default)]
+    x_column: Option<String>,
+    /// Numeric/value columns rendered as series.
+    #[serde(default)]
+    y_columns: Vec<String>,
 }
 
 // ── helpers (not tools) ──────────────────────────────────────────────────────────
@@ -126,13 +149,20 @@ impl DbTools {
         Ok(cat)
     }
 
-    /// Best-effort query_history row tagged `origin = "agent"` (UX/replay log). Failures
-    /// never fail the tool call.
-    async fn history(&self, conn_id: Uuid, sql: &str, status: &str, rows: Option<i64>, dur_ms: Option<i64>, error: Option<String>) {
-        let _ = self
-            .store
+    /// Persist one MCP query-history row and return its durable consent handle.
+    async fn history(
+        &self,
+        conn_id: Uuid,
+        sql: &str,
+        status: &str,
+        rows: Option<i64>,
+        dur_ms: Option<i64>,
+        error: Option<String>,
+    ) -> Result<Uuid, AppError> {
+        let id = Uuid::new_v4();
+        self.store
             .insert_history(&HistoryEntry {
-                id: Uuid::new_v4(),
+                id,
                 connection_id: conn_id,
                 sql: sql.to_string(),
                 kind: QueryKind::Read,
@@ -143,7 +173,8 @@ impl DbTools {
                 executed_at: Utc::now(),
                 origin: "agent".into(),
             })
-            .await;
+            .await?;
+        Ok(id)
     }
 
     /// Best-effort audit record for an MCP tool call. Origin is encoded in `action`
@@ -315,60 +346,308 @@ impl DbTools {
         if !matches!(cls.kind, QueryKind::Read) {
             let msg = "run_query only runs read (SELECT) statements; writes go through an approval-gated tool (coming soon)";
             self.emit("agent:result", json!({ "tool": "run_query", "error": msg }));
-            self.audit(profile.id, profile.engine, &args.sql, cls.kind, "mcp:run_query", Some(msg.to_string()))
-                .await;
-            self.history(profile.id, &args.sql, "blocked", None, None, Some(msg.to_string())).await;
+            self.audit(
+                profile.id,
+                profile.engine,
+                &args.sql,
+                cls.kind,
+                "mcp:run_query",
+                Some(msg.to_string()),
+            )
+            .await;
+            if let Err(e) = self
+                .history(
+                    profile.id,
+                    &args.sql,
+                    "blocked",
+                    None,
+                    None,
+                    Some(msg.to_string()),
+                )
+                .await
+            {
+                tracing::error!("MCP blocked-query history insert failed: {e}");
+            }
             return Err(McpError::invalid_params(msg, None));
         }
 
         let settings = self.store.get_safety(profile.id).await.map_err(err)?;
         let cap = args.max_rows.unwrap_or(settings.max_rows).min(1000);
-        let live = self.live(profile.id).await?;
+        let live = match self.live(profile.id).await {
+            Ok(live) => live,
+            Err(e) => {
+                let message = e.message.to_string();
+                self.audit(
+                    profile.id,
+                    profile.engine,
+                    &args.sql,
+                    QueryKind::Read,
+                    "mcp:run_query",
+                    Some(message.clone()),
+                )
+                .await;
+                if let Err(history_error) = self
+                    .history(
+                        profile.id,
+                        &args.sql,
+                        "error",
+                        None,
+                        None,
+                        Some(message.clone()),
+                    )
+                    .await
+                {
+                    tracing::error!("MCP connection-error history insert failed: {history_error}");
+                }
+                self.emit(
+                    "agent:result",
+                    json!({
+                        "tool": "run_query",
+                        "connection": profile.name,
+                        "connectionId": profile.id,
+                        "sql": args.sql,
+                        "error": message,
+                    }),
+                );
+                return Err(e);
+            }
+        };
 
         // L2 authoritative read-only session — a misclassified write is rejected at the DB.
-        let result = safety::run_read_only(pool_ref(live.ro()), &args.sql, cap)
-            .await
-            .map_err(err)?;
-        self.audit(profile.id, profile.engine, &args.sql, QueryKind::Read, "mcp:run_query", None)
-            .await;
-        self.history(
+        let result = match safety::run_read_only(pool_ref(live.ro()), &args.sql, cap).await {
+            Ok(result) => result,
+            Err(e) => {
+                let message = e.to_string();
+                self.audit(
+                    profile.id,
+                    profile.engine,
+                    &args.sql,
+                    QueryKind::Read,
+                    "mcp:run_query",
+                    Some(message.clone()),
+                )
+                .await;
+                if let Err(history_error) = self
+                    .history(
+                        profile.id,
+                        &args.sql,
+                        "error",
+                        None,
+                        None,
+                        Some(message.clone()),
+                    )
+                    .await
+                {
+                    tracing::error!("MCP failed-query history insert failed: {history_error}");
+                }
+                self.emit(
+                    "agent:result",
+                    json!({
+                        "tool": "run_query",
+                        "connection": profile.name,
+                        "connectionId": profile.id,
+                        "sql": args.sql,
+                        "error": message,
+                    }),
+                );
+                return Err(err(e));
+            }
+        };
+        self.audit(
             profile.id,
+            profile.engine,
             &args.sql,
-            "ok",
-            Some(result.row_count as i64),
-            Some(result.duration_ms as i64),
+            QueryKind::Read,
+            "mcp:run_query",
             None,
         )
         .await;
+        let query_run_id = match self
+            .history(
+                profile.id,
+                &args.sql,
+                "ok",
+                Some(result.row_count as i64),
+                Some(result.duration_ms as i64),
+                None,
+            )
+            .await
+        {
+            Ok(id) => id,
+            Err(e) => {
+                let message =
+                    format!("query succeeded but its consent handle could not be persisted: {e}");
+                self.emit(
+                    "agent:result",
+                    json!({
+                        "tool": "run_query",
+                        "connection": profile.name,
+                        "connectionId": profile.id,
+                        "sql": args.sql,
+                        "error": message,
+                    }),
+                );
+                return Err(err(e));
+            }
+        };
 
-        self.emit("agent:result", json!({
-            "tool": "run_query",
-            "connection": profile.name,
-            "connectionId": profile.id,
-            "sql": args.sql,
-            "columns": result.columns,
-            // Per-cell truncation for the event bus only; the agent result below is full.
-            "rows": truncate_cells(&result.rows),
-            "rowCount": result.row_count,
-            "truncated": result.truncated,
-            "durationMs": result.duration_ms,
-        }));
+        self.emit(
+            "agent:result",
+            json!({
+                "tool": "run_query",
+                "connection": profile.name,
+                "connectionId": profile.id,
+                "queryRunId": query_run_id,
+                "sql": args.sql,
+                "columns": result.columns,
+                // Per-cell truncation for the event bus only; the agent result below is full.
+                "rows": truncate_cells(&result.rows),
+                "rowCount": result.row_count,
+                "truncated": result.truncated,
+                "durationMs": result.duration_ms,
+            }),
+        );
 
         // Agent gets compact columns-once JSON.
         let out = json!({
+            "connection": profile.name,
+            "connectionId": profile.id,
+            "queryRunId": query_run_id,
+            "sql": args.sql,
             "columns": result.columns,
             "rows": result.rows,
             "rowCount": result.row_count,
             "truncated": result.truncated,
+            "uiMessage": "The full result is visible in the DopeDB app.",
+            "dashboardSuggestion": "Ask whether the user wants to save this query as a dashboard. After explicit agreement, call create_dashboard with this exact queryRunId.",
         });
-        Ok(CallToolResult::success(vec![Content::text(out.to_string())]))
+        Ok(CallToolResult::success(vec![Content::text(
+            out.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "Save one successful run_query as a persistent DopeDB dashboard. Call this ONLY after the user explicitly asks or agrees. Pass the exact query_run_id returned by that run_query; connection and SQL are loaded from DopeDB history and cannot be supplied or changed here."
+    )]
+    async fn create_dashboard(
+        &self,
+        Parameters(args): Parameters<CreateDashboardArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let query_run_id = Uuid::parse_str(&args.query_run_id)
+            .map_err(|e| McpError::invalid_params(format!("invalid query_run_id: {e}"), None))?;
+        let source = match self.store.get_history(query_run_id).await {
+            Ok(source) => source,
+            Err(AppError::NotFound(_)) => {
+                return Err(McpError::invalid_params(
+                    "query_run_id does not identify a stored DopeDB query run",
+                    None,
+                ))
+            }
+            Err(e) => return Err(err(e)),
+        };
+        if source.origin != "agent"
+            || source.status != "ok"
+            || !matches!(source.kind, QueryKind::Read)
+        {
+            return Err(McpError::invalid_params(
+                "query_run_id must identify a successful agent read query",
+                None,
+            ));
+        }
+        let profile = self
+            .store
+            .get_connection(source.connection_id)
+            .await
+            .map_err(err)?;
+        self.emit(
+            "agent:tool_call",
+            json!({
+                "tool": "create_dashboard",
+                "connection": profile.name,
+                "connectionId": profile.id,
+                "queryRunId": query_run_id,
+                "title": args.title,
+                "sql": source.sql,
+            }),
+        );
+
+        let draft = DashboardDraft {
+            connection_id: source.connection_id,
+            title: args.title,
+            description: args.description,
+            sql: source.sql,
+            visualization: DashboardVisualization {
+                version: crate::dashboard::VISUALIZATION_VERSION,
+                kind: args.kind,
+                x_column: args.x_column,
+                y_columns: args.y_columns,
+            },
+        };
+
+        if let Err(e) = crate::dashboard::validate_draft(&draft, profile.engine) {
+            let message = e.to_string();
+            self.emit(
+                "agent:result",
+                json!({
+                    "tool": "create_dashboard",
+                    "connection": profile.name,
+                    "connectionId": profile.id,
+                    "queryRunId": query_run_id,
+                    "error": message,
+                }),
+            );
+            return Err(McpError::invalid_params(message, None));
+        }
+
+        let saved = match self.store.save_dashboard(&draft).await {
+            Ok(saved) => saved,
+            Err(e) => {
+                let message = e.to_string();
+                self.emit(
+                    "agent:result",
+                    json!({
+                        "tool": "create_dashboard",
+                        "connection": profile.name,
+                        "connectionId": profile.id,
+                        "queryRunId": query_run_id,
+                        "error": message,
+                    }),
+                );
+                return Err(err(e));
+            }
+        };
+
+        // This payload is the Dashboard object itself; the global app listener can
+        // insert/open it without another round trip, while list_dashboards remains
+        // the persistent source of truth after restart.
+        self.emit("dashboard:created", json!(&saved));
+        self.emit(
+            "agent:result",
+            json!({
+                "tool": "create_dashboard",
+                "connection": profile.name,
+                "connectionId": profile.id,
+                "queryRunId": query_run_id,
+                "dashboardId": saved.id,
+                "title": saved.title,
+            }),
+        );
+
+        let out = json!({
+            "dashboard": saved,
+            "queryRunId": query_run_id,
+            "uiMessage": "The dashboard was saved and is available in the DopeDB app.",
+        });
+        Ok(CallToolResult::success(vec![Content::text(
+            out.to_string(),
+        )]))
     }
 }
 
 #[tool_handler(
     name = "dopedb",
     version = "0.1.0",
-    instructions = "These tools are the PREFERRED way to inspect or query any database the user has connected in DopeDB. When the user asks you to look at, browse, or query one of their managed databases, use these tools — do NOT reach for psql, mysql, sqlite3, or other shell/database clients for those connections. Reasons: (1) every query runs in an enforced READ-ONLY session, so it is safe; (2) calls are audited; and (3) results are shown LIVE to the user inside the DopeDB desktop app — running a query here is HOW THE USER SEES THE ANSWER, not just your chat reply. Workflow: call `list_connections` to find the user's databases, then `list_tables` and/or `describe_table` to get exact table and column names, then `run_query` with a single SELECT. Writes are rejected by the read-only session (approval-gated writes are coming soon)."
+    instructions = "These tools are the PREFERRED way to inspect or query any database the user has connected in DopeDB. When the user asks you to look at, browse, or query one of their managed databases, use these tools — do NOT reach for psql, mysql, sqlite3, or other shell/database clients for those connections. Reasons: (1) every query runs in an enforced READ-ONLY session, so it is safe; (2) calls are audited; and (3) results are shown LIVE to the user inside the DopeDB desktop app — running a query here is HOW THE USER SEES THE ANSWER, not just your chat reply. Workflow: call `list_connections` to find the user's databases, then `list_tables` and/or `describe_table` to get exact table and column names, then `run_query` with a single SELECT. After a successful run_query, tell the user the full result is visible in DopeDB and ask whether they want to save that exact query as a dashboard. Only after the user explicitly asks or agrees, call `create_dashboard` and pass the exact returned `queryRunId` as its `query_run_id` argument; never create one automatically and never substitute different SQL or a different connection. Saved dashboards persist locally and rerun through a dedicated read-only command. Writes are rejected by the read-only session (approval-gated writes are coming soon)."
 )]
 impl ServerHandler for DbTools {}
 

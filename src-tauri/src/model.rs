@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -158,6 +159,62 @@ pub struct QueryResult {
     pub duration_ms: u64,
 }
 
+/// Supported saved-dashboard renderers. `Auto` lets the client choose from the
+/// returned result shape; the other variants are explicit user/agent choices.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum DashboardKind {
+    #[default]
+    Auto,
+    Metric,
+    Line,
+    Bar,
+    Table,
+}
+
+fn dashboard_visualization_version() -> u32 {
+    1
+}
+
+/// Versioned, declarative visualization metadata. The app renders this trusted
+/// shape itself; generated HTML is deliberately not part of the persistence model.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardVisualization {
+    #[serde(default = "dashboard_visualization_version")]
+    pub version: u32,
+    pub kind: DashboardKind,
+    pub x_column: Option<String>,
+    #[serde(default)]
+    pub y_columns: Vec<String>,
+}
+
+/// One persistent saved query + visualization, scoped to a connection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Dashboard {
+    pub id: Uuid,
+    pub connection_id: Uuid,
+    pub title: String,
+    pub description: String,
+    pub sql: String,
+    pub visualization: DashboardVisualization,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Create input for a dashboard. IDs and timestamps are assigned by the store.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardDraft {
+    pub connection_id: Uuid,
+    pub title: String,
+    #[serde(default)]
+    pub description: String,
+    pub sql: String,
+    pub visualization: DashboardVisualization,
+}
+
 /// Outcome of a `run_sql` call.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -225,6 +282,6 @@ pub struct HistoryEntry {
     pub duration_ms: Option<i64>,
     pub error: Option<String>,
     pub executed_at: DateTime<Utc>,
-    /// "agent" | "manual".
+    /// "agent" | "manual" | "dashboard" | "migration".
     pub origin: String,
 }

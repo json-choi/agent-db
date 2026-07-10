@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS query_history (
     duration_ms   INTEGER,
     error         TEXT,
     executed_at   TEXT NOT NULL,
-    origin        TEXT NOT NULL            -- agent|manual
+    origin        TEXT NOT NULL            -- agent|manual|dashboard|migration
 );
 CREATE INDEX IF NOT EXISTS idx_history_conn ON query_history(connection_id, executed_at);
 
@@ -79,6 +79,19 @@ CREATE TABLE IF NOT EXISTS snippets (
     tags          TEXT NOT NULL DEFAULT '[]',   -- JSON array
     updated_at    TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS dashboards (
+    id                 TEXT PRIMARY KEY,
+    connection_id      TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
+    title              TEXT NOT NULL,
+    description        TEXT NOT NULL DEFAULT '',
+    sql                TEXT NOT NULL,
+    visualization_json TEXT NOT NULL,
+    created_at         TEXT NOT NULL,
+    updated_at         TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_dashboards_conn_updated
+    ON dashboards(connection_id, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS schema_cache (
     connection_id   TEXT PRIMARY KEY REFERENCES connections(id) ON DELETE CASCADE,

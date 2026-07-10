@@ -28,6 +28,7 @@ export interface AgentActivity {
   rowsDropped?: boolean; // rows evicted to bound memory; metadata (columns/rowCount) kept
   sql?: string;
   connection?: string; // source connection name, for the result provenance header
+  connectionId?: string; // durable source id used when saving an MCP result as a dashboard
   payload?: Record<string, unknown>; // sanitized event payload for the context ledger
 }
 
@@ -116,6 +117,8 @@ export function AgentFeedProvider({ children }: { children: ReactNode }) {
         detail: String(e.payload.sql ?? e.payload.table ?? e.payload.connection ?? ""),
         sql: typeof e.payload.sql === "string" ? e.payload.sql : undefined,
         connection: typeof e.payload.connection === "string" ? e.payload.connection : undefined,
+        connectionId:
+          typeof e.payload.connectionId === "string" ? e.payload.connectionId : undefined,
         payload: sanitizePayload(e.payload),
       }),
     ).catch((e) => console.error("agent feed listen failed:", e));
@@ -128,6 +131,8 @@ export function AgentFeedProvider({ children }: { children: ReactNode }) {
         result: resultOf(e.payload),
         sql: typeof e.payload.sql === "string" ? e.payload.sql : undefined,
         connection: typeof e.payload.connection === "string" ? e.payload.connection : undefined,
+        connectionId:
+          typeof e.payload.connectionId === "string" ? e.payload.connectionId : undefined,
         payload: sanitizePayload(e.payload),
       }),
     ).catch((e) => console.error("agent feed listen failed:", e));

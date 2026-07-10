@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import {
   getSafety,
@@ -6,7 +7,12 @@ import {
   mcpPlatforms,
   mcpRuntimeStatus,
 } from "./ipc/commands";
-import type { CatalogTable, ConnectionProfile, SafetySettings } from "./ipc/types";
+import type {
+  CatalogTable,
+  ConnectionProfile,
+  Dashboard,
+  SafetySettings,
+} from "./ipc/types";
 import { errMessage } from "./ipc/types";
 import { buildConnectionSections, type SchemaConnectionGroup } from "./lib/schemaDiff";
 import { tableKey, tableLabel } from "./lib/tableRef";
@@ -14,6 +20,7 @@ import { ConnectionForm, DatabaseExplorer } from "./screens/Connections";
 import TableData from "./screens/Tables";
 import SchemaExplorer from "./screens/Schema";
 import Sql from "./screens/Sql";
+import Dashboards from "./screens/Dashboards";
 import Activity from "./screens/Activity";
 import Migrations from "./screens/Migrations";
 import Onboarding from "./screens/Onboarding";
@@ -27,14 +34,15 @@ import { useI18n, type I18nKey } from "./lib/i18n";
 
 // App-level tabs. Agent is a live feed/result surface, connection-independent; the rest
 // are per-connection data views. Migrations lives in the sidebar; Settings behind ⚙.
-type Tab = "data" | "schema" | "sql" | "agent" | "activity";
+type Tab = "data" | "schema" | "sql" | "dashboard" | "agent" | "activity";
 // Agent is last: it's connection-independent, so it sits apart from the per-connection
 // data tabs (the .agent-tab class pushes it right with a divider via shared CSS).
-const TABS: Tab[] = ["data", "schema", "sql", "activity", "agent"];
+const TABS: Tab[] = ["data", "schema", "sql", "dashboard", "activity", "agent"];
 const TAB_LABELS: Record<Tab, I18nKey> = {
   data: "tabs.data",
   schema: "tabs.schema",
   sql: "tabs.sql",
+  dashboard: "tabs.dashboard",
   activity: "tabs.activity",
   agent: "tabs.agent",
 };
@@ -192,6 +200,7 @@ function Shell() {
     return (TABS as string[]).includes(saved ?? "") ? (saved as Tab) : "data";
   });
   const [sqlDraft, setSqlDraft] = useState("SELECT 1;");
+  const [dashboardFocusId, setDashboardFocusId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<
@@ -204,6 +213,28 @@ function Shell() {
   const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
   const updateCheckInFlight = useRef(false);
   const lastUpdateCheckAt = useRef(0);
+
+  const openDashboard = useCallback((dashboard: Dashboard) => {
+    setSelectedId(dashboard.connectionId);
+    setSelectedTable(null);
+    setEditing(null);
+    setSettingsOpen(false);
+    setMigrationsOpen(false);
+    setDashboardFocusId(dashboard.id);
+    setTab("dashboard");
+  }, []);
+  const consumeDashboardFocus = useCallback(() => setDashboardFocusId(null), []);
+
+  // Both the local save command and MCP create_dashboard emit the same direct
+  // Dashboard payload. This makes an explicitly requested dashboard visible at once.
+  useEffect(() => {
+    const pending = listen<Dashboard>("dashboard:created", (event) => {
+      openDashboard(event.payload);
+    }).catch((error) => console.error("dashboard event listen failed:", error));
+    return () => {
+      void pending.then((unlisten) => unlisten && unlisten());
+    };
+  }, [openDashboard]);
 
   // Persist tab/selectedId so a restart resumes where the user left off (mirrors sidebarW).
   useEffect(() => {
@@ -393,6 +424,7 @@ function Shell() {
     setEditing(null);
     setSettingsOpen(false);
     setMigrationsOpen(false);
+    setDashboardFocusId(null);
     setTab(nextTab);
   }
 
@@ -553,7 +585,7 @@ function Shell() {
         </nav>
 
         <section className="tab-body" role="tabpanel">
-          {tab === "agent" && <AgentResultView />}
+          {tab === "agent" && <AgentResultView onDashboardSaved={openDashboard} />}
           {tab === "data" &&
             (!selected ? (
               needsConn
@@ -599,6 +631,17 @@ function Shell() {
               />
             ) : (
               safetyFallback
+            ))}
+          {tab === "dashboard" &&
+            (selected ? (
+              <Dashboards
+                connection={selected}
+                focusId={dashboardFocusId}
+                onFocusConsumed={consumeDashboardFocus}
+                onOpenAgent={() => setTab("agent")}
+              />
+            ) : (
+              needsConn
             ))}
           {tab === "activity" &&
             (selected ? (

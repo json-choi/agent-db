@@ -1,6 +1,7 @@
 // Agent workspace: result review, MCP context ledger, and policy/audit posture.
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import DataGrid from "./DataGrid";
+import DashboardDraftPanel from "./DashboardDraftPanel";
 import ResultToolbar from "./ResultToolbar";
 import { Icon } from "./Icon";
 import InfoTip from "./InfoTip";
@@ -8,6 +9,7 @@ import { stamp } from "../lib/export";
 import { fullTime } from "../lib/relTime";
 import { useAgentFeed, type AgentActivity } from "../lib/agentFeed";
 import { useI18n, type I18nKey } from "../lib/i18n";
+import type { Dashboard } from "../ipc/types";
 import "./AgentResultView.css";
 
 type AgentView = "result" | "context" | "audit";
@@ -147,13 +149,18 @@ function AgentEmptyState() {
   );
 }
 
-export default function AgentResultView() {
+export default function AgentResultView({
+  onDashboardSaved,
+}: {
+  onDashboardSaved: (dashboard: Dashboard) => void;
+}) {
   const { t } = useI18n();
   const { feed, latest } = useAgentFeed();
   const [view, setView] = useState<AgentView>("result");
   const [selected, setSelected] = useState<AgentActivity | null>(() =>
     selectedResult(feed, latest),
   );
+  const [dashboardSourceId, setDashboardSourceId] = useState<number | null>(null);
 
   // Auto-follow only while the user is already on the newest event/result.
   const following = !selected || selected.id === latest?.id;
@@ -243,12 +250,48 @@ export default function AgentResultView() {
                     )}{" "}
                     · <span title={fullTime(activeResult.iso)}>{activeResult.ts}</span>
                   </span>
-                  <ResultToolbar
-                    columns={activeResult.result.columns}
-                    rows={activeResult.result.rows}
-                    filenameBase={`agent-${stamp()}`}
-                  />
+                  <div className="mcp-result-actions">
+                    <ResultToolbar
+                      columns={activeResult.result.columns}
+                      rows={activeResult.result.rows}
+                      filenameBase={`agent-${stamp()}`}
+                    />
+                    {activeResult.tool === "run_query" &&
+                      activeResult.sql &&
+                      activeResult.connectionId && (
+                        <button
+                          className={
+                            dashboardSourceId === activeResult.id
+                              ? "btn small primary"
+                              : "btn small"
+                          }
+                          onClick={() =>
+                            setDashboardSourceId((current) =>
+                              current === activeResult.id ? null : activeResult.id,
+                            )
+                          }
+                        >
+                          <Icon name="dashboard" />
+                          {t("dashboard.saveResult")}
+                        </button>
+                      )}
+                  </div>
                 </div>
+                {dashboardSourceId === activeResult.id &&
+                  activeResult.sql &&
+                  activeResult.connectionId && (
+                    <DashboardDraftPanel
+                      key={activeResult.id}
+                      connectionId={activeResult.connectionId}
+                      sql={activeResult.sql}
+                      result={activeResult.result}
+                      onCancel={() => setDashboardSourceId(null)}
+                      onSaved={(dashboard) => {
+                        setDashboardSourceId(null);
+                        onDashboardSaved(dashboard);
+                      }}
+                    />
+                  )}
                 <DataGrid result={activeResult.result} />
               </div>
             ) : (

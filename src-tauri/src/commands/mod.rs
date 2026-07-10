@@ -19,8 +19,8 @@ use crate::error::{AppError, AppResult};
 use crate::executor;
 use crate::introspect;
 use crate::model::{
-    AuditEntry, Classification, ConnectionProfile, Engine, ExecOutcome, HistoryEntry, PreviewMode,
-    PreviewReport, QueryKind, SafetySettings,
+    AuditEntry, Classification, ConnectionProfile, Dashboard, DashboardDraft, Engine, ExecOutcome,
+    HistoryEntry, PreviewMode, PreviewReport, QueryKind, QueryResult, SafetySettings,
 };
 use crate::safety::{classify, decide, preview, GateDecision, PoolRef};
 use crate::state::AppState;
@@ -191,6 +191,140 @@ pub async fn test_connection_profile(
     let secret = password.unwrap_or_default();
     let live = connection::connect(&profile, &secret).await?;
     live.test().await
+}
+
+// ── saved dashboards ─────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn list_dashboards(
+    state: State<'_, AppState>,
+    connection_id: Uuid,
+) -> AppResult<Vec<Dashboard>> {
+    // Distinguish an unknown connection from a valid connection with no dashboards.
+    state.store.get_connection(connection_id).await?;
+    state.store.list_dashboards(connection_id).await
+}
+
+#[tauri::command]
+pub async fn save_dashboard(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    draft: DashboardDraft,
+) -> AppResult<Dashboard> {
+    use tauri::Emitter;
+
+    let profile = state.store.get_connection(draft.connection_id).await?;
+    crate::dashboard::validate_draft(&draft, profile.engine)?;
+    let saved = state.store.save_dashboard(&draft).await?;
+    if let Err(e) = app.emit("dashboard:created", &saved) {
+        tracing::warn!("failed to emit dashboard:created: {e}");
+    }
+    Ok(saved)
+}
+
+#[tauri::command]
+pub async fn delete_dashboard(state: State<'_, AppState>, id: Uuid) -> AppResult<()> {
+    state.store.delete_dashboard(id).await
+}
+
+/// Rerun one saved dashboard through the authoritative L2 read-only session.
+/// Connection auto-run/write settings never select a writable executor here; the
+/// current connection engine is used to revalidate the stored SQL on every run.
+#[tauri::command]
+pub async fn run_dashboard(
+    state: State<'_, AppState>,
+    id: Uuid,
+    query_id: Option<Uuid>,
+) -> AppResult<QueryResult> {
+    let dashboard = state.store.get_dashboard(id).await?;
+    let profile = state.store.get_connection(dashboard.connection_id).await?;
+    let draft = DashboardDraft {
+        connection_id: dashboard.connection_id,
+        title: dashboard.title.clone(),
+        description: dashboard.description.clone(),
+        sql: dashboard.sql.clone(),
+        visualization: dashboard.visualization.clone(),
+    };
+    if let Err(e) = crate::dashboard::validate_draft(&draft, profile.engine) {
+        let kind = classify(&dashboard.sql, profile.engine)
+            .map(|classification| classification.kind)
+            .unwrap_or(QueryKind::Write);
+        record_run(
+            &state,
+            dashboard.connection_id,
+            profile.engine,
+            &dashboard.sql,
+            kind,
+            "dashboard:run",
+            "blocked",
+            None,
+            None,
+            Some(e.to_string()),
+            "dashboard",
+        )
+        .await;
+        return Err(e);
+    }
+
+    let settings = state.store.get_safety(dashboard.connection_id).await?;
+    let live = match get_live(&state, dashboard.connection_id).await {
+        Ok(live) => live,
+        Err(e) => {
+            record_run(
+                &state,
+                dashboard.connection_id,
+                profile.engine,
+                &dashboard.sql,
+                QueryKind::Read,
+                "dashboard:run",
+                "error",
+                None,
+                None,
+                Some(e.to_string()),
+                "dashboard",
+            )
+            .await;
+            return Err(e);
+        }
+    };
+    let max_rows = settings.max_rows.clamp(1, 100_000);
+    let run = crate::safety::run_read_only(pool_ref(live.ro()), &dashboard.sql, max_rows);
+    match executor::cancel::guard(query_id, executor::cancel::QUERY_TIMEOUT, run).await {
+        Ok(result) => {
+            record_run(
+                &state,
+                dashboard.connection_id,
+                profile.engine,
+                &dashboard.sql,
+                QueryKind::Read,
+                "dashboard:run",
+                "ok",
+                Some(result.row_count as i64),
+                Some(result.duration_ms as i64),
+                None,
+                "dashboard",
+            )
+            .await;
+            Ok(result)
+        }
+        Err(e) => {
+            record_run(
+                &state,
+                dashboard.connection_id,
+                profile.engine,
+                &dashboard.sql,
+                QueryKind::Read,
+                "dashboard:run",
+                "error",
+                None,
+                None,
+                Some(e.to_string()),
+                "dashboard",
+            )
+            .await;
+            Err(e)
+        }
+    }
 }
 
 // ── schema ───────────────────────────────────────────────────────────────────

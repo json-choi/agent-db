@@ -1,6 +1,6 @@
 //! The local application store: a WAL SQLite DB at
 //! `dirs::data_dir()/dopedb/app.db` holding connections, safety settings,
-//! query history, the audit log, snippets, and the schema cache.
+//! query history, the audit log, saved dashboards, snippets, and the schema cache.
 //!
 //! Secrets are NEVER stored here — connections carry only a `secret_ref` that
 //! points at an OS credential-store item. Row⇄model mapping is manual (`sqlx::query`,
@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::model::{
-    ConnectionProfile, Engine, HistoryEntry, QueryKind, SafetySettings,
+    ConnectionProfile, Dashboard, DashboardDraft, Engine, HistoryEntry, QueryKind, SafetySettings,
 };
 
 /// Handle to the local app.db. Cheap to clone (the pool is an `Arc` internally).
@@ -264,6 +264,82 @@ impl Store {
         rows.iter().map(row_to_history).collect()
     }
 
+    pub async fn get_history(&self, id: Uuid) -> AppResult<HistoryEntry> {
+        let row = sqlx::query("SELECT * FROM query_history WHERE id = ?1")
+            .bind(id.to_string())
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("query history {id}")))?;
+        row_to_history(&row)
+    }
+
+    // ── saved dashboards ────────────────────────────────────────────────────
+
+    /// Persist a new saved dashboard. IDs and timestamps are assigned here so
+    /// Tauri and MCP callers share exactly the same creation semantics.
+    pub async fn save_dashboard(&self, draft: &DashboardDraft) -> AppResult<Dashboard> {
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+        let visualization_json = serde_json::to_string(&draft.visualization)?;
+        sqlx::query(
+            r#"INSERT INTO dashboards
+                (id, connection_id, title, description, sql, visualization_json,
+                 created_at, updated_at)
+               VALUES (?1,?2,?3,?4,?5,?6,?7,?7)"#,
+        )
+        .bind(id.to_string())
+        .bind(draft.connection_id.to_string())
+        .bind(&draft.title)
+        .bind(&draft.description)
+        .bind(&draft.sql)
+        .bind(visualization_json)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(Dashboard {
+            id,
+            connection_id: draft.connection_id,
+            title: draft.title.clone(),
+            description: draft.description.clone(),
+            sql: draft.sql.clone(),
+            visualization: draft.visualization.clone(),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    pub async fn list_dashboards(&self, connection_id: Uuid) -> AppResult<Vec<Dashboard>> {
+        let rows = sqlx::query(
+            "SELECT * FROM dashboards WHERE connection_id = ?1
+             ORDER BY updated_at DESC, rowid DESC",
+        )
+        .bind(connection_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(row_to_dashboard).collect()
+    }
+
+    pub async fn get_dashboard(&self, id: Uuid) -> AppResult<Dashboard> {
+        let row = sqlx::query("SELECT * FROM dashboards WHERE id = ?1")
+            .bind(id.to_string())
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("dashboard {id}")))?;
+        row_to_dashboard(&row)
+    }
+
+    pub async fn delete_dashboard(&self, id: Uuid) -> AppResult<()> {
+        let result = sqlx::query("DELETE FROM dashboards WHERE id = ?1")
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?;
+        if result.rows_affected() == 0 {
+            return Err(AppError::NotFound(format!("dashboard {id}")));
+        }
+        Ok(())
+    }
+
     // ── schema cache ───────────────────────────────────────────────────────
 
     /// Returns the cached catalog JSON for a connection, if any.
@@ -402,6 +478,22 @@ fn row_to_history(r: &sqlx::sqlite::SqliteRow) -> AppResult<HistoryEntry> {
     })
 }
 
+fn row_to_dashboard(r: &sqlx::sqlite::SqliteRow) -> AppResult<Dashboard> {
+    let visualization_json: String = r.try_get("visualization_json")?;
+    let visualization = serde_json::from_str(&visualization_json)?;
+    crate::dashboard::validate_visualization(&visualization)?;
+    Ok(Dashboard {
+        id: parse_uuid(r.try_get("id")?)?,
+        connection_id: parse_uuid(r.try_get("connection_id")?)?,
+        title: r.try_get("title")?,
+        description: r.try_get("description")?,
+        sql: r.try_get("sql")?,
+        visualization,
+        created_at: r.try_get("created_at")?,
+        updated_at: r.try_get("updated_at")?,
+    })
+}
+
 // ── enum ⇄ text (kept in sync with model.rs serde `camelCase`) ──────────────
 
 pub(crate) fn engine_str(e: Engine) -> &'static str {
@@ -446,9 +538,17 @@ pub(crate) fn parse_uuid(s: String) -> AppResult<Uuid> {
 
 #[cfg(test)]
 mod tests {
-    use super::migrate_audit_no_cascade;
+    use super::{migrate_audit_no_cascade, migrations, Store};
+    use crate::error::AppError;
+    use crate::model::{
+        ConnectionProfile, DashboardDraft, DashboardKind, DashboardVisualization, Engine,
+        HistoryEntry, QueryKind,
+    };
+    use chrono::Utc;
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use std::collections::HashMap;
     use std::str::FromStr;
+    use uuid::Uuid;
 
     // The OLD schema cascades; after migration, deleting a connection must NOT erase
     // its audit rows (the compliance guarantee), and re-running must be a no-op.
@@ -502,5 +602,106 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(n, 1, "audit history must survive connection deletion");
+    }
+
+    #[tokio::test]
+    async fn dashboard_round_trip_delete_and_connection_cascade() {
+        let opts = SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::raw_sql(migrations::SCHEMA)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let store = Store::from_pool_for_test(pool);
+        let connection_id = Uuid::new_v4();
+        store
+            .upsert_connection(&ConnectionProfile {
+                id: connection_id,
+                name: "analytics".into(),
+                engine: Engine::Sqlite,
+                host: String::new(),
+                port: 0,
+                database: ":memory:".into(),
+                username: String::new(),
+                sslmode: "disable".into(),
+                extra_params: HashMap::new(),
+                readonly_default: true,
+                allow_writes: false,
+                secret_ref: None,
+                project_dir: None,
+                env: None,
+                schema_group: None,
+            })
+            .await
+            .unwrap();
+
+        let draft = DashboardDraft {
+            connection_id,
+            title: "Daily visitors".into(),
+            description: "Unique visitors per day".into(),
+            sql: "SELECT day, visitors FROM daily_visitors".into(),
+            visualization: DashboardVisualization {
+                version: 1,
+                kind: DashboardKind::Line,
+                x_column: Some("day".into()),
+                y_columns: vec!["visitors".into()],
+            },
+        };
+        let saved = store.save_dashboard(&draft).await.unwrap();
+        let listed = store.list_dashboards(connection_id).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, saved.id);
+        assert_eq!(listed[0].visualization, draft.visualization);
+        assert_eq!(store.get_dashboard(saved.id).await.unwrap().id, saved.id);
+
+        let history = HistoryEntry {
+            id: Uuid::new_v4(),
+            connection_id,
+            sql: "SELECT 1".into(),
+            kind: QueryKind::Read,
+            status: "ok".into(),
+            row_count: Some(1),
+            duration_ms: Some(1),
+            error: None,
+            executed_at: Utc::now(),
+            origin: "agent".into(),
+        };
+        store.insert_history(&history).await.unwrap();
+        assert_eq!(store.get_history(history.id).await.unwrap().id, history.id);
+
+        sqlx::query(
+            r#"UPDATE dashboards
+               SET visualization_json = '{"version":2,"kind":"line","xColumn":null,"yColumns":[]}'
+               WHERE id = ?1"#,
+        )
+        .bind(saved.id.to_string())
+        .execute(store.pool())
+        .await
+        .unwrap();
+        assert!(matches!(
+            store.get_dashboard(saved.id).await,
+            Err(AppError::Config(_))
+        ));
+
+        store.delete_dashboard(saved.id).await.unwrap();
+        assert!(store
+            .list_dashboards(connection_id)
+            .await
+            .unwrap()
+            .is_empty());
+
+        store.save_dashboard(&draft).await.unwrap();
+        store.delete_connection(connection_id).await.unwrap();
+        assert!(store
+            .list_dashboards(connection_id)
+            .await
+            .unwrap()
+            .is_empty());
     }
 }

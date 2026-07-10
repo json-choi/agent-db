@@ -1,0 +1,42 @@
+.dashboard-save-panel {
+  display: grid;
+  gap: var(--ds-space-3);
+  margin: var(--ds-space-2) 0 var(--ds-space-3);
+}
+
+.dashboard-save-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ds-space-3);
+}
+
+.dashboard-save-head .ds-title-line > .icon {
+  color: var(--ds-accent-text);
+}
+
+.dashboard-save-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(160px, 1fr);
+  gap: var(--ds-space-3);
+}
+
+.dashboard-save-fields label {
+  min-width: 0;
+  display: grid;
+  gap: var(--ds-space-1);
+  color: var(--ds-text-muted);
+  font-size: var(--ds-font-size-sm);
+}
+
+.dashboard-save-note {
+  margin: 0;
+  font-size: var(--ds-font-size-sm);
+  line-height: var(--ds-line-body);
+}
+
+@media (max-width: 760px) {
+  .dashboard-save-fields {
+    grid-template-columns: 1fr;
+  }
+}

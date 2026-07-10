@@ -23,7 +23,8 @@ The Rust core owns the trust boundary:
 - `executor/`: read execution and gated write execution
 - `audit/`: query history and hash-chained audit records
 - `mcp/`: local MCP server, stdio bridge listener, tool handlers, and client config helpers
-- `store/`: local SQLite app store under the platform app data directory
+- `store/`: local SQLite app store under the platform app data directory, including
+  connection-scoped saved dashboard definitions
 
 The frontend renders database state and approval decisions. It does not own the safety decision. Writes and DDL require the Rust path to see both explicit approval and `allow_writes = true`.
 
@@ -42,8 +43,11 @@ Current MCP tools:
 - `list_tables`
 - `describe_table`
 - `run_query`
+- `create_dashboard`
 
-All current MCP tools are read-only. `run_query` rejects non-read SQL before execution, and the database read-only session is the authoritative guard. MCP write tools are intentionally deferred.
+All target-database access exposed by MCP is read-only. `run_query` rejects non-read SQL before execution, and the database read-only session is the authoritative guard. Each successful query returns a durable `queryRunId`. After explicit user agreement, `create_dashboard` must reference that exact ID; DopeDB loads the connection and SQL from the successful agent history row instead of accepting replacements from the agent. Dashboard creation only writes to DopeDB's local app store and never to the target database. MCP target-database write tools are intentionally deferred.
+
+Saved dashboards belong to a connection and persist in `app.db`, so they are restored when that connection is opened again. A dashboard stores SQL plus a bounded, versioned declarative visualization (`auto`, `metric`, `line`, `bar`, or `table`); it does not store generated HTML. Opening a dashboard calls the dedicated `run_dashboard` command, which reloads and revalidates the definition against the current engine and always uses the L2 read-only session independently of write/auto-run settings. Result rows are never persisted.
 
 Supported client helpers in the app:
 

@@ -11,3 +11,4 @@ src-tauri/binaries/
 src-tauri/gen/
 .vercel
 .env*.local
+/.agents

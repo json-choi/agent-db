@@ -221,6 +221,19 @@
   margin-bottom: var(--ds-space-1);
 }
 
+.mcp-result-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--ds-space-2);
+  margin-left: auto;
+}
+
+.mcp-result-actions .result-tools {
+  margin-left: 0;
+}
+
 .mcp-result-sql {
   max-width: 70%;
   overflow: hidden;
@@ -332,6 +345,12 @@
   .mcp-result-head {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .mcp-result-actions {
+    width: 100%;
+    justify-content: flex-start;
+    margin-left: 0;
   }
 
   .mcp-result-sql {

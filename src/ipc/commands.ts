@@ -9,6 +9,8 @@ import type {
   Catalog,
   Classification,
   ConnectionProfile,
+  Dashboard,
+  DashboardDraft,
   ExecOutcome,
   HistoryEntry,
   MigrationReport,
@@ -16,6 +18,7 @@ import type {
   ScriptOutcome,
   SafetySettings,
   PlatformInfo,
+  QueryResult,
 } from "./types";
 
 export function listConnections(): Promise<ConnectionProfile[]> {
@@ -88,8 +91,15 @@ export function runSql(
   sql: string,
   approved: boolean,
   queryId?: string,
+  origin?: string,
 ): Promise<ExecOutcome> {
-  return invoke("run_sql", { id, sql, approved, queryId: queryId ?? null });
+  return invoke("run_sql", {
+    id,
+    sql,
+    approved,
+    queryId: queryId ?? null,
+    origin: origin ?? null,
+  });
 }
 
 // Cancel an in-flight run_sql/run_script by its query id. Returns true if a running
@@ -143,6 +153,22 @@ export function auditSnapshot(id: string): Promise<AuditSnapshot> {
 
 export function listHistory(id: string): Promise<HistoryEntry[]> {
   return invoke("list_history", { id });
+}
+
+export function listDashboards(connectionId: string): Promise<Dashboard[]> {
+  return invoke("list_dashboards", { connectionId });
+}
+
+export function saveDashboard(draft: DashboardDraft): Promise<Dashboard> {
+  return invoke("save_dashboard", { draft });
+}
+
+export function deleteDashboard(id: string): Promise<void> {
+  return invoke("delete_dashboard", { id });
+}
+
+export function runDashboard(id: string, queryId?: string): Promise<QueryResult> {
+  return invoke("run_dashboard", { id, queryId: queryId ?? null });
 }
 
 export interface McpStatus {

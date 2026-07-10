@@ -37,6 +37,15 @@ const glyphs = {
       <path d="M3 9h18M3 15h18M9 3v18M15 3v18" />
     </>
   ),
+  dashboard: (
+    <>
+      <rect x="3" y="3" width="7" height="7" rx="1" />
+      <rect x="14" y="3" width="7" height="4" rx="1" />
+      <rect x="14" y="11" width="7" height="10" rx="1" />
+      <rect x="3" y="14" width="7" height="7" rx="1" />
+    </>
+  ),
+  chart: <path d="M4 19V9m6 10V5m6 14v-7m4 7H2" />,
   plus: <path d="M12 5v14M5 12h14" />,
   pencil: <path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />,
   copy: (

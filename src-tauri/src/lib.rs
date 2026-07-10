@@ -4,6 +4,7 @@
 mod audit;
 mod commands;
 mod connection;
+mod dashboard;
 mod error;
 mod executor;
 mod introspect;
@@ -77,6 +78,10 @@ pub fn run() {
             commands::delete_connection,
             commands::test_connection,
             commands::test_connection_profile,
+            commands::list_dashboards,
+            commands::save_dashboard,
+            commands::delete_dashboard,
+            commands::run_dashboard,
             commands::get_schema,
             commands::refresh_schema,
             introspect::get_table_ddl,
