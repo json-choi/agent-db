@@ -209,12 +209,6 @@ table.grid td.clickable {
   flex-wrap: wrap;
   margin-bottom: var(--ds-space-2);
 }
-.grid-toolbar .tb-sep {
-  width: 1px;
-  align-self: stretch;
-  background: var(--ds-border-subtle);
-  margin: 0 var(--ds-space-1);
-}
 .toolbar-menu {
   position: relative;
 }

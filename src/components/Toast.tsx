@@ -10,7 +10,7 @@ interface ToastItem {
   variant: Variant;
 }
 
-export type ToastFn = (msg: string, variant?: Variant) => void;
+type ToastFn = (msg: string, variant?: Variant) => void;
 
 const Ctx = createContext<ToastFn>(() => {});
 

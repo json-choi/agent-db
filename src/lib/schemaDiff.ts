@@ -13,7 +13,7 @@ export interface SchemaConnectionGroup {
   connections: ConnectionProfile[];
 }
 
-export type ConnectionSection =
+type ConnectionSection =
   | { kind: "group"; group: SchemaConnectionGroup }
   | { kind: "single"; connection: ConnectionProfile };
 
@@ -39,7 +39,7 @@ export interface SchemaDiffSummary {
   tableDiffs: Record<string, TableSchemaDiff>;
 }
 
-export function schemaGroupLabel(conn: ConnectionProfile): string {
+function schemaGroupLabel(conn: ConnectionProfile): string {
   return conn.schemaGroup?.trim() ?? "";
 }
 

@@ -1,7 +1,7 @@
 /*
  * Shared UI classes for DopeDB.
- * Prefer ds-* classes for new surfaces. Existing app class names that describe
- * shared primitives live here too, so components use one tokenized system.
+ * App class names are canonical; ds-* classes here just tokenize the shared
+ * primitives those app classes render as.
  */
 
 * {
@@ -33,8 +33,7 @@ h3 {
   letter-spacing: 0;
 }
 
-h1,
-.ds-heading {
+h1 {
   font-size: var(--ds-font-size-heading);
   line-height: var(--ds-line-tight);
   font-weight: 650;
@@ -47,8 +46,7 @@ h2,
   font-weight: 650;
 }
 
-h3,
-.ds-kicker {
+h3 {
   font-size: var(--ds-font-size-xs);
   line-height: var(--ds-line-ui);
   font-weight: 700;
@@ -104,34 +102,6 @@ h3,
   padding: var(--ds-pane-pad);
 }
 
-.ds-stack {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ds-space-3);
-}
-
-.ds-stack-tight {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ds-space-2);
-}
-
-.ds-inline {
-  display: flex;
-  align-items: center;
-  gap: var(--ds-space-2);
-  min-width: 0;
-}
-
-.ds-inline-wrap {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--ds-space-2);
-  min-width: 0;
-}
-
-.ds-page-head,
 .table-data-head,
 .history-head,
 .updates-head,
@@ -144,23 +114,16 @@ h3,
   gap: var(--ds-space-3);
 }
 
-.muted,
-.ds-muted {
+.muted {
   color: var(--ds-text-muted);
 }
 
-.ds-subtle {
-  color: var(--ds-text-subtle);
-}
-
-.error,
-.ds-error {
+.error {
   color: var(--ds-danger);
   font-size: var(--ds-font-size-ui);
 }
 
-.empty,
-.ds-empty {
+.empty {
   color: var(--ds-text-muted);
   font-size: var(--ds-font-size-ui);
   line-height: var(--ds-line-body);
@@ -170,7 +133,6 @@ h3,
   font-size: var(--ds-font-size-sm);
 }
 
-.ds-code,
 .result-sql,
 .tables code,
 .audit-sql,
@@ -181,7 +143,6 @@ h3,
 .mig-ver,
 .chg,
 .history-table code,
-.schema-col-type,
 .context-sql,
 .act-ts,
 .act-detail {
@@ -189,29 +150,11 @@ h3,
   font-size: var(--ds-font-size-sm);
 }
 
-.ds-code-block {
-  overflow: auto;
-  border: var(--ds-border-width) solid var(--ds-border-subtle);
-  border-radius: var(--ds-radius-sm);
-  background: var(--ds-surface-1);
-  font-family: var(--ds-font-mono);
-  font-size: var(--ds-font-size-sm);
-  line-height: var(--ds-line-body);
-}
-
-.ds-truncate {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .app :where(button, input, select, textarea, summary, code, strong, span) {
   min-width: 0;
 }
 
-.btn,
-.ds-button {
+.btn {
   max-width: 100%;
   min-width: 0;
   height: var(--ds-control-field);
@@ -238,65 +181,50 @@ h3,
   transition: background 0.12s ease, border-color 0.12s ease;
 }
 
-.btn:hover:not(:disabled),
-.ds-button:hover:not(:disabled) {
+.btn:hover:not(:disabled) {
   background: var(--ds-surface-1);
   border-color: var(--ds-border-strong);
 }
 
-.btn:active:not(:disabled),
-.ds-button:active:not(:disabled) {
+.btn:active:not(:disabled) {
   background: var(--ds-surface-2);
 }
 
-.btn:disabled,
-.ds-button:disabled {
+.btn:disabled {
   cursor: default;
   opacity: 0.55;
 }
 
-.btn.primary,
-.ds-button-primary {
+.btn.primary {
   background: var(--ds-accent);
   border-color: transparent;
   color: var(--ds-text-inverse);
 }
 
-.btn.primary:hover:not(:disabled),
-.ds-button-primary:hover:not(:disabled) {
+.btn.primary:hover:not(:disabled) {
   background: var(--ds-accent-hover);
   border-color: transparent;
 }
 
-.btn.danger,
-.ds-button-danger {
+.btn.danger {
   color: var(--ds-danger);
 }
 
-.btn.danger:hover:not(:disabled),
-.ds-button-danger:hover:not(:disabled) {
+.btn.danger:hover:not(:disabled) {
   background: var(--ds-danger-bg);
   border-color: var(--ds-danger-border);
 }
 
-.btn.small,
-.ds-button-small {
+.btn.small {
   height: var(--ds-control-field-sm);
   min-height: var(--ds-control-field-sm);
   padding: 0 var(--ds-control-pad-x-sm);
   font-size: var(--ds-font-size-sm);
 }
 
-.btn .icon,
-.ds-button .icon {
+.btn .icon {
   flex: 0 0 auto;
   font-size: var(--ds-icon-sm);
-}
-
-.ds-icon-button {
-  width: var(--ds-control-md);
-  min-width: var(--ds-control-md);
-  padding: 0;
 }
 
 .card,
@@ -317,7 +245,6 @@ h3,
   padding: var(--ds-space-4);
 }
 
-.ds-inspector,
 .grid-panel,
 .schema-inspector {
   background: var(--ds-surface-0);
@@ -326,9 +253,7 @@ h3,
   box-shadow: var(--ds-shadow-panel);
 }
 
-.badge,
-.ds-badge,
-.ds-status {
+.badge {
   max-width: 100%;
   min-width: 0;
   min-height: 20px;
@@ -348,35 +273,30 @@ h3,
   white-space: nowrap;
 }
 
-.ds-badge-strong,
 .badge.kind {
   background: var(--ds-hover-strong);
   color: var(--ds-text);
 }
 
 .badge.status-ok,
-.ds-status-ok,
 .badge.risk-low {
   color: var(--ds-success);
   border-color: color-mix(in srgb, var(--ds-success) var(--ds-status-border-mix), var(--ds-border-subtle));
 }
 
-.badge.risk-medium,
-.ds-status-warning {
+.badge.risk-medium {
   color: var(--ds-warning);
   border-color: color-mix(in srgb, var(--ds-warning) var(--ds-status-border-mix), var(--ds-border-subtle));
 }
 
 .badge.status-error,
 .badge.status-blocked,
-.badge.risk-high,
-.ds-status-danger {
+.badge.risk-high {
   color: var(--ds-danger);
   border-color: color-mix(in srgb, var(--ds-danger) var(--ds-status-border-mix), var(--ds-border-subtle));
 }
 
-.badge.nowhere,
-.ds-badge-danger-fill {
+.badge.nowhere {
   background: var(--ds-danger);
   border-color: var(--ds-danger);
   color: var(--ds-text-inverse);
@@ -552,13 +472,6 @@ h3,
   white-space: nowrap;
 }
 
-.ds-card-copy {
-  margin: 0;
-  color: var(--ds-text-muted);
-  font-size: var(--ds-font-size-sm);
-  line-height: var(--ds-line-body);
-}
-
 .ds-tone-trust {
   border-color: var(--ds-trust-border);
   background: var(--ds-trust-bg);
@@ -653,8 +566,7 @@ h3,
 .app select,
 .app textarea,
 .table-filter,
-.filter-input,
-.ds-input {
+.filter-input {
   box-sizing: border-box;
   border: var(--ds-border-width) solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-sm);
@@ -667,8 +579,7 @@ h3,
 .app select,
 .app textarea,
 .table-filter,
-.filter-input,
-.ds-input {
+.filter-input {
   height: var(--ds-control-field);
   min-height: var(--ds-control-field);
   padding: 0 var(--ds-control-pad-x-sm);
@@ -680,14 +591,12 @@ h3,
 .form textarea,
 .table-filter,
 .filter-input,
-.ds-input,
 .row-field-input input,
 .safety-number input {
   width: 100%;
 }
 
-.app textarea,
-textarea.ds-input {
+.app textarea {
   height: auto;
   min-height: 80px;
   padding-top: var(--ds-space-2);
@@ -699,8 +608,7 @@ textarea.ds-input {
 .app select:focus,
 .app textarea:focus,
 .table-filter:focus,
-.filter-input:focus,
-.ds-input:focus {
+.filter-input:focus {
   border-color: var(--ds-focus);
   box-shadow: var(--ds-focus-ring);
   outline: none;
@@ -736,11 +644,6 @@ textarea.ds-input {
   box-shadow: var(--ds-shadow-panel);
 }
 
-.ds-surface-grid {
-  display: grid;
-  gap: var(--ds-space-3);
-}
-
 .ds-object-row {
   min-height: var(--ds-control-sm);
   display: flex;
@@ -762,14 +665,6 @@ textarea.ds-input {
   color: var(--ds-text-inverse);
 }
 
-.ds-count {
-  margin-left: auto;
-  color: var(--ds-text-subtle);
-  font-size: var(--ds-font-size-xs);
-  font-variant-numeric: tabular-nums;
-}
-
-.ds-grid-shell,
 .grid-scroll {
   border: var(--ds-border-width) solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-md);
@@ -1052,7 +947,6 @@ textarea.ds-input {
 }
 
 @media (max-width: 760px) {
-  .ds-page-head,
   .table-data-head,
   .history-head,
   .updates-head,

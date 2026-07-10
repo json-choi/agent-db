@@ -7,7 +7,7 @@ import {
   type ReactNode,
 } from "react";
 
-export type Lang = "en" | "ko";
+type Lang = "en" | "ko";
 
 const STORAGE_KEY = "dopedb.lang";
 
