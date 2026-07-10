@@ -11,14 +11,14 @@ import {
   mcpStatus,
   type McpRuntimeStatus,
   type McpStatus,
-} from "../../ipc/commands";
-import type { PlatformInfo } from "../../ipc/types";
-import { errMessage } from "../../ipc/types";
-import ConfirmButton from "../../components/ConfirmButton";
-import { Icon } from "../../components/Icon";
-import InfoTip from "../../components/InfoTip";
-import { useToast } from "../../components/Toast";
-import { useI18n } from "../../lib/i18n";
+} from "../../../ipc/commands";
+import type { PlatformInfo } from "../../../ipc/types";
+import { errMessage } from "../../../ipc/types";
+import ConfirmButton from "../../../components/ConfirmButton";
+import { Icon } from "../../../components/Icon";
+import InfoTip from "../../../components/InfoTip";
+import { useToast } from "../../../components/Toast";
+import { useI18n } from "../../../lib/i18n";
 import "./mcp.css";
 
 interface Result {

@@ -1,11 +1,11 @@
 // Per-connection SafetySettings editor. Loads via get_safety, saves via set_safety.
 import { useEffect, useState } from "react";
-import { getSafety, setSafety } from "../../ipc/commands";
-import type { SafetySettings } from "../../ipc/types";
-import { errMessage } from "../../ipc/types";
-import InfoTip from "../../components/InfoTip";
-import { useToast } from "../../components/Toast";
-import { useI18n, type I18nKey } from "../../lib/i18n";
+import { getSafety, setSafety } from "../../../ipc/commands";
+import type { SafetySettings } from "../../../ipc/types";
+import { errMessage } from "../../../ipc/types";
+import InfoTip from "../../../components/InfoTip";
+import { useToast } from "../../../components/Toast";
+import { useI18n, type I18nKey } from "../../../lib/i18n";
 import "./safety.css";
 
 const TOGGLES: { key: keyof SafetySettings; label: I18nKey; hint: I18nKey }[] = [

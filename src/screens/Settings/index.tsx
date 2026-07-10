@@ -1,13 +1,13 @@
 // Settings menu — houses everything that isn't a data view: the MCP server config and
 // per-connection safety. Moved out of the top tab bar so tabs stay data-focused.
 import { useEffect, useRef, useState } from "react";
+import type { Update } from "@tauri-apps/plugin-updater";
 import type { ConnectionProfile } from "../../ipc/types";
 import InfoTip from "../../components/InfoTip";
 import { useI18n } from "../../lib/i18n";
-import Mcp from "../Mcp";
-import Safety from "../Safety";
-import Updates from "../Updates";
-import type { Update } from "@tauri-apps/plugin-updater";
+import Mcp from "./Mcp";
+import Safety from "./Safety";
+import Updates from "./Updates";
 import "./settings.css";
 
 type Section = "mcp" | "safety" | "updates" | "language";

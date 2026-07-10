@@ -36,11 +36,74 @@
 .table-query-strip .column-policy {
   max-width: 260px;
 }
+/* Data-tab body: grid on the left, contextual panel (viewer/editor/approval) on right. */
+.table-data-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  gap: var(--ds-space-3);
+}
+.table-data-body .grid-scroll {
+  flex: 1;
+  min-width: 0;
+}
 /* Dim the grid while a query is in flight. */
 .table-data-body.busy .grid-scroll {
   opacity: 0.55;
   pointer-events: none;
   transition: opacity 0.12s ease;
+}
+.grid-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--ds-space-2);
+}
+.toolbar-menu {
+  position: relative;
+}
+.toolbar-menu summary {
+  list-style: none;
+  cursor: pointer;
+}
+.toolbar-menu summary::-webkit-details-marker {
+  display: none;
+}
+.toolbar-menu-panel {
+  position: absolute;
+  z-index: var(--ds-z-sticky);
+  top: calc(100% + var(--ds-popover-offset-lg));
+  left: 0;
+  min-width: 152px;
+  display: grid;
+  gap: var(--ds-space-2);
+  padding: var(--ds-space-2);
+  border: var(--ds-border-width) solid var(--ds-border-subtle);
+  border-radius: var(--ds-radius-sm);
+  background: var(--ds-surface-0);
+  box-shadow: var(--ds-shadow-panel);
+}
+.toolbar-menu-panel .btn {
+  justify-content: flex-start;
+}
+
+.grid-panel {
+  width: clamp(320px, 32vw, 480px);
+  max-width: 44%;
+  flex-shrink: 0;
+  overflow: auto;
+  border: var(--ds-border-width) solid var(--ds-border-subtle);
+  border-radius: var(--ds-radius-md);
+  background: var(--ds-surface-0);
+  padding: var(--ds-space-3);
+}
+.grid-panel .approval {
+  margin-top: 0;
+  padding: 0;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
 }
 
 /* Table data pager + wide-cell handling */
@@ -68,11 +131,39 @@
   .table-data-head .table-pager {
     justify-content: flex-start;
   }
+  .table-data-body {
+    flex-direction: column;
+  }
+  .grid-panel {
+    width: auto;
+    max-width: none;
+    max-height: 42vh;
+  }
 }
 
 @media (max-width: 760px) {
   .table-data {
     gap: var(--ds-space-2);
+  }
+
+  .grid-toolbar {
+    align-items: stretch;
+  }
+
+  .grid-toolbar .btn,
+  .toolbar-menu,
+  .toolbar-menu summary {
+    width: 100%;
+  }
+
+  .toolbar-menu-panel {
+    left: 0;
+    right: 0;
+    min-width: 0;
+  }
+
+  .grid-panel {
+    max-height: min(360px, 44dvh);
   }
 
   .table-data-head .table-pager,

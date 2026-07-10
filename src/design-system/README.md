@@ -36,7 +36,7 @@ Vibe coding smell을 줄이기 위해 새 UI에서 아래 패턴은 피한다.
 
 - 화면 CSS에 직접 hex/rgb/rgba 색상, z-index 숫자, 임의 box-shadow를 쓰지 않는다.
 - `13px`, `8px`, `12px` 같은 값은 먼저 spacing/type/radius 토큰으로 표현한다.
-- 카드, 패널, 코드블록, empty state, toolbar는 기존 `ds-*` 클래스나 같은 토큰 구조를 재사용한다.
+- 카드, 패널, 코드블록, empty state, toolbar는 기존 정본 클래스(`.card`, `.ds-panel`, `.btn`, `.badge`, `.ds-toolbar` 등, 아래 "공통 클래스" 참고)나 같은 토큰 구조를 재사용한다.
 - 한 줄에 여러 선언을 몰아넣지 않는다. 반복 수정이 필요한 화면 CSS는 읽기 쉬운 블록으로 쓴다.
 
 ## 미니멀 밀도와 오버플로우
@@ -72,74 +72,66 @@ Primary green은 배경 fill에는 `--ds-accent`, 링크/아이콘/강조 텍스
 - Glass는 app shell, sidebar, header, tabs, modal, popover, toast, empty/skeleton state에만 제한한다.
 - 읽고 편집하는 본문, tab body, card, panel, button, form, inspector, data grid는 solid `--ds-surface-*`를 기본값으로 쓴다.
 - 데이터 grid는 shell과 cell 모두 blur를 반복하지 않는다.
-- 새 화면은 `ds-panel`, `ds-card`, `ds-toolbar`, `ds-filter-strip`, `ds-grid-shell` 같은 공통 클래스를 먼저 사용한다.
+- 새 화면은 `.card`, `.ds-panel`, `.ds-toolbar`, `.ds-filter-strip`, `.grid-panel` 같은 정본 클래스를 먼저 사용한다. `ds-*` 클래스는 이 앱 클래스들이 공유하는 원시 스타일을 토큰화한 것뿐이며, 대응하는 앱 클래스가 없는 경우(`ds-context-badge`, `ds-workbench-head` 등)에만 `ds-*` 자체가 정본이다.
 - 불투명 배경색이 필요하면 하드코딩하지 말고 `tokens.css`에 의미 기반 `--ds-*` 토큰을 추가한다.
 
 ## 공통 클래스
 
-Layout:
+정본 이름은 앱에서 실제로 쓰는 클래스(`.btn`, `.badge`, `.card`)다. 대응하는 앱 클래스가 없는 원시 클래스만 `ds-*` 이름 그대로 정본이다. 아래는 `system.css`에 실제로 정의된 클래스만 담는다(더 이상 쓰이지 않는 `ds-button`, `ds-badge`, `ds-status-*`, `ds-stack`, `ds-inline`, `ds-input`, `ds-icon-button`, `ds-grid-shell`, `ds-count`, `ds-page-head`, `ds-surface-grid`, `ds-card-copy`, `ds-inspector`, `ds-code*` 등의 별칭은 제거됐다).
 
-- `ds-stack`, `ds-stack-tight`
-- `ds-inline`, `ds-inline-wrap`
-- `ds-page-head`
-- `ds-workbench-head`
-- `ds-workbench-title`
-- `ds-title-line`
-- `ds-meta-row`, `ds-meta-dot`
-- `ds-command-group`
-- `ds-panel`, `ds-card`, `ds-inspector`
+표면(Surface):
 
-Controls:
+- `.card`(`.ds-card`) — 좁은 패딩 카드
+- `.ds-panel` — 넓은 패딩 패널(대응하는 앱 클래스 없음)
+- `.ds-surface` — 카드/패널과 같은 레시피의 자유 형태 표면
+- `.grid-panel`, `.schema-inspector` — 그리드/인스펙터 표면
 
-- `ds-button`
-- `ds-button-primary`
-- `ds-button-danger`
-- `ds-button-small`
-- `ds-icon-button`
-- `ds-input`
+버튼 & 배지:
 
-Status:
+- `.btn` (`.primary`, `.danger`, `.small` 조합)
+- `.badge` (`.kind`, `.status-ok`/`.risk-low`, `.risk-medium`, `.status-error`/`.status-blocked`/`.risk-high`, `.nowhere` 조합)
+- `.ds-context-badge` — connection/schema context pill
 
-- `ds-badge`
-- `ds-status-ok`
-- `ds-status-warning`
-- `ds-status-danger`
-- `ds-context-badge`
+워크벤치 헤더:
 
-Database workflow:
+- `.ds-workbench-head`, `.ds-workbench-title`, `.ds-title-line`
+- `.ds-meta-row`, `.ds-meta-dot`
+- `.ds-command-group`
 
-- `ds-toolbar`
-- `ds-data-toolbar`
-- `ds-toolbar-group`
-- `ds-toolbar-spacer`
-- `ds-filter-strip`
-- `ds-filter-token`
-- `ds-object-row`
-- `ds-count`
-- `ds-grid-shell`
+툴바 & 필터:
 
-Agent/safety workflow:
+- `.ds-toolbar`(`.grid-toolbar`, `.form-actions`, `.ds-action-row`도 같은 레시피를 공유)
+- `.ds-data-toolbar`, `.ds-toolbar-group`, `.ds-toolbar-spacer`
+- `.ds-filter-strip`, `.ds-filter-token`
 
-- `ds-surface`
-- `ds-surface-grid`
-- `ds-card-grid`
-- `ds-card-row`
-- `ds-card-stack`
-- `ds-card-title-row`
-- `ds-card-copy`
-- `ds-tone-trust`
-- `ds-tone-risk`
-- `ds-tone-danger`
-- `ds-action-row`
-- `ds-attention-stack`
-- `ds-attention-badge`
+리스트/오브젝트 행:
+
+- `.ds-object-row` (`.active`, `[aria-selected="true"]`)
+- `.grid-scroll`
+
+Agent/safety 카드 시스템:
+
+- `.ds-card-grid`, `.ds-card-stack`, `.ds-card-title-row`, `.ds-card-row`
+- `.ds-tone-trust`, `.ds-tone-risk`, `.ds-tone-danger`
+- `.ds-attention-stack`, `.ds-attention-badge`
+
+폼:
+
+- `.form`, `.form-head`, `.form-close-btn`, `.form-import-row`, `.form-msg`
+- input/select/textarea는 `.app` 스코프에서 전역으로 스타일되므로 별도 클래스가 필요 없다.
+
+유틸리티:
+
+- `.muted`, `.error`, `.empty`, `.label`, `.note`
+- `.loading`, `.icon`, `.ui-help`, `.icon-only-badge`, `.label-with-help`
+- `.ds-engine-mark`
 
 ## 사용 예시
 
 ```tsx
-<section className="ds-panel ds-stack">
-  <header className="ds-page-head">
-    <div>
+<section className="ds-panel">
+  <header className="ds-workbench-head">
+    <div className="ds-workbench-title">
       <h2>Agent trust ledger</h2>
       <p className="muted">What the agent can see and what needs approval.</p>
     </div>
@@ -147,7 +139,7 @@ Agent/safety workflow:
   </header>
 
   <div className="ds-card-grid">
-    <article className="ds-card ds-card-row ds-tone-trust">
+    <article className="card ds-card-row ds-tone-trust">
       <span className="icon" />
       <div>
         <span className="muted">Schema access</span>

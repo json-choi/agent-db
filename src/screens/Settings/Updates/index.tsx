@@ -1,11 +1,11 @@
+import { useEffect, useMemo, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updater";
-import { useEffect, useMemo, useState } from "react";
-import { Icon, type IconName } from "../../components/Icon";
-import InfoTip from "../../components/InfoTip";
-import { errMessage } from "../../ipc/types";
-import { useI18n } from "../../lib/i18n";
+import { Icon, type IconName } from "../../../components/Icon";
+import InfoTip from "../../../components/InfoTip";
+import { errMessage } from "../../../ipc/types";
+import { useI18n } from "../../../lib/i18n";
 import "./updates.css";
 
 type UpdateState =
