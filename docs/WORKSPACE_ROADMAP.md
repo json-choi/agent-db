@@ -1,0 +1,330 @@
+# Workspace Collaboration Roadmap
+
+Status: proposed
+
+This roadmap defines how DopeDB can add team workspaces without turning the
+workspace service into a database proxy or weakening the local safety boundary.
+Milestones are ordered by dependency and exit criteria rather than calendar date.
+
+## Product Decision
+
+Use a local-execution, hosted-control-plane architecture:
+
+- The workspace service synchronizes membership, connection templates, dashboards,
+  analysis reports, revisions, and collaboration audit events.
+- Each desktop app keeps database credentials in that member's OS credential store.
+- Queries continue to run from the desktop app through the existing Rust safety,
+  monitoring, audit, and read-only execution paths.
+- Query result rows are not synchronized by default. Publishing a bounded result
+  snapshot is a separate, explicit action with masking and retention controls.
+- Workspace membership never grants target-database write access or `pg_monitor`.
+  Those remain database-side privileges of the credential used on each device.
+
+```mermaid
+flowchart LR
+    A["Member A · DopeDB"] <-->|"encrypted sync"| W["Workspace control plane"]
+    B["Member B · DopeDB"] <-->|"encrypted sync"| W
+    W --> M["members · roles · invitations"]
+    W --> R["connection templates · dashboards · reports"]
+    W --> V["revisions · collaboration audit"]
+    A --> KA["A's OS credential store"]
+    B --> KB["B's OS credential store"]
+    KA --> D["Target database"]
+    KB --> D
+    A --> SA["local MCP and safety pipeline"]
+    B --> SB["local MCP and safety pipeline"]
+```
+
+## Goals
+
+- Let a user create a workspace and invite teammates with clear roles.
+- Share connection definitions without sharing raw passwords by default.
+- Let each member bind their own database credential to a shared connection.
+- Share and version dashboard definitions across members and devices.
+- Save agent analysis as a durable report containing the question, conclusion,
+  supporting queries, and the warnings observed before execution.
+- Keep offline access to already-synchronized workspace resources.
+- Record both database execution activity and collaboration changes without mixing
+  their trust guarantees.
+
+## Non-goals for the First Release
+
+- Proxying database traffic through the workspace service.
+- Automatically distributing database passwords, certificates, or cloud tokens.
+- Granting writes, DDL, or PostgreSQL roles through workspace membership.
+- Persisting every query result or agent conversation to the workspace.
+- Public, unauthenticated dashboard links.
+- Real-time co-editing of SQL or reports.
+- Replacing target-database audit logs with workspace events.
+
+## Shared and Local-only Data
+
+| Resource | Workspace data | Local-only data |
+| --- | --- | --- |
+| Connection | engine, host, port, database, SSL, environment, safety policy | password, token, certificate, local `secret_ref`, live pool |
+| Dashboard | title, description, SQL, visualization definition, revision | current result rows |
+| Analysis report | question, narrative, query provenance, warnings, selected visualization | unpublished intermediate results |
+| Monitoring | desired coverage and policy hints | current load snapshot and credential-specific `pg_monitor` status |
+| Project integration | optional repository-relative configuration | absolute `project_dir` on each device |
+| MCP | workspace-scoped connection identifiers and policy | MCP token, client session, single-use query plans |
+| History and audit | explicit collaboration events and published report provenance | full local query history and hash-chained execution audit |
+
+Connection usernames may be supplied as a shared default, but every member can
+override the username locally. A shared endpoint can therefore use individual
+database accounts and preserve target-database attribution.
+
+## Authorization Model
+
+Workspace roles and connection permissions are separate. A broad workspace role
+must not imply production database access.
+
+| Capability | Viewer | Analyst | Editor | Admin | Owner |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| View published dashboards and reports | yes | yes | yes | yes | yes |
+| Run an allowed shared read query | no | yes | yes | yes | yes |
+| Create analysis drafts | no | yes | yes | yes | yes |
+| Edit and publish shared resources | no | no | yes | yes | yes |
+| Manage connection templates and policies | no | no | no | yes | yes |
+| Invite, remove, and change member roles | no | no | no | yes | yes |
+| Transfer ownership or delete the workspace | no | no | no | no | yes |
+
+Each connection adds explicit grants such as `view_definition`, `execute_read`,
+`edit_dashboard`, `manage_connection`, and `access_prod`. Shared connections are
+read-only in the first release. Existing local write settings are never inherited by
+another member or device.
+
+## Target Data Model
+
+### Workspace service
+
+- `workspaces`: name, owner, lifecycle state, encryption key reference.
+- `workspace_members`: user, role, status, joined timestamp.
+- `workspace_invitations`: inviter, email/domain, intended role, expiry, one-time token.
+- `workspace_connections`: shareable connection template and default safety policy.
+- `connection_permissions`: per-member or per-role connection grants.
+- `dashboards`: workspace-scoped dashboard definition and current revision.
+- `analysis_reports`: title, question, summary, draft/published/archive state.
+- `analysis_report_blocks`: ordered Markdown, metric, chart, and table blocks.
+- `analysis_report_queries`: connection, SQL, query-run provenance, warnings, row count,
+  duration, schema fingerprint, and optional result snapshot reference.
+- `resource_revisions`: immutable revision metadata for conflict detection and rollback.
+- `workspace_audit_events`: actor, device, action, resource, before/after revision,
+  timestamp, and a redacted change summary.
+- `result_snapshots`: optional encrypted, bounded, masked objects with expiry.
+
+### Desktop store
+
+- Add `workspace_id`, `remote_id`, `revision`, `sync_status`, and `deleted_at` to
+  synchronizable resources.
+- Add `credential_bindings` keyed by workspace connection, member, and device. Its
+  `local_secret_ref` never leaves the device.
+- Add `sync_outbox` for durable offline mutations and `sync_state` for pull cursors.
+- Keep query history, schema cache, live monitoring snapshots, and the existing
+  hash-chained execution audit local by default.
+
+Existing local UUIDs should remain stable. On migration, create a local Personal
+Workspace and assign every existing connection, dashboard, and snippet to it. Signing
+in must not be required to keep using that personal workspace.
+
+## Analysis Report Contract
+
+An analysis report is distinct from a dashboard:
+
+- A dashboard stores a reusable query and renders current data after a local rerun.
+- A report stores a question, a versioned conclusion, and the exact queries used as
+  evidence.
+- Each evidence query records its MCP preflight decision, monitoring coverage,
+  warnings, execution timestamp, row count, duration, and query-run identifier.
+- Result rows remain local unless an editor explicitly publishes a snapshot.
+- Publishing a snapshot requires a row and byte cap, column selection or masking,
+  a sensitivity confirmation, a retention deadline, and an audit event.
+- A report rerun creates new evidence rather than silently replacing old evidence.
+
+This gives readers both a durable historical conclusion and a safe way to refresh it
+against current data.
+
+## Synchronization Contract
+
+- The service is authoritative for workspace membership, permissions, and the latest
+  shared resource revision.
+- The desktop remains authoritative for credentials and actual database execution.
+- Local mutations enter an outbox before network transmission.
+- Pushes use optimistic concurrency with the resource revision as a precondition.
+- Pulls use an ordered cursor and include tombstones for deletions.
+- SQL, connection policy, and report conflicts are never silently merged. Preserve
+  both versions and require an explicit choice or a new merged revision.
+- Retry operations are idempotent through stable operation identifiers.
+- A revoked member loses future sync and workspace key access. The product must state
+  honestly that revocation cannot erase data the member already exported.
+
+The first hosted version should use TLS plus per-workspace envelope encryption at
+rest, with data keys wrapped by a managed KMS. Raw credentials remain excluded from
+the service entirely. End-to-end encrypted workspace content can be evaluated later
+as a separate product and recovery design because it changes search, invitations,
+device recovery, and server-side collaboration behavior.
+
+## Audit Boundaries
+
+Keep two explicit ledgers:
+
+1. The local execution audit answers which credential executed which database
+   statement and whether it was blocked, approved, or completed.
+2. The workspace collaboration audit answers who invited a member, shared a
+   connection, changed a policy, edited a dashboard, or published a report.
+
+Workspace application logs must not contain passwords, result rows, full certificates,
+MCP tokens, or unredacted snapshot contents. Collaboration events should reference a
+resource revision rather than duplicating sensitive payloads.
+
+## Milestone 0 — Local Workspace Foundation
+
+Deliverables:
+
+- Introduce Workspace, WorkspaceMember, and resource scope types in the Rust/TypeScript
+  data contract.
+- Migrate existing data into a Personal Workspace without changing existing UUIDs.
+- Scope connection, dashboard, and snippet reads/writes by active workspace.
+- Add a workspace switcher that initially contains only the Personal Workspace.
+- Add local revision, tombstone, outbox, and sync cursor storage.
+- Put all new behavior behind a feature flag until migrations and rollback are proven.
+
+Exit criteria:
+
+- Upgrading and downgrading through a backup preserves every existing connection and
+  dashboard.
+- The app remains fully usable offline and without an account.
+- MCP tools cannot resolve a connection outside the currently selected workspace.
+- No secret value enters the new workspace or sync tables.
+
+## Milestone 1 — Identity, Membership, and Control Plane
+
+Deliverables:
+
+- Add account authentication, device sessions, workspace creation, invitations, and
+  role management.
+- Implement authenticated push/pull sync with optimistic revisions and tombstones.
+- Add per-workspace encryption, backups, rate limits, and collaboration audit events.
+- Add member removal, token revocation, invitation expiry, and workspace deletion
+  workflows.
+- Provide a self-hosting-compatible API boundary even if the first service is hosted.
+
+Exit criteria:
+
+- Unauthorized users cannot enumerate workspace ids or resource metadata.
+- Role and connection permission checks run server-side on every mutation and read.
+- Revoked sessions stop syncing immediately.
+- Offline edits converge after reconnect, and conflicts retain both versions.
+- Server logs and traces pass automated secret and sensitive-payload checks.
+
+## Milestone 2 — Shared Connections
+
+Deliverables:
+
+- Add an explicit Share with Workspace flow for a local connection.
+- Synchronize connection templates and default read-safety policies.
+- Add member/device credential binding with local OS credential-store persistence.
+- Show Ready, Credentials Required, Access Denied, and Connection Failed states.
+- Allow admins to assign per-connection production and read-execution permissions.
+- Expose monitoring coverage as a local capability while sharing only the workspace's
+  desired policy, such as `pg_monitor` recommended.
+
+Exit criteria:
+
+- A recipient can connect using an individual database account without receiving the
+  sharer's secret.
+- Sharing, editing, or deleting a connection never changes another member's local
+  credential binding.
+- Shared execution is read-only and still requires MCP `plan_query` before
+  `run_query`.
+- Workspace roles cannot grant target-database permissions.
+- Removing a connection invalidates future execution but preserves relevant audit
+  history.
+
+## Milestone 3 — Shared Dashboards
+
+Deliverables:
+
+- Share existing dashboard definitions into a workspace.
+- Add draft, published, archived, owner, updated-by, and revision metadata.
+- Run shared dashboards locally through the existing read-only dashboard command.
+- Add revision history, restore, duplicate-on-conflict, and ownership transfer.
+- Show whether a member lacks credentials or execution permission for the dashboard's
+  source connection.
+
+Exit criteria:
+
+- Two members can open the same dashboard definition and obtain results through their
+  own credentials.
+- Result rows are not uploaded during ordinary dashboard viewing.
+- Concurrent SQL or visualization changes cannot overwrite each other silently.
+- A dashboard cannot reference a connection outside its workspace.
+
+Milestones 0–3 form the first workspace MVP.
+
+## Milestone 4 — Saved Agent Analysis Reports
+
+Deliverables:
+
+- Add report list, editor, evidence-query panel, review, and publish flows.
+- Let MCP propose a report only from durable successful query-run identifiers.
+- Store the original question, narrative conclusion, evidence query metadata, and
+  preflight warnings as versioned report content.
+- Add explicit rerun and append-new-evidence behavior.
+- Add comments and reviewer status only after revision ownership is reliable.
+
+Exit criteria:
+
+- A published report remains understandable without rerunning its queries.
+- Every claimed data point can point to an evidence query and execution timestamp.
+- An agent cannot publish or replace a report without explicit user agreement.
+- Editing a report does not mutate its historical evidence records.
+
+## Milestone 5 — Optional Result Snapshots and Enterprise Controls
+
+Deliverables:
+
+- Add explicit masked result snapshot publishing with row, byte, and retention limits.
+- Store snapshot objects separately from workspace metadata with independent keys and
+  deletion jobs.
+- Add SSO/domain policy, SCIM, configurable retention, and export controls as demand
+  requires.
+- Evaluate a shared-secret vault integration for teams that cannot issue individual
+  database accounts.
+- Evaluate end-to-end encryption and self-hosted control-plane packaging separately.
+
+Exit criteria:
+
+- Snapshot access is authorized and audited independently from dashboard access.
+- Expired or deleted snapshots are removed from primary storage and scheduled backups
+  according to a documented retention policy.
+- Shared vault credentials are never returned to the UI or agent and can be revoked
+  centrally.
+- Enterprise controls do not weaken the default local-credential model.
+
+## Cross-cutting Validation
+
+Every milestone must include:
+
+- Rust and TypeScript migration and serialization tests.
+- RBAC tests for every API and local command boundary.
+- Offline, retry, duplicate-delivery, tombstone, and conflict tests.
+- Credential and sensitive-data leak tests covering logs, crash reports, analytics,
+  and sync payloads.
+- macOS and Windows credential-store behavior.
+- Query execution tests proving workspace state cannot bypass read-only enforcement,
+  monitoring preflight, row caps, approval gates, or audit recording.
+- Recovery tests for workspace deletion, member revocation, and failed partial sync.
+
+## Open Decisions Before Milestone 1
+
+- Hosted-only first launch versus simultaneous self-hosted deployment.
+- Authentication provider and account recovery policy.
+- Workspace billing and ownership transfer rules.
+- Whether connection usernames are shared defaults or always local overrides.
+- Initial report snapshot limits and retention duration.
+- Data residency requirements for the hosted control plane.
+- Whether Personal Workspace resources can remain permanently local or optionally sync
+  across the owner's devices.
+
+These decisions do not block Milestone 0 because the local schema should support both
+hosted and self-hosted sync implementations.
