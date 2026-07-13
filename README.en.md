@@ -24,7 +24,7 @@ There are great free database clients, and there are plenty of AI SQL generators
 
 - It is not an AI feature bolted onto a SQL editor. It is a **local database gateway your existing agent can use through MCP**.
 - The agent does not receive raw database credentials; the local app owns connections and secrets.
-- The MCP tool surface is read-only today. Writes and DDL stay behind a human-visible approval gate.
+- The MCP tool surface is read-only today. Every query first passes through `plan_query`, which returns EXPLAIN and aggregate database-health cautions before execution. Writes and DDL stay behind a human-visible approval gate.
 - The context your agent saw, the queries it ran, the results, approvals, and audit logs land in a UI humans can review.
 
 ## Language Support

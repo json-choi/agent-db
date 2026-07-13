@@ -67,6 +67,23 @@ pub struct SafetySettings {
     pub exec_preview_row_limit: i64,
 }
 
+/// Monitoring capability exposed by one saved connection. PostgreSQL can opt in to
+/// the built-in `pg_monitor` role; other engines keep a basic, role-free collector.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MonitoringStatus {
+    pub engine: Engine,
+    /// "full" when pg_monitor is granted, "limited" without it, "basic" for
+    /// engines that do not use PostgreSQL's predefined monitoring roles.
+    pub coverage: String,
+    pub role_available: bool,
+    pub role_granted: bool,
+    pub current_user: Option<String>,
+    /// Best-effort hint only. The server remains authoritative when GRANT/REVOKE runs.
+    pub can_manage: bool,
+    pub note: String,
+}
+
 impl Default for SafetySettings {
     fn default() -> Self {
         SafetySettings {

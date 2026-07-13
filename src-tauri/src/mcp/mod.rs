@@ -27,7 +27,9 @@ use uuid::Uuid;
 use crate::connection::LiveConnection;
 use crate::state::McpRuntime;
 use crate::store::Store;
-use tools::DbTools;
+use tools::{DbTools, QueryPlanStore};
+
+pub(crate) use tools::query_plan_store;
 
 /// Shared live-connection cache — the SAME instance as `AppState.connections`, so a
 /// connection edit/delete evicts the agent's cached pool too.
@@ -205,10 +207,18 @@ pub async fn serve_mcp(
     store: Store,
     token: String,
     conns: SharedConns,
+    plans: QueryPlanStore,
     runtime: Arc<Mutex<McpRuntime>>,
 ) -> std::io::Result<()> {
     let service = StreamableHttpService::new(
-        move || Ok::<_, std::io::Error>(DbTools::new(store.clone(), app.clone(), conns.clone())),
+        move || {
+            Ok::<_, std::io::Error>(DbTools::new(
+                store.clone(),
+                app.clone(),
+                conns.clone(),
+                plans.clone(),
+            ))
+        },
         Arc::new(LocalSessionManager::default()),
         Default::default(),
     );
@@ -242,6 +252,7 @@ pub async fn serve_stdio_bridge(
     store: Store,
     token: String,
     conns: SharedConns,
+    plans: QueryPlanStore,
     runtime: Arc<Mutex<McpRuntime>>,
 ) -> std::io::Result<()> {
     let listener = match tokio::net::TcpListener::bind(("127.0.0.1", MCP_BRIDGE_PORT)).await {
@@ -269,6 +280,7 @@ pub async fn serve_stdio_bridge(
         let store = store.clone();
         let app = app.clone();
         let conns = conns.clone();
+        let plans = plans.clone();
         let token = token.clone();
         tokio::spawn(async move {
             let (r, w) = stream.into_split();
@@ -283,7 +295,7 @@ pub async fn serve_stdio_bridge(
                 tracing::warn!("bridge auth failed — dropping connection");
                 return; // unauthenticated — drop the connection
             }
-            let handler = DbTools::new(store, app, conns);
+            let handler = DbTools::new(store, app, conns, plans);
             match rmcp::serve_server(handler, (reader, w)).await {
                 Ok(service) => {
                     let _ = service.waiting().await;

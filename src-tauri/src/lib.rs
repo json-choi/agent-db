@@ -11,6 +11,7 @@ mod introspect;
 mod mcp;
 mod migrations;
 mod model;
+mod monitoring;
 mod safety;
 mod state;
 mod store;
@@ -46,25 +47,31 @@ pub fn run() {
             // "actually listening" from "config exists".
             let conns = st.connections.clone();
             let runtime = st.mcp_runtime.clone();
+            let plans = mcp::query_plan_store();
             let handle = app.handle().clone();
             // HTTP endpoint (Claude Code / Cursor / …).
             {
-                let (store, token, handle, conns, runtime) = (
+                let (store, token, handle, conns, plans, runtime) = (
                     store.clone(),
                     token.clone(),
                     handle.clone(),
                     conns.clone(),
+                    plans.clone(),
                     runtime.clone(),
                 );
                 tauri::async_runtime::spawn(async move {
-                    if let Err(e) = mcp::serve_mcp(handle, store, token, conns, runtime).await {
+                    if let Err(e) =
+                        mcp::serve_mcp(handle, store, token, conns, plans, runtime).await
+                    {
                         tracing::error!("MCP HTTP server failed: {e}");
                     }
                 });
             }
             // Raw TCP listener the stdio bridge dials (Claude Desktop).
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = mcp::serve_stdio_bridge(handle, store, token, conns, runtime).await {
+                if let Err(e) =
+                    mcp::serve_stdio_bridge(handle, store, token, conns, plans, runtime).await
+                {
                     tracing::error!("MCP stdio-bridge failed: {e}");
                 }
             });
@@ -91,6 +98,8 @@ pub fn run() {
             commands::run_script,
             commands::get_safety,
             commands::set_safety,
+            commands::get_monitoring_status,
+            commands::set_postgres_monitoring,
             commands::audit_verify,
             commands::audit_snapshot,
             commands::list_history,

@@ -13,6 +13,7 @@ import type {
   ExecOutcome,
   HistoryEntry,
   MigrationReport,
+  MonitoringStatus,
   PreviewReport,
   ScriptOutcome,
   SafetySettings,
@@ -131,6 +132,18 @@ export function getSafety(id: string): Promise<SafetySettings> {
 
 export function setSafety(id: string, settings: SafetySettings): Promise<void> {
   return invoke("set_safety", { id, settings });
+}
+
+export function getMonitoringStatus(id: string): Promise<MonitoringStatus> {
+  return invoke("get_monitoring_status", { id });
+}
+
+export function setPostgresMonitoring(
+  id: string,
+  enabled: boolean,
+  approved: boolean,
+): Promise<MonitoringStatus> {
+  return invoke("set_postgres_monitoring", { id, enabled, approved });
 }
 
 // Backend hash-chain verification (rowid order + real SHA-256 recompute). Authoritative —

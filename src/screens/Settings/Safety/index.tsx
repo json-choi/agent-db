@@ -6,6 +6,7 @@ import { errMessage } from "../../../ipc/types";
 import InfoTip from "../../../components/InfoTip";
 import { useToast } from "../../../components/Toast";
 import { useI18n, type I18nKey } from "../../../lib/i18n";
+import MonitoringAccess from "./MonitoringAccess";
 import "./safety.css";
 
 const TOGGLES: { key: keyof SafetySettings; label: I18nKey; hint: I18nKey }[] = [
@@ -132,6 +133,8 @@ export default function Safety({ connectionId }: { connectionId: string }) {
           {busy ? t("common.saving") : t("common.save")}
         </button>
       </div>
+
+      <MonitoringAccess connectionId={connectionId} />
     </div>
   );
 }

@@ -31,6 +31,16 @@ export interface SafetySettings {
   execPreviewRowLimit: number;
 }
 
+export interface MonitoringStatus {
+  engine: Engine;
+  coverage: "full" | "limited" | "basic";
+  roleAvailable: boolean;
+  roleGranted: boolean;
+  currentUser: string | null;
+  canManage: boolean;
+  note: string;
+}
+
 type QueryKind = "read" | "write" | "ddl" | "privilege";
 
 export type RiskLevel = "low" | "medium" | "high";

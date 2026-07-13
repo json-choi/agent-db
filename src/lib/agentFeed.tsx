@@ -47,6 +47,7 @@ function resultOf(p: Record<string, unknown>): QueryResult | undefined {
 
 function resultDetail(p: Record<string, unknown>): string {
   if (p.error) return `error: ${p.error}`;
+  if (typeof p.decision === "string") return `review: ${p.decision}`;
   if (typeof p.rowCount === "number") return `${p.rowCount} rows`;
   if (typeof p.count === "number") return `${p.count} items`;
   return "ok";

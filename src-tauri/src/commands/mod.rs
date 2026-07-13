@@ -20,8 +20,10 @@ use crate::executor;
 use crate::introspect;
 use crate::model::{
     Classification, ConnectionProfile, Dashboard, DashboardDraft, Engine, ExecOutcome,
-    HistoryEntry, PreviewMode, PreviewReport, QueryKind, QueryResult, SafetySettings,
+    HistoryEntry, MonitoringStatus, PreviewMode, PreviewReport, QueryKind, QueryResult,
+    SafetySettings,
 };
+use crate::monitoring;
 use crate::safety::{classify, decide, preview, GateDecision, PoolRef};
 use crate::state::AppState;
 
@@ -35,7 +37,6 @@ fn pool_ref(db: &DbPool) -> PoolRef<'_> {
         DbPool::Sqlite(p) => PoolRef::Sqlite(p),
     }
 }
-
 /// Get a live connection for `id`, opening (and caching) one on first use.
 ///
 /// Never holds the connections lock across an `.await`: it either clones an existing
@@ -802,6 +803,152 @@ pub async fn set_safety(
     settings.max_rows = settings.max_rows.clamp(1, 100_000);
     settings.exec_preview_row_limit = settings.exec_preview_row_limit.clamp(0, 1_000_000);
     state.store.set_safety(id, &settings).await
+}
+
+// ── lightweight monitoring access ───────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_monitoring_status(
+    state: State<'_, AppState>,
+    id: Uuid,
+) -> AppResult<MonitoringStatus> {
+    let profile = state.store.get_connection(id).await?;
+    let live = get_live(&state, id).await?;
+    monitoring::status(&live, profile.engine).await
+}
+
+/// Grant/revoke one fixed PostgreSQL predefined role for CURRENT_USER. This narrow
+/// privilege action is independent of arbitrary SQL writes, but still requires a
+/// visible user confirmation and is recorded with an explicit approver.
+#[tauri::command]
+pub async fn set_postgres_monitoring(
+    state: State<'_, AppState>,
+    id: Uuid,
+    enabled: bool,
+    approved: bool,
+) -> AppResult<MonitoringStatus> {
+    let profile = state.store.get_connection(id).await?;
+    if !matches!(profile.engine, Engine::Postgres) {
+        return Err(AppError::Config(
+            "pg_monitor is only available for PostgreSQL connections".into(),
+        ));
+    }
+    let sql = if enabled {
+        "GRANT pg_monitor TO CURRENT_USER"
+    } else {
+        "REVOKE pg_monitor FROM CURRENT_USER"
+    };
+    if !approved {
+        record_monitoring_change(
+            &state,
+            &profile,
+            sql,
+            "blocked",
+            Some("pg_monitor role changes require explicit confirmation".into()),
+            None,
+        )
+        .await;
+        return Err(AppError::Blocked {
+            reason: "pg_monitor role changes require explicit confirmation".into(),
+        });
+    }
+
+    // A target-database privilege change must never happen without a durable local
+    // attempt record. The result is recorded below after the server responds.
+    audit::record(
+        &state.store,
+        RecordArgs {
+            connection_id: profile.id,
+            engine: profile.engine,
+            agent_prompt: None,
+            sql: sql.into(),
+            kind: QueryKind::Privilege,
+            action: if enabled {
+                "monitoring:grant:attempt"
+            } else {
+                "monitoring:revoke:attempt"
+            }
+            .into(),
+            approved_by: Some("local-user".into()),
+            affected_estimate: None,
+            error: None,
+        },
+    )
+    .await
+    .map_err(|e| {
+        AppError::Config(format!(
+            "audit pre-record failed — refusing to change pg_monitor: {e}"
+        ))
+    })?;
+
+    let live = get_live(&state, id).await?;
+    if let Err(e) = monitoring::set_postgres_role(&live, enabled).await {
+        record_monitoring_change(
+            &state,
+            &profile,
+            sql,
+            "error",
+            Some(e.to_string()),
+            Some("local-user"),
+        )
+        .await;
+        return Err(e);
+    }
+    record_monitoring_change(&state, &profile, sql, "ok", None, Some("local-user")).await;
+    monitoring::status(&live, profile.engine).await
+}
+
+async fn record_monitoring_change(
+    state: &AppState,
+    profile: &ConnectionProfile,
+    sql: &str,
+    status: &str,
+    error: Option<String>,
+    approved_by: Option<&str>,
+) {
+    let action = if status == "blocked" {
+        "monitoring:blocked"
+    } else if sql.starts_with("GRANT") {
+        "monitoring:grant"
+    } else {
+        "monitoring:revoke"
+    };
+    if let Err(e) = audit::record(
+        &state.store,
+        RecordArgs {
+            connection_id: profile.id,
+            engine: profile.engine,
+            agent_prompt: None,
+            sql: sql.into(),
+            kind: QueryKind::Privilege,
+            action: action.into(),
+            approved_by: approved_by.map(str::to_string),
+            affected_estimate: None,
+            error: error.clone(),
+        },
+    )
+    .await
+    {
+        tracing::error!("monitoring audit record failed: {e}");
+    }
+    if let Err(e) = state
+        .store
+        .insert_history(&HistoryEntry {
+            id: Uuid::new_v4(),
+            connection_id: profile.id,
+            sql: sql.into(),
+            kind: QueryKind::Privilege,
+            status: status.into(),
+            row_count: None,
+            duration_ms: None,
+            error,
+            executed_at: Utc::now(),
+            origin: "manual".into(),
+        })
+        .await
+    {
+        tracing::error!("monitoring history insert failed: {e}");
+    }
 }
 
 // ── logs ─────────────────────────────────────────────────────────────────────

@@ -8,6 +8,7 @@ import {
   auditVerify,
   cancelQuery,
   getCatalog,
+  getMonitoringStatus,
   listDashboards,
   listHistory,
   refreshCatalog,
@@ -54,6 +55,7 @@ export const qk = {
   audit: (connectionId: string) => ["audit", connectionId] as const,
   auditVerdict: (connectionId: string) => ["audit", connectionId, "verdict"] as const,
   auditSnapshot: (connectionId: string) => ["audit", connectionId, "snapshot"] as const,
+  monitoring: (connectionId: string) => ["monitoring", connectionId] as const,
   dashboards: (connectionId: string) => ["dashboards", connectionId] as const,
   dashboardRun: (dashboardId: string) => ["dashboardRun", dashboardId] as const,
   tableRows: (args: TableRowsArgs) =>
@@ -94,6 +96,14 @@ export function historyQuery(connectionId: string) {
     queryKey: qk.history(connectionId),
     staleTime: LOG_STALE_MS,
     queryFn: () => listHistory(connectionId),
+  });
+}
+
+export function monitoringStatusQuery(connectionId: string) {
+  return queryOptions({
+    queryKey: qk.monitoring(connectionId),
+    staleTime: LOG_STALE_MS,
+    queryFn: () => getMonitoringStatus(connectionId),
   });
 }
 

@@ -1,13 +1,10 @@
-//! MCP tool handlers (Phase 0 spike). Read-only tools that REUSE the existing safety
-//! pipeline — L1 classify + L2 read-only session (authoritative) — and the connection
-//! manager, and emit Tauri events so the app window reacts live to each agent call.
-//!
-//! There is deliberately NO write tool here yet: writes (approval-gated via L4) land in
-//! Phase 2. `run_query` runs through the read-only DB session, so even a misclassified
-//! write is rejected by the database itself (PG 25006 / SQLITE_READONLY).
+//! MCP read-only tools that reuse the existing safety pipeline and connection manager.
+//! Every query is first reviewed by `plan_query`; `run_query` accepts only the resulting
+//! single-use id and still runs through the authoritative database read-only session.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Content};
@@ -28,8 +25,29 @@ use crate::model::{
     ConnectionProfile, DashboardDraft, DashboardKind, DashboardVisualization, Engine, HistoryEntry,
     QueryKind,
 };
+use crate::monitoring::{self, HealthSnapshot};
 use crate::safety::{self, PoolRef};
 use crate::store::Store;
+
+const QUERY_PLAN_TTL: Duration = Duration::from_secs(30);
+const MAX_QUERY_PLANS: usize = 256;
+
+/// One single-use query proposal. Execution accepts only its id, so an agent cannot
+/// replace the reviewed connection, SQL, or row cap between planning and execution.
+#[derive(Clone)]
+pub(crate) struct PlannedQuery {
+    connection_id: Uuid,
+    sql: String,
+    max_rows: u64,
+    decision: String,
+    created_at: Instant,
+}
+/// Query plans are shared by the HTTP and stdio MCP listeners in this app process.
+pub(crate) type QueryPlanStore = Arc<Mutex<HashMap<Uuid, PlannedQuery>>>;
+
+pub(crate) fn query_plan_store() -> QueryPlanStore {
+    Arc::new(Mutex::new(HashMap::new()))
+}
 
 #[derive(Clone)]
 pub struct DbTools {
@@ -37,6 +55,7 @@ pub struct DbTools {
     app: AppHandle,
     /// Live connections opened on behalf of MCP callers, shared across sessions.
     conns: Arc<Mutex<HashMap<Uuid, LiveConnection>>>,
+    plans: QueryPlanStore,
 }
 
 // ── tool argument shapes (JSON Schema is derived for the MCP tool manifest) ──────
@@ -48,7 +67,7 @@ struct ConnArg {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-struct RunQueryArgs {
+struct PlanQueryArgs {
     /// Connection name or id. Omit to use the first configured connection.
     #[serde(default)]
     connection: Option<String>,
@@ -57,6 +76,12 @@ struct RunQueryArgs {
     /// Max rows to return (capped at 1000).
     #[serde(default)]
     max_rows: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct RunQueryArgs {
+    /// Single-use planId returned by plan_query within the last 30 seconds.
+    plan_id: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -94,8 +119,14 @@ impl DbTools {
         store: Store,
         app: AppHandle,
         conns: Arc<Mutex<HashMap<Uuid, LiveConnection>>>,
+        plans: QueryPlanStore,
     ) -> Self {
-        Self { store, app, conns }
+        Self {
+            store,
+            app,
+            conns,
+            plans,
+        }
     }
 
     fn emit(&self, event: &str, payload: serde_json::Value) {
@@ -241,6 +272,65 @@ fn truncate_cells(rows: &[Vec<serde_json::Value>]) -> Vec<Vec<serde_json::Value>
         .collect()
 }
 
+fn planning_guidance(
+    profile: &ConnectionProfile,
+    health: &HealthSnapshot,
+    estimated_rows: Option<i64>,
+    estimate_limit: i64,
+) -> (String, Vec<String>, Vec<String>) {
+    let mut caution = false;
+    let mut notices = Vec::new();
+    let mut suggestions = Vec::new();
+
+    if profile.env.as_deref() == Some("prod") {
+        caution = true;
+        notices.push("This connection is labeled production.".into());
+        suggestions
+            .push("Prefer a read replica or a bounded time range for production analysis.".into());
+    }
+    if health.level != "normal" {
+        caution = true;
+    }
+    notices.extend(health.reasons.clone());
+    if health.coverage == "limited" {
+        caution = true;
+        suggestions.push(
+            "Enable PostgreSQL pg_monitor in DopeDB settings for fuller aggregate load checks."
+                .into(),
+        );
+    }
+    match estimated_rows {
+        Some(rows) if rows > estimate_limit.max(0) => {
+            caution = true;
+            notices.push(format!(
+                "EXPLAIN estimates {rows} result/plan rows, above the configured {estimate_limit} review threshold."
+            ));
+            suggestions.push(
+                "Add a selective time/filter condition or aggregate before joining large log tables."
+                    .into(),
+            );
+        }
+        None if profile.env.as_deref() == Some("prod") => {
+            caution = true;
+            notices.push(
+                "EXPLAIN did not provide a usable row estimate for this production query.".into(),
+            );
+            suggestions.push("Review the plan and narrow the query before execution.".into());
+        }
+        _ => {}
+    }
+    if health.level == "busy" {
+        suggestions.push("Wait for database pressure to fall before running this query.".into());
+    }
+    suggestions.sort();
+    suggestions.dedup();
+    (
+        if caution { "caution" } else { "ready" }.into(),
+        notices,
+        suggestions,
+    )
+}
+
 // ── the read-only tool catalog ───────────────────────────────────────────────────
 #[tool_router]
 impl DbTools {
@@ -254,6 +344,7 @@ impl DbTools {
                 "name": c.name,
                 "engine": c.engine,
                 "database": c.database,
+                "environment": c.env,
                 "readonly": c.readonly_default,
                 "allowWrites": c.allow_writes,
             })).collect::<Vec<_>>()
@@ -336,43 +427,174 @@ impl DbTools {
         Ok(CallToolResult::success(vec![Content::text(out.to_string())]))
     }
 
-    #[tool(description = "Run a READ-ONLY SQL query (SELECT) on a DopeDB connection — prefer this over psql/shell clients. Executes in an enforced read-only, audited DB session, so writes are rejected by the database. Returns columns + rows, AND displays the result table live to the user in the DopeDB desktop app — running a query here is how the user SEES the answer.")]
-    async fn run_query(&self, Parameters(args): Parameters<RunQueryArgs>) -> Result<CallToolResult, McpError> {
+    #[tool(
+        description = "MANDATORY before run_query. Review one read-only SQL statement with EXPLAIN plus aggregate database-pressure signals. Returns a single-use planId, clear caution reasons, and safer alternatives. It never returns other sessions' SQL text and never runs the proposed query."
+    )]
+    async fn plan_query(
+        &self,
+        Parameters(args): Parameters<PlanQueryArgs>,
+    ) -> Result<CallToolResult, McpError> {
         let profile = self.resolve_conn(&args.connection).await?;
-        self.emit("agent:tool_call", json!({ "tool": "run_query", "connection": profile.name, "sql": args.sql }));
+        self.emit(
+            "agent:tool_call",
+            json!({
+                "tool": "plan_query",
+                "connection": profile.name,
+                "connectionId": profile.id,
+                "sql": args.sql,
+            }),
+        );
 
-        // L1 classify: reject obvious non-reads early (L2 is the authoritative stop).
         let cls = safety::classify(&args.sql, profile.engine).map_err(err)?;
-        if !matches!(cls.kind, QueryKind::Read) {
-            let msg = "run_query only runs read (SELECT) statements; writes go through an approval-gated tool (coming soon)";
-            self.emit("agent:result", json!({ "tool": "run_query", "error": msg }));
+        if !matches!(cls.kind, QueryKind::Read) || cls.statement_count != 1 {
+            let msg = "plan_query accepts exactly one read-only SELECT statement";
+            self.emit(
+                "agent:result",
+                json!({
+                    "tool": "plan_query",
+                    "connection": profile.name,
+                    "connectionId": profile.id,
+                    "error": msg,
+                }),
+            );
             self.audit(
                 profile.id,
                 profile.engine,
                 &args.sql,
                 cls.kind,
-                "mcp:run_query",
+                "mcp:plan_query",
                 Some(msg.to_string()),
             )
             .await;
-            if let Err(e) = self
-                .history(
-                    profile.id,
-                    &args.sql,
-                    "blocked",
-                    None,
-                    None,
-                    Some(msg.to_string()),
-                )
-                .await
-            {
-                tracing::error!("MCP blocked-query history insert failed: {e}");
-            }
             return Err(McpError::invalid_params(msg, None));
         }
 
         let settings = self.store.get_safety(profile.id).await.map_err(err)?;
         let cap = args.max_rows.unwrap_or(settings.max_rows).min(1000);
+        let live = self.live(profile.id).await?;
+        let preview = safety::preview(pool_ref(live.ro()), &args.sql, &cls, &settings)
+            .await
+            .map_err(err)?;
+        let health = monitoring::snapshot(&live, profile.engine).await;
+        let (decision, notices, suggestions) = planning_guidance(
+            &profile,
+            &health,
+            preview.estimated_rows,
+            settings.exec_preview_row_limit,
+        );
+        let plan_id = Uuid::new_v4();
+        {
+            let mut plans = self.plans.lock().unwrap();
+            plans.retain(|_, plan| plan.created_at.elapsed() <= QUERY_PLAN_TTL);
+            if plans.len() >= MAX_QUERY_PLANS {
+                if let Some(oldest) = plans
+                    .iter()
+                    .min_by_key(|(_, plan)| plan.created_at)
+                    .map(|(id, _)| *id)
+                {
+                    plans.remove(&oldest);
+                }
+            }
+            plans.insert(
+                plan_id,
+                PlannedQuery {
+                    connection_id: profile.id,
+                    sql: args.sql.clone(),
+                    max_rows: cap,
+                    decision: decision.clone(),
+                    created_at: Instant::now(),
+                },
+            );
+        }
+        self.audit(
+            profile.id,
+            profile.engine,
+            &args.sql,
+            QueryKind::Read,
+            "mcp:plan_query",
+            None,
+        )
+        .await;
+        self.emit(
+            "agent:result",
+            json!({
+                "tool": "plan_query",
+                "connection": profile.name,
+                "connectionId": profile.id,
+                "sql": args.sql,
+                "planId": plan_id,
+                "decision": decision,
+                "estimatedRows": preview.estimated_rows,
+                "healthLevel": health.level,
+                "monitoringCoverage": health.coverage,
+                "noticeCount": notices.len(),
+                "notices": notices,
+                "suggestions": suggestions,
+            }),
+        );
+        let out = json!({
+            "connection": profile.name,
+            "connectionId": profile.id,
+            "environment": profile.env,
+            "sql": args.sql,
+            "planId": plan_id,
+            "singleUse": true,
+            "expiresInSeconds": QUERY_PLAN_TTL.as_secs(),
+            "decision": decision,
+            "notices": notices,
+            "suggestions": suggestions,
+            "estimatedRows": preview.estimated_rows,
+            "health": health,
+            "nextAction": "Review these notices, then call run_query with this exact planId. If you change the SQL, call plan_query again.",
+        });
+        Ok(CallToolResult::success(vec![Content::text(
+            out.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "Execute one plan_query proposal by its exact single-use planId. No SQL or connection can be supplied here. The stored statement runs in an enforced read-only, audited DB session and its result is displayed live in DopeDB."
+    )]
+    async fn run_query(
+        &self,
+        Parameters(args): Parameters<RunQueryArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let plan_id = Uuid::parse_str(&args.plan_id)
+            .map_err(|e| McpError::invalid_params(format!("invalid plan_id: {e}"), None))?;
+        let plan = self.plans.lock().unwrap().remove(&plan_id).ok_or_else(|| {
+            McpError::invalid_params(
+                "plan_id is unknown, expired, or already used; call plan_query again",
+                None,
+            )
+        })?;
+        if plan.created_at.elapsed() > QUERY_PLAN_TTL {
+            return Err(McpError::invalid_params(
+                "plan_id expired; database health must be checked again with plan_query",
+                None,
+            ));
+        }
+        let profile = self
+            .store
+            .get_connection(plan.connection_id)
+            .await
+            .map_err(err)?;
+        let cls = safety::classify(&plan.sql, profile.engine).map_err(err)?;
+        if !matches!(cls.kind, QueryKind::Read) || cls.statement_count != 1 {
+            return Err(McpError::invalid_params(
+                "stored plan no longer validates as one read-only statement",
+                None,
+            ));
+        }
+        self.emit(
+            "agent:tool_call",
+            json!({
+                "tool": "run_query",
+                "connection": profile.name,
+                "connectionId": profile.id,
+                "planId": plan_id,
+                "sql": plan.sql,
+            }),
+        );
         let live = match self.live(profile.id).await {
             Ok(live) => live,
             Err(e) => {
@@ -380,7 +602,7 @@ impl DbTools {
                 self.audit(
                     profile.id,
                     profile.engine,
-                    &args.sql,
+                    &plan.sql,
                     QueryKind::Read,
                     "mcp:run_query",
                     Some(message.clone()),
@@ -389,7 +611,7 @@ impl DbTools {
                 if let Err(history_error) = self
                     .history(
                         profile.id,
-                        &args.sql,
+                        &plan.sql,
                         "error",
                         None,
                         None,
@@ -405,7 +627,8 @@ impl DbTools {
                         "tool": "run_query",
                         "connection": profile.name,
                         "connectionId": profile.id,
-                        "sql": args.sql,
+                        "planId": plan_id,
+                        "sql": plan.sql,
                         "error": message,
                     }),
                 );
@@ -414,49 +637,51 @@ impl DbTools {
         };
 
         // L2 authoritative read-only session — a misclassified write is rejected at the DB.
-        let result = match safety::run_read_only(pool_ref(live.ro()), &args.sql, cap).await {
-            Ok(result) => result,
-            Err(e) => {
-                let message = e.to_string();
-                self.audit(
-                    profile.id,
-                    profile.engine,
-                    &args.sql,
-                    QueryKind::Read,
-                    "mcp:run_query",
-                    Some(message.clone()),
-                )
-                .await;
-                if let Err(history_error) = self
-                    .history(
+        let result =
+            match safety::run_read_only(pool_ref(live.ro()), &plan.sql, plan.max_rows).await {
+                Ok(result) => result,
+                Err(e) => {
+                    let message = e.to_string();
+                    self.audit(
                         profile.id,
-                        &args.sql,
-                        "error",
-                        None,
-                        None,
+                        profile.engine,
+                        &plan.sql,
+                        QueryKind::Read,
+                        "mcp:run_query",
                         Some(message.clone()),
                     )
-                    .await
-                {
-                    tracing::error!("MCP failed-query history insert failed: {history_error}");
+                    .await;
+                    if let Err(history_error) = self
+                        .history(
+                            profile.id,
+                            &plan.sql,
+                            "error",
+                            None,
+                            None,
+                            Some(message.clone()),
+                        )
+                        .await
+                    {
+                        tracing::error!("MCP failed-query history insert failed: {history_error}");
+                    }
+                    self.emit(
+                        "agent:result",
+                        json!({
+                            "tool": "run_query",
+                            "connection": profile.name,
+                            "connectionId": profile.id,
+                            "planId": plan_id,
+                            "sql": plan.sql,
+                            "error": message,
+                        }),
+                    );
+                    return Err(err(e));
                 }
-                self.emit(
-                    "agent:result",
-                    json!({
-                        "tool": "run_query",
-                        "connection": profile.name,
-                        "connectionId": profile.id,
-                        "sql": args.sql,
-                        "error": message,
-                    }),
-                );
-                return Err(err(e));
-            }
-        };
+            };
         self.audit(
             profile.id,
             profile.engine,
-            &args.sql,
+            &plan.sql,
             QueryKind::Read,
             "mcp:run_query",
             None,
@@ -465,7 +690,7 @@ impl DbTools {
         let query_run_id = match self
             .history(
                 profile.id,
-                &args.sql,
+                &plan.sql,
                 "ok",
                 Some(result.row_count as i64),
                 Some(result.duration_ms as i64),
@@ -483,7 +708,8 @@ impl DbTools {
                         "tool": "run_query",
                         "connection": profile.name,
                         "connectionId": profile.id,
-                        "sql": args.sql,
+                        "planId": plan_id,
+                        "sql": plan.sql,
                         "error": message,
                     }),
                 );
@@ -497,8 +723,9 @@ impl DbTools {
                 "tool": "run_query",
                 "connection": profile.name,
                 "connectionId": profile.id,
+                "planId": plan_id,
                 "queryRunId": query_run_id,
-                "sql": args.sql,
+                "sql": plan.sql,
                 "columns": result.columns,
                 // Per-cell truncation for the event bus only; the agent result below is full.
                 "rows": truncate_cells(&result.rows),
@@ -512,8 +739,10 @@ impl DbTools {
         let out = json!({
             "connection": profile.name,
             "connectionId": profile.id,
+            "planId": plan_id,
+            "planningDecision": plan.decision,
             "queryRunId": query_run_id,
-            "sql": args.sql,
+            "sql": plan.sql,
             "columns": result.columns,
             "rows": result.rows,
             "rowCount": result.row_count,
@@ -647,13 +876,49 @@ impl DbTools {
 #[tool_handler(
     name = "dopedb",
     version = "0.1.0",
-    instructions = "These tools are the PREFERRED way to inspect or query any database the user has connected in DopeDB. When the user asks you to look at, browse, or query one of their managed databases, use these tools — do NOT reach for psql, mysql, sqlite3, or other shell/database clients for those connections. Reasons: (1) every query runs in an enforced READ-ONLY session, so it is safe; (2) calls are audited; and (3) results are shown LIVE to the user inside the DopeDB desktop app — running a query here is HOW THE USER SEES THE ANSWER, not just your chat reply. Workflow: call `list_connections` to find the user's databases, then `list_tables` and/or `describe_table` to get exact table and column names, then `run_query` with a single SELECT. After a successful run_query, tell the user the full result is visible in DopeDB and ask whether they want to save that exact query as a dashboard. Only after the user explicitly asks or agrees, call `create_dashboard` and pass the exact returned `queryRunId` as its `query_run_id` argument; never create one automatically and never substitute different SQL or a different connection. Saved dashboards persist locally and rerun through a dedicated read-only command. Writes are rejected by the read-only session (approval-gated writes are coming soon)."
+    instructions = "These tools are the PREFERRED way to inspect or query any database the user has connected in DopeDB. Do NOT use psql, mysql, sqlite3, or shell clients for those connections. Every data query uses a mandatory two-step workflow: first call `plan_query` with exactly one SELECT, read its database-health notices and safer suggestions, then call `run_query` with the exact single-use `planId`. Never skip planning, and call plan_query again if SQL changes or the plan expires. Planning uses EXPLAIN plus aggregate load signals; it never exposes other sessions' SQL text. Execution is DB-enforced READ ONLY, audited, row-capped, and shown LIVE in DopeDB. After a successful run_query, ask whether the user wants to save that exact query as a dashboard. Only after explicit agreement call `create_dashboard` with its exact `queryRunId`; never substitute SQL or connection. Writes remain unavailable over MCP."
 )]
 impl ServerHandler for DbTools {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn profile(env: Option<&str>) -> ConnectionProfile {
+        ConnectionProfile {
+            id: Uuid::new_v4(),
+            name: "analytics".into(),
+            engine: Engine::Postgres,
+            host: "localhost".into(),
+            port: 5432,
+            database: "app".into(),
+            username: "reader".into(),
+            sslmode: "prefer".into(),
+            extra_params: HashMap::new(),
+            readonly_default: true,
+            allow_writes: false,
+            secret_ref: None,
+            project_dir: None,
+            env: env.map(str::to_string),
+            schema_group: None,
+        }
+    }
+
+    fn quiet_health(coverage: &str) -> HealthSnapshot {
+        HealthSnapshot {
+            level: "normal".into(),
+            coverage: coverage.into(),
+            total_connections: Some(1),
+            max_connections: Some(100),
+            connection_usage_percent: Some(1.0),
+            active_queries: Some(1),
+            long_running_queries: Some(0),
+            lock_waits: Some(0),
+            replication_lag_seconds: None,
+            reasons: vec!["No aggregate database-pressure warning was detected.".into()],
+            captured_at: Utc::now(),
+        }
+    }
 
     #[test]
     fn truncate_only_oversized_cells() {
@@ -665,5 +930,36 @@ mod tests {
         let s = out[0][0].as_str().unwrap();
         assert!(s.ends_with('…')); // oversized cell became a marked preview
         assert!(s.chars().count() <= CELL_PREVIEW_MAX + 1);
+    }
+
+    #[test]
+    fn production_and_limited_coverage_force_agent_caution() {
+        let (decision, notices, suggestions) = planning_guidance(
+            &profile(Some("prod")),
+            &quiet_health("limited"),
+            Some(10),
+            50_000,
+        );
+        assert_eq!(decision, "caution");
+        assert!(notices.iter().any(|n| n.contains("production")));
+        assert!(suggestions.iter().any(|n| n.contains("pg_monitor")));
+    }
+
+    #[test]
+    fn planned_query_is_single_use_in_the_shared_store() {
+        let store = query_plan_store();
+        let id = Uuid::new_v4();
+        store.lock().unwrap().insert(
+            id,
+            PlannedQuery {
+                connection_id: Uuid::new_v4(),
+                sql: "SELECT 1".into(),
+                max_rows: 10,
+                decision: "ready".into(),
+                created_at: Instant::now(),
+            },
+        );
+        assert!(store.lock().unwrap().remove(&id).is_some());
+        assert!(store.lock().unwrap().remove(&id).is_none());
     }
 }

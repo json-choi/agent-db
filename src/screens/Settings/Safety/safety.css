@@ -76,6 +76,52 @@
   justify-content: flex-start;
 }
 
+.monitoring-access {
+  display: grid;
+  gap: var(--ds-space-3);
+  margin-top: var(--ds-space-2);
+}
+
+.monitoring-access-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--ds-space-3);
+}
+
+.monitoring-access-head > div {
+  min-width: 0;
+}
+
+.monitoring-access-head .ds-title-line {
+  color: var(--ds-text);
+}
+
+.monitoring-access-head p {
+  max-width: 680px;
+  margin: var(--ds-space-1) 0 0;
+  font-size: var(--ds-font-size-ui);
+  line-height: var(--ds-line-body);
+}
+
+.monitoring-access-state {
+  display: grid;
+  gap: var(--ds-space-1);
+  padding-top: var(--ds-space-2);
+  border-top: var(--ds-border-width) solid var(--ds-border-subtle);
+  font-size: var(--ds-font-size-sm);
+  line-height: var(--ds-line-body);
+}
+
+.monitoring-access-state code {
+  margin-left: var(--ds-space-1);
+  color: var(--ds-text);
+}
+
+.monitoring-access-actions {
+  align-items: center;
+}
+
 @media (max-width: 1180px) {
   .safety-controls {
     grid-template-columns: 1fr 1fr;
@@ -104,6 +150,10 @@
 
   .safety-number {
     grid-template-columns: 1fr;
+  }
+
+  .monitoring-access-head {
+    flex-direction: column;
   }
 
   .safety-save-row .btn {

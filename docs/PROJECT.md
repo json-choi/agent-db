@@ -42,10 +42,13 @@ Current MCP tools:
 - `list_connections`
 - `list_tables`
 - `describe_table`
+- `plan_query`
 - `run_query`
 - `create_dashboard`
 
-All target-database access exposed by MCP is read-only. `run_query` rejects non-read SQL before execution, and the database read-only session is the authoritative guard. Each successful query returns a durable `queryRunId`. After explicit user agreement, `create_dashboard` must reference that exact ID; DopeDB loads the connection and SQL from the successful agent history row instead of accepting replacements from the agent. Dashboard creation only writes to DopeDB's local app store and never to the target database. MCP target-database write tools are intentionally deferred.
+All target-database access exposed by MCP is read-only. Every data query is a mandatory two-step operation: `plan_query` validates one SELECT, runs non-executing EXPLAIN, gathers aggregate database-pressure signals, and returns a 30-second single-use `planId`; `run_query` accepts only that id, not replacement SQL or a connection. This forces the agent to receive the current warnings before execution. The database read-only session remains the authoritative guard. Each successful query returns a durable `queryRunId`. After explicit user agreement, `create_dashboard` must reference that exact ID; DopeDB loads the connection and SQL from the successful agent history row instead of accepting replacements from the agent. Dashboard creation only writes to DopeDB's local app store and never to the target database. MCP target-database write tools are intentionally deferred.
+
+Query planning never sends other sessions' SQL text, users, client addresses, or parameters to the agent. It returns aggregate connection usage, active/long-running query counts, lock-wait counts, and replication lag when the engine exposes them. PostgreSQL connections can grant/revoke the built-in `pg_monitor` role from Safety settings through one fixed, explicitly confirmed command. This narrow command is audited separately and does not enable arbitrary writes. Without that role, planning reports limited monitoring coverage and applies a caution decision. MySQL uses available Performance Schema aggregates; SQLite reports basic local coverage.
 
 Saved dashboards belong to a connection and persist in `app.db`, so they are restored when that connection is opened again. A dashboard stores SQL plus a bounded, versioned declarative visualization (`auto`, `metric`, `line`, `bar`, or `table`); it does not store generated HTML. Opening a dashboard calls the dedicated `run_dashboard` command, which reloads and revalidates the definition against the current engine and always uses the L2 read-only session independently of write/auto-run settings. Result rows are never persisted.
 
