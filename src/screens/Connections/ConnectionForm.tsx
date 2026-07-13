@@ -2,18 +2,26 @@
 // Split out of the old Connections/index.tsx (see DatabaseExplorer.tsx for the sidebar
 // tree that used to live alongside it).
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
+  installDriver,
   pickFile,
   pickFolder,
   testConnectionProfile,
   upsertConnection,
 } from "../../ipc/commands";
-import type { ConnectionProfile, Engine } from "../../ipc/types";
+import type {
+  ConnectionProfile,
+  DriverDescriptor,
+  Engine,
+  Provider,
+} from "../../ipc/types";
 import { errMessage } from "../../ipc/types";
 import { Icon } from "../../components/Icon";
 import InfoTip from "../../components/InfoTip";
 import { useToast } from "../../components/Toast";
 import { useI18n } from "../../lib/i18n";
+import { driversQuery } from "../../lib/queries";
 import "./connections.css";
 
 const DEFAULT_PORT: Record<Engine, number> = {
@@ -21,6 +29,20 @@ const DEFAULT_PORT: Record<Engine, number> = {
   mysql: 3306,
   sqlite: 0,
 };
+
+const PROVIDER_ORDER: Provider[] = ["auto", "generic", "neon", "planetScale"];
+
+function compatibleDrivers(
+  drivers: DriverDescriptor[],
+  engine: Engine,
+  provider: Provider,
+): DriverDescriptor[] {
+  return drivers.filter(
+    (driver) =>
+      driver.engine === engine &&
+      (provider === "auto" || driver.supportedProviders.includes(provider)),
+  );
+}
 
 type ParsedConnectionUrl = {
   update: Partial<ConnectionProfile>;
@@ -124,6 +146,8 @@ function parseConnectionUrl(raw: string): ParsedConnectionUrl | null {
   const update: Partial<ConnectionProfile> = {
     name,
     engine,
+    provider: "auto",
+    driverId: null,
     host: engine === "sqlite" ? "localhost" : decodeUrlPart(url.hostname),
     port: url.port ? Number(url.port) : DEFAULT_PORT[engine],
     database,
@@ -157,6 +181,8 @@ function blank(): ConnectionProfile {
     id: crypto.randomUUID(),
     name: "",
     engine: "postgres",
+    provider: "auto",
+    driverId: null,
     host: "localhost",
     port: 5432,
     database: "",
@@ -183,12 +209,14 @@ export function ConnectionForm({
 }) {
   const { t } = useI18n();
   const toast = useToast();
+  const driverCatalog = useQuery(driversQuery());
   const [form, setForm] = useState<ConnectionProfile>(initial ?? blank());
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   // Which action is in flight, so only the clicked button shows progress (busy
   // disables all three).
   const [running, setRunning] = useState<"save" | "test" | null>(null);
+  const [installingDriverId, setInstallingDriverId] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [msgErr, setMsgErr] = useState(false);
   const isNew = initial === null;
@@ -271,6 +299,37 @@ export function ConnectionForm({
   }
 
   const isSqlite = form.engine === "sqlite";
+  const drivers = compatibleDrivers(driverCatalog.data ?? [], form.engine, form.provider);
+  const activeDriver =
+    drivers.find((driver) => driver.id === form.driverId) ??
+    drivers.find((driver) => driver.recommended) ??
+    drivers[0] ??
+    null;
+  const providers = PROVIDER_ORDER.filter(
+    (provider) =>
+      provider === "auto" ||
+      provider === form.provider ||
+      (driverCatalog.data ?? []).some(
+        (driver) =>
+          driver.engine === form.engine && driver.supportedProviders.includes(provider),
+      ),
+  );
+
+  async function downloadDriver(driver: DriverDescriptor) {
+    setInstallingDriverId(driver.id);
+    setMsg(null);
+    try {
+      await installDriver(driver.id);
+      await driverCatalog.refetch();
+      setMsg(t("connections.driverInstalled", { name: driver.name }));
+      setMsgErr(false);
+    } catch (e) {
+      setMsg(errMessage(e));
+      setMsgErr(true);
+    } finally {
+      setInstallingDriverId(null);
+    }
+  }
 
   return (
     <div
@@ -333,6 +392,8 @@ export function ConnectionForm({
             setForm((f) => ({
               ...f,
               engine,
+              provider: "auto",
+              driverId: null,
               // Keep a user-customized port; only swap when it still matches the
               // outgoing engine's default.
               port: f.port === DEFAULT_PORT[f.engine] ? DEFAULT_PORT[engine] : f.port,
@@ -344,6 +405,78 @@ export function ConnectionForm({
           <option value="sqlite">SQLite</option>
         </select>
       </label>
+
+      <div className="connection-driver-grid">
+        <label>
+          {t("connections.provider")}
+          <select
+            value={form.provider}
+            onChange={(e) => {
+              const provider = e.target.value as Provider;
+              setForm((current) => ({ ...current, provider, driverId: null }));
+            }}
+          >
+            {providers.map((provider) => (
+              <option key={provider} value={provider}>
+                {provider === "auto"
+                  ? t("connections.providerAuto")
+                  : provider === "generic"
+                    ? t("connections.providerGeneric")
+                    : provider === "neon"
+                      ? t("connections.providerNeon")
+                      : t("connections.providerPlanetScale")}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label>
+          <span className="label-with-help">
+            {t("connections.driver")}
+            <InfoTip label={t("connections.driverHint")} />
+          </span>
+          <select
+            value={form.driverId ?? ""}
+            onChange={(e) => set("driverId", e.target.value || null)}
+            disabled={driverCatalog.isPending || drivers.length === 0}
+          >
+            <option value="">{t("connections.driverAutomatic")}</option>
+            {drivers.map((driver) => (
+              <option key={driver.id} value={driver.id}>
+                {driver.name} {driver.version}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      {activeDriver && (
+        <div className="connection-driver-summary">
+          <div>
+            <strong>{activeDriver.name}</strong>
+            <span className="muted">
+              {activeDriver.installMode === "bundled"
+                ? t("connections.driverBundled")
+                : activeDriver.installState === "installed"
+                  ? t("connections.driverInstalledStatus")
+                  : t("connections.driverDownloadRequired")}
+            </span>
+          </div>
+          {activeDriver.installMode === "managed" &&
+            activeDriver.installState === "available" && (
+              <button
+                type="button"
+                className="btn small"
+                disabled={installingDriverId !== null}
+                onClick={() => void downloadDriver(activeDriver)}
+              >
+                {installingDriverId === activeDriver.id
+                  ? t("connections.driverDownloading")
+                  : t("connections.driverDownload")}
+              </button>
+            )}
+        </div>
+      )}
 
       {isSqlite ? (
         <label>

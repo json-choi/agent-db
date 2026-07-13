@@ -2,11 +2,14 @@
 // Keep this file in lockstep with src-tauri/src/model.rs — it is the data contract.
 
 export type Engine = "postgres" | "mysql" | "sqlite";
+export type Provider = "auto" | "generic" | "neon" | "planetScale";
 
 export interface ConnectionProfile {
   id: string; // Uuid
   name: string;
   engine: Engine;
+  provider: Provider;
+  driverId: string | null;
   host: string;
   port: number;
   database: string;
@@ -19,6 +22,28 @@ export interface ConnectionProfile {
   projectDir: string | null;
   env: string | null; // "dev" | "staging" | "prod" | null
   schemaGroup: string | null; // shared group for dev/staging/prod schema comparison
+}
+
+// Mirrors src-tauri/src/driver/mod.rs.
+export type DriverInstallMode = "bundled" | "managed";
+export type DriverInstallState = "installed" | "available";
+export type DriverCapability =
+  | "sql"
+  | "transactions"
+  | "introspection"
+  | "schemaDiff"
+  | "monitoring";
+
+export interface DriverDescriptor {
+  id: string;
+  name: string;
+  engine: Engine;
+  version: string;
+  installMode: DriverInstallMode;
+  installState: DriverInstallState;
+  supportedProviders: Provider[];
+  capabilities: DriverCapability[];
+  recommended: boolean;
 }
 
 export interface SafetySettings {

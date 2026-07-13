@@ -7,8 +7,9 @@ pub mod keychain;
 pub mod pool;
 pub mod providers;
 
+pub use crate::driver::connect;
 pub use keychain::{delete_secret, fetch_secret, store_secret};
-pub use pool::{connect, DbPool, LiveConnection};
+pub use pool::{DbPool, LiveConnection};
 
 /// The executor module refers to the engine-tagged pool enum as `Pool`; keep a
 /// single definition (`DbPool`) and expose this alias so both names resolve.

@@ -10,6 +10,7 @@ import {
   getCatalog,
   getMonitoringStatus,
   listDashboards,
+  listDrivers,
   listHistory,
   refreshCatalog,
   runDashboard,
@@ -58,6 +59,7 @@ export const qk = {
   monitoring: (connectionId: string) => ["monitoring", connectionId] as const,
   dashboards: (connectionId: string) => ["dashboards", connectionId] as const,
   dashboardRun: (dashboardId: string) => ["dashboardRun", dashboardId] as const,
+  drivers: () => ["drivers"] as const,
   tableRows: (args: TableRowsArgs) =>
     [
       "tableRows",
@@ -66,6 +68,14 @@ export const qk = {
       { filters: args.filters, sort: args.sort, pageSize: args.pageSize, page: args.page },
     ] as const,
 };
+
+export function driversQuery() {
+  return queryOptions({
+    queryKey: qk.drivers(),
+    staleTime: Infinity,
+    queryFn: listDrivers,
+  });
+}
 
 export function catalogQuery(connectionId: string) {
   return queryOptions({

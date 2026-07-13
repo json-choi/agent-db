@@ -32,7 +32,7 @@ gh workflow run canary.yml --ref main -f source_ref="$branch"
 - `src/lib/queries.ts` + `queryClient.tsx`: TanStack Query 기반 앱 전역 읽기 캐시. 백엔드 읽기는 전부 여기 등록된 쿼리로 접근한다.
 - `src/ipc/`: Tauri invoke 래퍼(`commands.ts`)와 Rust 데이터 계약 미러(`types.ts`).
 - `src/design-system/`: 토큰(`tokens.css`)과 공통 클래스(`system.css`) — 상세는 `src/design-system/README.md`.
-- `src-tauri/src/`: `connection`, `introspect`, `executor`, `migrations`, `safety`, `audit`, `mcp`, `store`, `commands` 도메인 모듈 + `model.rs`(데이터 계약).
+- `src-tauri/src/`: `driver`(레지스트리/선택), `connection`, `introspect`, `executor`, `migrations`, `safety`, `audit`, `mcp`, `store`, `commands` 도메인 모듈 + `model.rs`(데이터 계약).
 - `dopedb-mcp-stdio/`, `site/`: 별개 하위 프로젝트(각자 자체 빌드).
 
 ## 빌드 · 검증

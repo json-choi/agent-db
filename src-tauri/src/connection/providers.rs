@@ -6,48 +6,37 @@ use std::time::Duration;
 use sqlx::mysql::{MySqlConnectOptions, MySqlSslMode};
 use sqlx::postgres::PgConnectOptions;
 
-use crate::model::ConnectionProfile;
-
-/// Managed cloud providers we apply specific tuning for. `Generic` covers
-/// self-hosted / unknown hosts (no special handling beyond the profile fields).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Provider {
-    /// Supabase Supavisor pooler (`*.pooler.supabase.com`), txn mode on 6543.
-    SupabasePooler,
-    /// Neon serverless Postgres (`*.neon.tech`), scale-to-zero cold starts.
-    Neon,
-    /// PlanetScale MySQL over Vitess (`*.psdb.cloud`) — FK metadata unreliable.
-    PlanetScaleMysql,
-    /// AWS RDS (`*.rds.amazonaws.com`) — needs the RDS CA for verify-full.
-    Rds,
-    Generic,
-}
+use crate::model::{ConnectionProfile, Engine, Provider};
 
 /// Classify a profile by host. Cheap substring match — hosts are provider-fixed.
 pub fn detect(p: &ConnectionProfile) -> Provider {
     let h = p.host.to_ascii_lowercase();
-    if h.contains("pooler.supabase.com") {
-        Provider::SupabasePooler
-    } else if h.contains("neon.tech") {
+    if h.contains("neon.tech") {
         Provider::Neon
     } else if h.contains("psdb.cloud") {
-        Provider::PlanetScaleMysql
-    } else if h.contains("rds.amazonaws.com") {
-        Provider::Rds
+        Provider::PlanetScale
     } else {
         Provider::Generic
+    }
+}
+
+/// Resolve `Auto` to a concrete provider without conflating that provider with an engine.
+pub fn resolve(p: &ConnectionProfile) -> Provider {
+    match p.provider {
+        Provider::Auto => detect(p),
+        explicit => explicit,
     }
 }
 
 /// PlanetScale/Vitess is sharded — its FK metadata in `information_schema` is
 /// unreliable, so introspection skips it.
 pub fn skip_fk_metadata(p: &ConnectionProfile) -> bool {
-    matches!(detect(p), Provider::PlanetScaleMysql)
+    p.engine == Engine::Mysql && resolve(p) == Provider::PlanetScale
 }
 
 /// Pool acquire timeout. Neon scales to zero, so cold connects need slack.
 pub fn connect_timeout(p: &ConnectionProfile) -> Duration {
-    match detect(p) {
+    match resolve(p) {
         Provider::Neon => Duration::from_secs(30),
         _ => Duration::from_secs(15),
     }
@@ -55,7 +44,7 @@ pub fn connect_timeout(p: &ConnectionProfile) -> Duration {
 
 /// Apply Postgres per-provider tuning to freshly-built connect options.
 pub fn apply_pg_tuning(p: &ConnectionProfile, mut opts: PgConnectOptions) -> PgConnectOptions {
-    if detect(p) == Provider::SupabasePooler {
+    if p.host.to_ascii_lowercase().contains("pooler.supabase.com") {
         // Supavisor transaction mode multiplexes server-side prepared statements;
         // client-side statement caching breaks connections → disable it.
         opts = opts.statement_cache_capacity(0);
@@ -72,7 +61,7 @@ pub fn apply_pg_tuning(p: &ConnectionProfile, mut opts: PgConnectOptions) -> PgC
 
 /// Apply MySQL per-provider tuning.
 pub fn apply_mysql_tuning(p: &ConnectionProfile, mut opts: MySqlConnectOptions) -> MySqlConnectOptions {
-    if detect(p) == Provider::PlanetScaleMysql {
+    if resolve(p) == Provider::PlanetScale {
         // PlanetScale requires TLS with identity verification.
         opts = opts.ssl_mode(MySqlSslMode::VerifyIdentity);
     }
@@ -94,6 +83,8 @@ mod tests {
             id: Uuid::new_v4(),
             name: "t".into(),
             engine: Engine::Postgres,
+            provider: Provider::Auto,
+            driver_id: None,
             host: host.into(),
             port: 5432,
             database: "db".into(),
@@ -111,12 +102,19 @@ mod tests {
 
     #[test]
     fn detects_providers() {
-        assert_eq!(detect(&profile("aws-0-us.pooler.supabase.com")), Provider::SupabasePooler);
         assert_eq!(detect(&profile("ep-x-pooler.us-east-2.aws.neon.tech")), Provider::Neon);
-        assert_eq!(detect(&profile("xyz.connect.psdb.cloud")), Provider::PlanetScaleMysql);
-        assert_eq!(detect(&profile("db.abc.rds.amazonaws.com")), Provider::Rds);
+        assert_eq!(detect(&profile("xyz.connect.psdb.cloud")), Provider::PlanetScale);
         assert_eq!(detect(&profile("localhost")), Provider::Generic);
-        assert!(skip_fk_metadata(&profile("xyz.connect.psdb.cloud")));
+        let mut planetscale = profile("xyz.connect.psdb.cloud");
+        planetscale.engine = Engine::Mysql;
+        assert!(skip_fk_metadata(&planetscale));
         assert!(!skip_fk_metadata(&profile("localhost")));
+    }
+
+    #[test]
+    fn explicit_provider_overrides_host_detection() {
+        let mut p = profile("localhost");
+        p.provider = Provider::Neon;
+        assert_eq!(resolve(&p), Provider::Neon);
     }
 }

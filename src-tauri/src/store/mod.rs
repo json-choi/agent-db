@@ -21,7 +21,8 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::model::{
-    ConnectionProfile, Dashboard, DashboardDraft, Engine, HistoryEntry, QueryKind, SafetySettings,
+    ConnectionProfile, Dashboard, DashboardDraft, Engine, HistoryEntry, Provider, QueryKind,
+    SafetySettings,
 };
 
 /// Handle to the local app.db. Cheap to clone (the pool is an `Arc` internally).
@@ -64,6 +65,14 @@ impl Store {
         let _ = sqlx::query("ALTER TABLE connections ADD COLUMN schema_group TEXT")
             .execute(&pool)
             .await;
+        let _ = sqlx::query(
+            "ALTER TABLE connections ADD COLUMN provider TEXT NOT NULL DEFAULT 'auto'",
+        )
+        .execute(&pool)
+        .await;
+        let _ = sqlx::query("ALTER TABLE connections ADD COLUMN driver_id TEXT")
+            .execute(&pool)
+            .await;
         migrate_audit_no_cascade(&pool).await?;
         Ok(Store { pool, audit_lock: Arc::new(Mutex::new(())) })
     }
@@ -96,19 +105,21 @@ impl Store {
         let extra = serde_json::to_string(&p.extra_params)?;
         sqlx::query(
             r#"INSERT INTO connections
-                (id, name, engine, host, port, db_name, username, sslmode,
+                (id, name, engine, provider, driver_id, host, port, db_name, username, sslmode,
                  extra_params, secret_ref, readonly_default, allow_writes,
                  created_at, updated_at, project_dir, env, schema_group)
-               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?13,?14,?15,?16)
+               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?15,?16,?17,?18)
                ON CONFLICT(id) DO UPDATE SET
-                 name=?2, engine=?3, host=?4, port=?5, db_name=?6, username=?7,
-                 sslmode=?8, extra_params=?9, secret_ref=?10,
-                 readonly_default=?11, allow_writes=?12, updated_at=?13, project_dir=?14,
-                 env=?15, schema_group=?16"#,
+                 name=?2, engine=?3, provider=?4, driver_id=?5, host=?6, port=?7,
+                 db_name=?8, username=?9, sslmode=?10, extra_params=?11, secret_ref=?12,
+                 readonly_default=?13, allow_writes=?14, updated_at=?15, project_dir=?16,
+                 env=?17, schema_group=?18"#,
         )
         .bind(p.id.to_string())
         .bind(&p.name)
         .bind(engine_str(p.engine))
+        .bind(provider_str(p.provider))
+        .bind(&p.driver_id)
         .bind(&p.host)
         .bind(p.port as i64)
         .bind(&p.database)
@@ -448,6 +459,10 @@ fn row_to_connection(r: &sqlx::sqlite::SqliteRow) -> AppResult<ConnectionProfile
         id: parse_uuid(r.try_get("id")?)?,
         name: r.try_get("name")?,
         engine: parse_engine(r.try_get("engine")?)?,
+        provider: parse_provider(
+            r.try_get("provider").unwrap_or_else(|_| "auto".to_string()),
+        )?,
+        driver_id: r.try_get("driver_id").unwrap_or(None),
         host: r.try_get("host")?,
         port: r.try_get::<i64, _>("port")? as u16,
         database: r.try_get("db_name")?,
@@ -513,6 +528,25 @@ pub(crate) fn parse_engine(s: String) -> AppResult<Engine> {
     }
 }
 
+pub(crate) fn provider_str(provider: Provider) -> &'static str {
+    match provider {
+        Provider::Auto => "auto",
+        Provider::Generic => "generic",
+        Provider::Neon => "neon",
+        Provider::PlanetScale => "planetScale",
+    }
+}
+
+pub(crate) fn parse_provider(s: String) -> AppResult<Provider> {
+    match s.as_str() {
+        "auto" => Ok(Provider::Auto),
+        "generic" => Ok(Provider::Generic),
+        "neon" => Ok(Provider::Neon),
+        "planetScale" => Ok(Provider::PlanetScale),
+        other => Err(AppError::Config(format!("unknown provider '{other}'"))),
+    }
+}
+
 pub(crate) fn kind_str(k: QueryKind) -> &'static str {
     match k {
         QueryKind::Read => "read",
@@ -542,7 +576,7 @@ mod tests {
     use crate::error::AppError;
     use crate::model::{
         ConnectionProfile, DashboardDraft, DashboardKind, DashboardVisualization, Engine,
-        HistoryEntry, QueryKind,
+        HistoryEntry, Provider, QueryKind,
     };
     use chrono::Utc;
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -625,6 +659,8 @@ mod tests {
                 id: connection_id,
                 name: "analytics".into(),
                 engine: Engine::Sqlite,
+                provider: Provider::Generic,
+                driver_id: Some("sqlx-sqlite".into()),
                 host: String::new(),
                 port: 0,
                 database: ":memory:".into(),
@@ -640,6 +676,10 @@ mod tests {
             })
             .await
             .unwrap();
+
+        let loaded = store.get_connection(connection_id).await.unwrap();
+        assert_eq!(loaded.provider, Provider::Generic);
+        assert_eq!(loaded.driver_id.as_deref(), Some("sqlx-sqlite"));
 
         let draft = DashboardDraft {
             connection_id,

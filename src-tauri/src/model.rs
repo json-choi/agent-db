@@ -18,6 +18,18 @@ pub enum Engine {
     Sqlite,
 }
 
+/// Hosting/control-plane provider. `Auto` preserves connection-URL convenience while
+/// keeping provider-specific behavior separate from the database wire protocol.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Provider {
+    #[default]
+    Auto,
+    Generic,
+    Neon,
+    PlanetScale,
+}
+
 /// A saved connection. Secrets never live here — only a `secretRef` pointing at the
 /// OS credential-store item that holds the password/connection string.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,6 +38,12 @@ pub struct ConnectionProfile {
     pub id: Uuid,
     pub name: String,
     pub engine: Engine,
+    /// Provider overlay selected by the user; `Auto` resolves from the endpoint.
+    #[serde(default)]
+    pub provider: Provider,
+    /// Explicit driver selection. `None` asks the registry for its best compatible driver.
+    #[serde(default)]
+    pub driver_id: Option<String>,
     pub host: String,
     pub port: u16,
     pub database: String,

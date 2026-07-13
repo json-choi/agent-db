@@ -128,6 +128,16 @@ async fn record_run(
 // ── connection CRUD ──────────────────────────────────────────────────────────
 
 #[tauri::command]
+pub fn list_drivers() -> Vec<crate::driver::DriverDescriptor> {
+    crate::driver::list()
+}
+
+#[tauri::command]
+pub fn install_driver(id: String) -> AppResult<crate::driver::DriverDescriptor> {
+    crate::driver::install(&id)
+}
+
+#[tauri::command]
 pub async fn list_connections(state: State<'_, AppState>) -> AppResult<Vec<ConnectionProfile>> {
     state.store.list_connections().await
 }
@@ -139,6 +149,8 @@ pub async fn upsert_connection(
     password: Option<String>,
 ) -> AppResult<ConnectionProfile> {
     let mut profile = profile;
+    // Reject stale or incompatible explicit driver choices before persisting the profile.
+    crate::driver::validate(&profile)?;
     // Stash any supplied secret in the OS credential store and point the profile at it.
     if let Some(pw) = password.filter(|p| !p.is_empty()) {
         connection::store_secret(&profile.id, &pw)?;

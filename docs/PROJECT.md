@@ -22,7 +22,8 @@ connections, dashboards, and saved agent analysis are specified in the
 
 The Rust core owns the trust boundary:
 
-- `connection/`: connection profiles, pools, provider tuning, and OS credential-store-backed secrets
+- `driver/`: driver catalog, compatibility/recommendation, install state, and runtime dispatch
+- `connection/`: connection profiles, concrete pools, provider tuning, and OS credential-store-backed secrets
 - `safety/`: SQL classification, read-only enforcement, preview, and approval policy
 - `executor/`: read execution and gated write execution
 - `audit/`: query history and hash-chained audit records

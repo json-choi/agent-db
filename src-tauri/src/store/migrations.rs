@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS connections (
     id                TEXT PRIMARY KEY,
     name              TEXT NOT NULL,
     engine            TEXT NOT NULL,
+    provider          TEXT NOT NULL DEFAULT 'auto', -- control-plane overlay
+    driver_id         TEXT,                          -- NULL = registry recommendation
     host              TEXT NOT NULL,
     port              INTEGER NOT NULL,
     db_name           TEXT NOT NULL,

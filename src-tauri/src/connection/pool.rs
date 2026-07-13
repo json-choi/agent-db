@@ -75,13 +75,23 @@ impl LiveConnection {
     }
 }
 
-/// Build both pools for a profile. `secret` is the password (or, for a
-/// connection-string secret, the password component); it is never stored here.
-pub async fn connect(profile: &ConnectionProfile, secret: &str) -> AppResult<LiveConnection> {
+/// SQLx adapter entrypoint. Driver selection and compatibility validation live in
+/// `crate::driver`; this module only builds the concrete SQLx pools.
+pub(crate) async fn connect_sqlx(
+    adapter_engine: Engine,
+    profile: &ConnectionProfile,
+    secret: &str,
+) -> AppResult<LiveConnection> {
+    if adapter_engine != profile.engine {
+        return Err(AppError::Config(format!(
+            "SQLx {:?} adapter cannot open a {:?} profile",
+            adapter_engine, profile.engine
+        )));
+    }
     let skip_fk_metadata = providers::skip_fk_metadata(profile);
     let acquire = providers::connect_timeout(profile);
 
-    let (write_pool, read_pool) = match profile.engine {
+    let (write_pool, read_pool) = match adapter_engine {
         Engine::Postgres => {
             let base = PgConnectOptions::new()
                 .host(&profile.host)

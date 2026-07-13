@@ -889,6 +889,8 @@ mod tests {
             id: Uuid::new_v4(),
             name: "analytics".into(),
             engine: Engine::Postgres,
+            provider: crate::model::Provider::Auto,
+            driver_id: None,
             host: "localhost".into(),
             port: 5432,
             database: "app".into(),
