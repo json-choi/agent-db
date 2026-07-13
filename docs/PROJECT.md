@@ -14,8 +14,9 @@ Current scope:
 - MCP: local Streamable HTTP endpoint plus stdio bridge
 - Distribution: GitHub Releases and Tauri updater metadata
 
-Planned team collaboration, shared connections, dashboards, and saved agent analysis
-are specified in the [Workspace Collaboration Roadmap](./WORKSPACE_ROADMAP.md).
+Planned team collaboration, workspace-scoped provider integrations, shared
+connections, dashboards, and saved agent analysis are specified in the
+[Workspace Collaboration Roadmap](./WORKSPACE_ROADMAP.md).
 
 ## Architecture
 

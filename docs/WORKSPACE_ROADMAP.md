@@ -13,12 +13,18 @@ Use a local-execution, hosted-control-plane architecture:
 - The workspace service synchronizes membership, connection templates, dashboards,
   analysis reports, revisions, and collaboration audit events.
 - Each desktop app keeps database credentials in that member's OS credential store.
+- Provider API credentials also remain bound to a member and device by default. The
+  workspace service synchronizes redacted provider resource metadata, not raw API
+  tokens or one-time credentials.
 - Queries continue to run from the desktop app through the existing Rust safety,
   monitoring, audit, and read-only execution paths.
 - Query result rows are not synchronized by default. Publishing a bounded result
   snapshot is a separate, explicit action with masking and retention controls.
 - Workspace membership never grants target-database write access or `pg_monitor`.
   Those remain database-side privileges of the credential used on each device.
+- Database drivers and provider control-plane adapters remain separate. A driver
+  connects to PostgreSQL, MySQL, MongoDB, or a graph database; a provider adapter
+  discovers and manages Neon, PlanetScale, or another hosted service.
 
 ```mermaid
 flowchart LR
@@ -26,11 +32,16 @@ flowchart LR
     B["Member B · DopeDB"] <-->|"encrypted sync"| W
     W --> M["members · roles · invitations"]
     W --> R["connection templates · dashboards · reports"]
+    W --> P["provider resources · permissions · approvals"]
     W --> V["revisions · collaboration audit"]
     A --> KA["A's OS credential store"]
     B --> KB["B's OS credential store"]
     KA --> D["Target database"]
     KB --> D
+    KA --> PA["local provider adapter"]
+    KB --> PB["local provider adapter"]
+    PA --> API["Neon · PlanetScale API"]
+    PB --> API
     A --> SA["local MCP and safety pipeline"]
     B --> SB["local MCP and safety pipeline"]
 ```
@@ -40,6 +51,10 @@ flowchart LR
 - Let a user create a workspace and invite teammates with clear roles.
 - Share connection definitions without sharing raw passwords by default.
 - Let each member bind their own database credential to a shared connection.
+- Let each member bind a provider API credential to a workspace integration and
+  import only resources that both the provider and workspace authorize.
+- Apply workspace roles, resource grants, provider-token scopes, environment policy,
+  and local safety checks as narrowing layers rather than interchangeable authority.
 - Share and version dashboard definitions across members and devices.
 - Save agent analysis as a durable report containing the question, conclusion,
   supporting queries, and the warnings observed before execution.
@@ -51,7 +66,11 @@ flowchart LR
 
 - Proxying database traffic through the workspace service.
 - Automatically distributing database passwords, certificates, or cloud tokens.
+- Claiming that workspace policy can restrict how a member uses a personal provider
+  token outside DopeDB. The external provider remains authoritative for that token.
 - Granting writes, DDL, or PostgreSQL roles through workspace membership.
+- Treating provider project, branch, compute, backup, credential, or deployment APIs
+  as database-driver responsibilities.
 - Persisting every query result or agent conversation to the workspace.
 - Public, unauthenticated dashboard links.
 - Real-time co-editing of SQL or reports.
@@ -62,6 +81,8 @@ flowchart LR
 | Resource | Workspace data | Local-only data |
 | --- | --- | --- |
 | Connection | engine, host, port, database, SSL, environment, safety policy | password, token, certificate, local `secret_ref`, live pool |
+| Provider integration | provider kind, external organization or project ids, imported resource topology, capability snapshot, workspace policy | API token, OAuth refresh token, local `secret_ref`, one-time credentials |
+| Provider operation | redacted request, approval state, provider operation id, outcome | unredacted secret responses and local transport diagnostics |
 | Dashboard | title, description, SQL, visualization definition, revision | current result rows |
 | Analysis report | question, narrative, query provenance, warnings, selected visualization | unpublished intermediate results |
 | Monitoring | desired coverage and policy hints | current load snapshot and credential-specific `pg_monitor` status |
@@ -93,6 +114,64 @@ Each connection adds explicit grants such as `view_definition`, `execute_read`,
 read-only in the first release. Existing local write settings are never inherited by
 another member or device.
 
+Provider integrations add a separate resource hierarchy:
+
+```text
+workspace
+└─ provider integration
+   └─ organization, project, or database
+      └─ branch, endpoint, compute, or deployment resource
+         └─ workspace connection template
+```
+
+Provider actions use explicit capabilities such as `provider.view`,
+`provider.integration.manage`, `provider.resource.import`,
+`provider.branch.create`, `provider.branch.delete`, `provider.compute.manage`,
+`provider.credentials.manage`, `provider.backup.restore`,
+`provider.deploy_request.create`, `provider.deploy_request.approve`, and
+`provider.deploy.execute`. An adapter reports which capabilities a particular
+provider resource supports; the UI and API must not infer support from the provider
+name alone.
+
+Every provider or database operation is evaluated as the intersection of:
+
+1. active workspace membership and role defaults;
+2. explicit resource grants and denies;
+3. provider-reported capabilities and the bound token's verified scopes;
+4. environment policy, including a separate production-access grant; and
+5. local database safety and credential state when the operation reaches a database.
+
+An explicit deny wins. A high-scope provider token cannot broaden workspace access,
+and an Owner role cannot create authority that the external provider or target
+database has not granted. Production, credential, restore, deployment, and
+destructive operations can additionally require an approval request.
+
+## Provider Integration Boundary
+
+Keep two adapter contracts with no shared secret-bearing configuration object:
+
+- A `DriverAdapter` connects to a database and implements query execution, schema
+  inspection, cancellation, and engine-specific value handling.
+- A `ProviderAdapter` talks to a hosted service control plane and implements resource
+  discovery plus capability-gated operations such as branch or compute management.
+
+A provider resource may create or update a workspace connection template through a
+`provider_resource_id`, but the template does not own the provider token. Database
+credentials remain in the existing member/device credential binding, independently
+of the provider API credential.
+
+The initial credential mode is member-local: each member stores a provider token in
+the OS credential store and calls the provider from the desktop after a workspace
+authorization check. In this mode, workspace permissions are an enforceable DopeDB
+application boundary, while provider token scopes are the authoritative boundary for
+use outside DopeDB.
+
+A later managed credential mode may keep a team service credential in a backend
+Vault or KMS-backed secret store and route provider operations through the workspace
+service. That mode is required for centrally enforced scheduled automation or for
+preventing clients from ever receiving the provider credential. It must not turn the
+workspace service into a database query proxy.
+
 ## Target Data Model
 
 ### Workspace service
@@ -102,6 +181,14 @@ another member or device.
 - `workspace_invitations`: inviter, email/domain, intended role, expiry, one-time token.
 - `workspace_connections`: shareable connection template and default safety policy.
 - `connection_permissions`: per-member or per-role connection grants.
+- `workspace_provider_integrations`: provider kind, external account or organization
+  identity, credential mode, status, and workspace policy.
+- `workspace_provider_resources`: imported provider resource tree, stable external
+  ids, environment, lifecycle state, redacted metadata, and capability snapshot.
+- `provider_resource_permissions`: per-member or per-role grants and explicit denies
+  scoped to an integration or individual provider resource.
+- `provider_operation_requests`: requested action, redacted arguments, risk class,
+  approvals, stable idempotency key, provider operation id, and terminal status.
 - `dashboards`: workspace-scoped dashboard definition and current revision.
 - `analysis_reports`: title, question, summary, draft/published/archive state.
 - `analysis_report_blocks`: ordered Markdown, metric, chart, and table blocks.
@@ -118,6 +205,9 @@ another member or device.
   synchronizable resources.
 - Add `credential_bindings` keyed by workspace connection, member, and device. Its
   `local_secret_ref` never leaves the device.
+- Add `provider_credential_bindings` keyed by provider integration, member, and
+  device, including the external identity, verified scope summary, verification time,
+  and local `secret_ref`. The credential itself never enters sync storage.
 - Add `sync_outbox` for durable offline mutations and `sync_state` for pull cursors.
 - Keep query history, schema cache, live monitoring snapshots, and the existing
   hash-chained execution audit local by default.
@@ -154,6 +244,9 @@ against current data.
 - SQL, connection policy, and report conflicts are never silently merged. Preserve
   both versions and require an explicit choice or a new merged revision.
 - Retry operations are idempotent through stable operation identifiers.
+- Provider mutations are never accepted from an offline outbox without a fresh
+  authorization and approval check. Their idempotency keys prevent a reconnect or
+  timeout from repeating a destructive external action.
 - A revoked member loses future sync and workspace key access. The product must state
   honestly that revocation cannot erase data the member already exported.
 
@@ -165,12 +258,16 @@ device recovery, and server-side collaboration behavior.
 
 ## Audit Boundaries
 
-Keep two explicit ledgers:
+Keep explicit ledgers with distinct trust boundaries:
 
 1. The local execution audit answers which credential executed which database
    statement and whether it was blocked, approved, or completed.
 2. The workspace collaboration audit answers who invited a member, shared a
    connection, changed a policy, edited a dashboard, or published a report.
+3. Provider operation events answer who requested and approved an external action,
+   which resource and idempotency key were used, and which redacted provider outcome
+   was observed. In member-local credential mode, this is an application receipt and
+   must not be presented as stronger evidence than the provider's own audit log.
 
 Workspace application logs must not contain passwords, result rows, full certificates,
 MCP tokens, or unredacted snapshot contents. Collaboration events should reference a
@@ -182,6 +279,8 @@ Deliverables:
 
 - Introduce Workspace, WorkspaceMember, and resource scope types in the Rust/TypeScript
   data contract.
+- Introduce a provider-neutral authorization decision contract with actor, action,
+  resource hierarchy, environment, reason, and optional approval requirement.
 - Migrate existing data into a Personal Workspace without changing existing UUIDs.
 - Scope connection, dashboard, and snippet reads/writes by active workspace.
 - Add a workspace switcher that initially contains only the Personal Workspace.
@@ -211,7 +310,7 @@ Deliverables:
 Exit criteria:
 
 - Unauthorized users cannot enumerate workspace ids or resource metadata.
-- Role and connection permission checks run server-side on every mutation and read.
+- Role and resource permission checks run server-side on every mutation and read.
 - Revoked sessions stop syncing immediately.
 - Offline edits converge after reconnect, and conflicts retain both versions.
 - Server logs and traces pass automated secret and sensitive-payload checks.
@@ -222,6 +321,8 @@ Deliverables:
 
 - Add an explicit Share with Workspace flow for a local connection.
 - Synchronize connection templates and default read-safety policies.
+- Allow a connection template to reference an optional provider resource without
+  embedding provider authentication in the connection profile.
 - Add member/device credential binding with local OS credential-store persistence.
 - Show Ready, Credentials Required, Access Denied, and Connection Failed states.
 - Allow admins to assign per-connection production and read-execution permissions.
@@ -240,7 +341,36 @@ Exit criteria:
 - Removing a connection invalidates future execution but preserves relevant audit
   history.
 
-## Milestone 3 — Shared Dashboards
+## Milestone 3 — Read-only Provider Integrations
+
+Deliverables:
+
+- Define a provider-neutral adapter and capability contract independently of database
+  drivers.
+- Add Neon and PlanetScale adapters for authenticated resource discovery, capability
+  detection, and import without provider mutations.
+- Add member/device provider credential bindings backed by the OS credential store.
+- Synchronize only redacted organization, project, database, branch, endpoint,
+  compute, lifecycle, and capability metadata.
+- Let an authorized member turn an imported provider database or branch into a
+  workspace connection template while keeping the DB credential binding separate.
+- Show Credentials Required, Scope Insufficient, Access Denied, Unsupported
+  Capability, Provider Unavailable, and Ready states.
+
+Exit criteria:
+
+- Provider API credentials and one-time database credentials never enter workspace
+  sync payloads, application logs, or crash reports.
+- A member cannot enumerate or import a provider resource into the wrong workspace,
+  even by submitting a known external id directly.
+- A token with broader provider scopes cannot bypass a workspace deny or production
+  access policy inside DopeDB.
+- Capability differences are driven by adapter output, so provider products do not
+  expose actions they do not support.
+- Importing the same external resource is idempotent and preserves the existing
+  workspace connection and local credential bindings.
+
+## Milestone 4 — Shared Dashboards
 
 Deliverables:
 
@@ -259,9 +389,11 @@ Exit criteria:
 - Concurrent SQL or visualization changes cannot overwrite each other silently.
 - A dashboard cannot reference a connection outside its workspace.
 
-Milestones 0–3 form the first workspace MVP.
+Milestones 0–2 form the workspace and shared-connection foundation. Milestones 0–4
+form the first team-product MVP with read-only provider discovery and shared
+dashboards.
 
-## Milestone 4 — Saved Agent Analysis Reports
+## Milestone 5 — Saved Agent Analysis Reports
 
 Deliverables:
 
@@ -279,7 +411,37 @@ Exit criteria:
 - An agent cannot publish or replace a report without explicit user agreement.
 - Editing a report does not mutate its historical evidence records.
 
-## Milestone 5 — Optional Result Snapshots and Enterprise Controls
+## Milestone 6 — Controlled Provider Operations
+
+Deliverables:
+
+- Add capability-gated operation requests for provider branch, compute, credential,
+  backup, restore, and deployment actions supported by each adapter.
+- Require fresh server authorization before execution and stable idempotency keys for
+  every provider mutation.
+- Classify operations by read-only, non-production mutation, production mutation,
+  credential-sensitive, restore, and destructive risk.
+- Require explicit production access and configurable additional approval for
+  production, credential, restore, deployment, and destructive actions.
+- Record requester, approver, resource, redacted arguments, provider operation id,
+  outcome, and timestamps in the workspace audit stream.
+- Keep member-local execution as the default while separately evaluating managed
+  Vault-backed credentials for scheduled or centrally enforced automation.
+
+Exit criteria:
+
+- Reconnects, retries, and provider timeouts cannot execute an operation more than
+  once.
+- Revocation or a permission change between request and execution causes a fresh
+  denial rather than using a stale approval.
+- Secret-bearing provider responses are displayed once when necessary and are never
+  persisted in shared metadata or general audit events.
+- Production and destructive actions cannot be self-approved when the workspace
+  policy requires a second actor.
+- Provider-native audit identifiers are retained so administrators can reconcile
+  DopeDB events with the provider's own audit history.
+
+## Milestone 7 — Optional Result Snapshots and Enterprise Controls
 
 Deliverables:
 
@@ -289,7 +451,7 @@ Deliverables:
 - Add SSO/domain policy, SCIM, configurable retention, and export controls as demand
   requires.
 - Evaluate a shared-secret vault integration for teams that cannot issue individual
-  database accounts.
+  database accounts or require centrally enforced provider automation.
 - Evaluate end-to-end encryption and self-hosted control-plane packaging separately.
 
 Exit criteria:
@@ -307,6 +469,10 @@ Every milestone must include:
 
 - Rust and TypeScript migration and serialization tests.
 - RBAC tests for every API and local command boundary.
+- Provider adapter contract tests for resource hierarchy, capability discovery,
+  pagination, rate limits, redaction, and unsupported operations.
+- Authorization tests for cross-workspace external ids, explicit denies, production
+  gates, provider scope mismatches, stale approvals, and confused-deputy attempts.
 - Offline, retry, duplicate-delivery, tombstone, and conflict tests.
 - Credential and sensitive-data leak tests covering logs, crash reports, analytics,
   and sync payloads.
@@ -319,6 +485,11 @@ Every milestone must include:
 
 - Hosted-only first launch versus simultaneous self-hosted deployment.
 - Authentication provider and account recovery policy.
+- Member-local provider credentials versus managed Vault-backed credentials for each
+  operation class, including whether either provider offers an appropriate OAuth flow.
+- Provider resource refresh intervals, rate-limit budgets, webhook availability, and
+  behavior when an imported resource is deleted outside DopeDB.
+- The initial production and destructive-operation approval matrix.
 - Workspace billing and ownership transfer rules.
 - Whether connection usernames are shared defaults or always local overrides.
 - Initial report snapshot limits and retention duration.
