@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Analytics } from "@vercel/analytics/next";
+import { headers } from "next/headers";
 import "./globals.css";
 
 const siteUrl = "https://dopedb.dev";
@@ -77,13 +78,15 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const lang = (await headers()).get("x-site-lang") === "ko" ? "ko" : "en";
+
   return (
-    <html lang="en">
+    <html lang={lang}>
       <body>
         {children}
         <Analytics />

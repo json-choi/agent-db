@@ -353,11 +353,20 @@ export async function generateMetadata({ searchParams }: HomeProps): Promise<Met
         siteName: "DopeDB(도프디비)",
         locale: "ko_KR",
         type: "website",
+        images: [
+          {
+            url: "/dopedb-dashboard.png",
+            width: 1600,
+            height: 1120,
+            alt: "DopeDB(도프디비) 데스크톱 앱 화면",
+          },
+        ],
       },
       twitter: {
         card: "summary_large_image",
         title,
         description,
+        images: ["/dopedb-dashboard.png"],
       },
     };
   }

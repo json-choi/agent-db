@@ -2,7 +2,7 @@
 
 DopeDB(도프디비)는 **AI 에이전트에게 안전한 데이터베이스 통로를 열어주는 무료 오픈소스 데스크톱 앱**입니다. MCP를 통해 에이전트는 스키마를 살피고 읽기 쿼리를 실행하고 결과를 이해할 수 있습니다. 원본 인증 정보, 읽기 전용 실행, 쓰기 승인, 롤백 미리보기, 감사 로그는 로컬 앱이 통제합니다.
 
-- 웹사이트: https://dopedb.dev (English: https://dopedb.dev/?lang=en)
+- 웹사이트: https://dopedb.dev/ko (English: https://dopedb.dev)
 - 다운로드: [Windows x64](https://github.com/json-choi/dopedb/releases/latest/download/DopeDB-windows-x64-setup.exe) · [macOS Apple Silicon](https://github.com/json-choi/dopedb/releases/latest/download/DopeDB-macos-arm64.dmg) · [macOS Intel](https://github.com/json-choi/dopedb/releases/latest/download/DopeDB-macos-x64.dmg)
 - English: [README.en.md](./README.en.md)
 - 상세 문서: [docs/PROJECT.md](./docs/PROJECT.md)
