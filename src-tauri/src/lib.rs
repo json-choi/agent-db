@@ -5,6 +5,7 @@ mod audit;
 mod commands;
 mod connection;
 mod dashboard;
+mod driver;
 mod error;
 mod executor;
 mod introspect;
@@ -80,6 +81,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::list_connections,
+            commands::list_drivers,
+            commands::install_driver,
             commands::upsert_connection,
             commands::set_connection_schema_group,
             commands::delete_connection,

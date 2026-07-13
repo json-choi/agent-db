@@ -10,6 +10,7 @@ import type {
   ConnectionProfile,
   Dashboard,
   DashboardDraft,
+  DriverDescriptor,
   ExecOutcome,
   HistoryEntry,
   MigrationReport,
@@ -23,6 +24,14 @@ import type {
 
 export function listConnections(): Promise<ConnectionProfile[]> {
   return invoke("list_connections");
+}
+
+export function listDrivers(): Promise<DriverDescriptor[]> {
+  return invoke("list_drivers");
+}
+
+export function installDriver(id: string): Promise<DriverDescriptor> {
+  return invoke("install_driver", { id });
 }
 
 // NOTE(integrator): ConnectionProfile carries no plaintext secret. The optional
