@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Image from "next/image";
 import {
   ArrowRight,
@@ -26,6 +27,10 @@ const downloadUrls = {
 const siteUrl = "https://dopedb.dev";
 
 type Lang = "en" | "ko";
+
+type HomeProps = {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+};
 
 const copy = {
   en: {
@@ -178,7 +183,7 @@ DopeDB safety:
       eyebrow: "무료 로컬 MCP 데이터베이스 게이트웨이",
       tag: "키를 넘기지 않고 에이전트에게 데이터 통로를 열어주세요",
       text:
-        "DopeDB는 MCP 지원 에이전트가 Postgres, MySQL, SQLite를 안전하게 읽고 이해할 수 있게 합니다. 질문과 분석은 좋아하는 에이전트에게 맡기고, 인증 정보, 읽기 전용 실행, 쓰기 승인, 롤백 미리보기, 감사 로그는 네이티브 데스크톱 앱 안에 둡니다.",
+        "DopeDB(도프디비)는 MCP 지원 에이전트가 Postgres, MySQL, SQLite를 안전하게 읽고 이해할 수 있게 합니다. 질문과 분석은 좋아하는 에이전트에게 맡기고, 인증 정보, 읽기 전용 실행, 쓰기 승인, 롤백 미리보기, 감사 로그는 네이티브 데스크톱 앱 안에 둡니다.",
       download: "macOS/Windows 다운로드",
       github: "GitHub에서 보기",
       signals: ["에이전트 준비 완료", "인증 정보는 로컬에", "쓰기는 승인 뒤에"],
@@ -309,13 +314,64 @@ function normalizeLang(value: string | string[] | undefined): Lang {
   return lang === "ko" ? "ko" : "en";
 }
 
-export default async function Home({
-  searchParams,
-}: {
-  searchParams?: Promise<Record<string, string | string[] | undefined>>;
-}) {
+async function resolveLang(searchParams: HomeProps["searchParams"]): Promise<Lang> {
   const params = searchParams ? await searchParams : {};
-  const lang = normalizeLang(params.lang);
+  return normalizeLang(params.lang);
+}
+
+export async function generateMetadata({ searchParams }: HomeProps): Promise<Metadata> {
+  const lang = await resolveLang(searchParams);
+  const languageAlternates = {
+    "en-US": "/",
+    "ko-KR": "/ko",
+    "x-default": "/",
+  };
+
+  if (lang === "ko") {
+    const title = "DopeDB(도프디비) - 안전한 AI 데이터베이스 클라이언트";
+    const description =
+      "DopeDB(도프디비)는 AI 에이전트가 PostgreSQL, MySQL, SQLite를 안전하게 조회하도록 돕는 무료 오픈소스 MCP 데이터베이스 클라이언트입니다.";
+
+    return {
+      title: { absolute: title },
+      description,
+      keywords: [
+        "도프디비",
+        "DopeDB",
+        "AI 데이터베이스 클라이언트",
+        "MCP 데이터베이스",
+        "무료 DB 클라이언트",
+      ],
+      alternates: {
+        canonical: "/ko",
+        languages: languageAlternates,
+      },
+      openGraph: {
+        title,
+        description,
+        url: `${siteUrl}/ko`,
+        siteName: "DopeDB(도프디비)",
+        locale: "ko_KR",
+        type: "website",
+      },
+      twitter: {
+        card: "summary_large_image",
+        title,
+        description,
+      },
+    };
+  }
+
+  return {
+    alternates: {
+      canonical: "/",
+      languages: languageAlternates,
+    },
+  };
+}
+
+export default async function Home({ searchParams }: HomeProps) {
+  const lang = await resolveLang(searchParams);
   const c = copy[lang];
   const otherLang = lang === "ko" ? "en" : "ko";
 
@@ -323,6 +379,7 @@ export default async function Home({
     "@context": "https://schema.org",
     "@type": "SoftwareApplication",
     name: "DopeDB",
+    alternateName: "도프디비",
     applicationCategory: "DeveloperApplication",
     operatingSystem: "macOS, Windows",
     description: c.jsonDescription,
@@ -350,7 +407,7 @@ export default async function Home({
           <span className="brand-mark" aria-hidden="true">
             <Database size={18} />
           </span>
-          <span>DopeDB</span>
+          <span>{lang === "ko" ? "DopeDB · 도프디비" : "DopeDB"}</span>
         </a>
         <nav className="nav-links" aria-label="Primary navigation">
           <a href="#why">{c.nav.why}</a>
@@ -361,7 +418,7 @@ export default async function Home({
         <div className="topbar-actions">
           <a
             className="language-link"
-            href={`/?lang=${otherLang}`}
+            href={otherLang === "ko" ? "/ko" : "/"}
             hrefLang={otherLang}
             aria-label={otherLang === "ko" ? "한국어로 보기" : "View in English"}
           >
@@ -381,6 +438,7 @@ export default async function Home({
           </p>
           <h1>
             DopeDB
+            {lang === "ko" && <span className="hero-korean-name">도프디비</span>}
             <span className="hero-title-tag">{c.hero.tag}</span>
           </h1>
           <p className="hero-text">{c.hero.text}</p>

@@ -9,6 +9,14 @@ const nextConfig = {
   turbopack: {
     root: repoRoot,
   },
+  async rewrites() {
+    return [
+      {
+        source: "/ko",
+        destination: "/?lang=ko",
+      },
+    ];
+  },
   async redirects() {
     return [
       {

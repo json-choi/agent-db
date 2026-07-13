@@ -1,4 +1,4 @@
-# DopeDB
+# DopeDB (도프디비)
 
 > DopeDB is a free, open-source, local-first database client and MCP gateway that gives AI agents guarded access to PostgreSQL, MySQL, and SQLite.
 
@@ -7,6 +7,7 @@ DopeDB keeps database credentials inside a native desktop app. AI agents can ins
 ## Key facts
 
 - Product: Native desktop database client and local MCP server
+- Korean name: 도프디비
 - Supported databases: PostgreSQL, MySQL, and SQLite
 - Platforms: macOS and Windows
 - Price: Free

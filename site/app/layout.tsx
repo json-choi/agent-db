@@ -15,6 +15,7 @@ export const metadata: Metadata = {
     "An open-source desktop database client where AI agents can help with SQL while credentials, approvals, and audit logs stay local.",
   keywords: [
     "DopeDB",
+    "도프디비",
     "AI database client",
     "MCP database tools",
     "Tauri database client",
