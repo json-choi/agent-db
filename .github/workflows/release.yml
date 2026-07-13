@@ -1,7 +1,6 @@
 name: release
 
 on:
-  workflow_dispatch:
   push:
     tags:
       - "app-v*"
@@ -11,10 +10,54 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  verify-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Verify owner, version, and main ancestry
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "$GITHUB_ACTOR" != "json-choi" ]]; then
+            echo "Only @json-choi may start a stable release." >&2
+            exit 1
+          fi
+
+          tag_version="${GITHUB_REF_NAME#app-v}"
+          package_version="$(node -p "require('./package.json').version")"
+          tauri_version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          cargo_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' src-tauri/Cargo.toml | head -n 1)"
+          lock_version="$(awk '$0 == "name = \"dopedb\"" { getline; sub(/^version = \"/, ""); sub(/\"$/, ""); print; exit }' Cargo.lock)"
+
+          for version in "$package_version" "$tauri_version" "$cargo_version" "$lock_version"; do
+            if [[ "$version" != "$tag_version" ]]; then
+              echo "Tag version $tag_version does not match all version sources." >&2
+              exit 1
+            fi
+          done
+
+          git fetch origin main
+          tag_commit="$(git rev-list -n 1 "$GITHUB_REF")"
+          if ! git merge-base --is-ancestor "$tag_commit" origin/main; then
+            echo "Stable releases must point to a commit already merged into main." >&2
+            exit 1
+          fi
+
   publish-tauri:
+    needs: verify-release
     permissions:
       contents: write
     timeout-minutes: 60
+    environment:
+      name: stable-release
+      url: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}
     strategy:
       fail-fast: false
       matrix:
@@ -70,13 +113,13 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'app-v__VERSION__' }}
+          tagName: ${{ github.ref_name }}
           releaseName: dopedb v__VERSION__
           releaseBody: |
             Download the macOS or Windows installer from the assets below.
 
             The Tauri updater uses `latest.json` from this release to detect and install signed updates.
-          releaseDraft: false
+          releaseDraft: true
           prerelease: false
           uploadUpdaterJson: true
           uploadUpdaterSignatures: true
@@ -92,9 +135,6 @@ jobs:
 
           version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
           tag="${GITHUB_REF_NAME}"
-          if [[ "${GITHUB_REF_TYPE:-}" != "tag" ]]; then
-            tag="app-v${version}"
-          fi
 
           mkdir -p release-alias
           case "$TARGET" in
@@ -125,3 +165,15 @@ jobs:
 
           cp "$src" "release-alias/$alias"
           gh release upload "$tag" "release-alias/$alias" --clobber
+
+  finalize-release:
+    needs: publish-tauri
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Publish the completed immutable release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false --latest

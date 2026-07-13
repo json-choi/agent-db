@@ -60,14 +60,14 @@ cargo check --workspace
 
 ## 릴리스
 
-`app-v*` 태그를 push하면 GitHub Actions가 macOS Apple Silicon/Intel 빌드, Windows x64 NSIS 설치 파일, updater metadata를 GitHub Release에 업로드합니다. 웹사이트 다운로드 버튼은 GitHub Release 페이지가 아니라 `DopeDB-windows-x64-setup.exe`, `DopeDB-macos-arm64.dmg`, `DopeDB-macos-x64.dmg` 고정 이름 asset을 바로 내려받습니다.
+정식 버전은 저장소 소유자만 발행합니다. `main`에 합쳐진 커밋에 소유자가 `app-v*` 태그를 push하고 `stable-release` 환경을 승인하면 GitHub Actions가 macOS Apple Silicon/Intel 빌드, Windows x64 NSIS 설치 파일, updater metadata를 draft release에 모은 뒤 한 번에 공개합니다. 공개된 새 release의 태그와 asset은 immutable release 정책으로 잠깁니다.
 
 ```sh
 git tag app-v0.1.1
 git push origin app-v0.1.1
 ```
 
-릴리스 워크플로우에는 `TAURI_SIGNING_PRIVATE_KEY` repository secret이 필요합니다.
+릴리스 워크플로우에는 `TAURI_SIGNING_PRIVATE_KEY` repository secret이 필요합니다. 협업자는 `work/<GitHub아이디>/<작업명>` 브랜치에서 본인 전용 unsigned canary prerelease를 만들 수 있습니다. 브랜치, PR, 카나리 절차는 [CONTRIBUTING.md](./CONTRIBUTING.md)를 참고하세요.
 
 ## macOS 경고
 

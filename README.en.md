@@ -60,14 +60,14 @@ cargo check --workspace
 
 ## Releases
 
-Pushing an `app-v*` tag starts the GitHub Actions release workflow. It builds Apple Silicon and Intel macOS artifacts, a Windows x64 NSIS installer, and uploads updater metadata to GitHub Releases. The website download buttons point directly at stable release asset names: `DopeDB-windows-x64-setup.exe`, `DopeDB-macos-arm64.dmg`, and `DopeDB-macos-x64.dmg`.
+Only the repository owner publishes stable versions. After an owner-created `app-v*` tag points to a commit merged into `main`, approval of the `stable-release` environment lets GitHub Actions collect the Apple Silicon and Intel macOS artifacts, Windows x64 NSIS installer, and updater metadata in a draft before publishing them together. The tag and assets of each new published release are then protected by release immutability.
 
 ```sh
 git tag app-v0.1.1
 git push origin app-v0.1.1
 ```
 
-The release workflow requires the `TAURI_SIGNING_PRIVATE_KEY` repository secret.
+The release workflow requires the `TAURI_SIGNING_PRIVATE_KEY` repository secret. Contributors can publish isolated, unsigned canary prereleases from their own `work/<github-login>/<topic>` branches. See [CONTRIBUTING.md](./CONTRIBUTING.md) for the branch, pull request, and canary workflow.
 
 ## macOS Warning
 

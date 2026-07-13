@@ -1,0 +1,231 @@
+name: canary
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Branch to build (work/<your-github-login>/<topic>)"
+        required: true
+        type: string
+
+concurrency:
+  group: canary-${{ github.actor }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      actor_slug: ${{ steps.release.outputs.actor_slug }}
+      source_ref: ${{ steps.release.outputs.source_ref }}
+      source_sha: ${{ steps.release.outputs.source_sha }}
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Validate the caller and resolve an immutable source commit
+        id: release
+        shell: bash
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Run this workflow from main so the protected workflow definition is used." >&2
+            exit 1
+          fi
+
+          expected_prefix="work/${GITHUB_ACTOR}/"
+          if [[ "$SOURCE_REF" != "$expected_prefix"* ]]; then
+            echo "source_ref must start with $expected_prefix" >&2
+            exit 1
+          fi
+
+          git check-ref-format --branch "$SOURCE_REF" >/dev/null
+          source_sha="$(git ls-remote --exit-code --heads origin "refs/heads/$SOURCE_REF" | awk 'NR == 1 { print $1 }')"
+          if [[ ! "$source_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Could not resolve $SOURCE_REF to a commit." >&2
+            exit 1
+          fi
+
+          actor_slug="$(printf '%s' "$GITHUB_ACTOR" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-')"
+          actor_slug="${actor_slug%-}"
+          base_version="$(node -p "require('./src-tauri/tauri.conf.json').version.split('-')[0]")"
+          version="${base_version}-canary.${actor_slug}.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+          tag="canary-${actor_slug}-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+
+          echo "actor_slug=$actor_slug" >> "$GITHUB_OUTPUT"
+          echo "source_ref=$SOURCE_REF" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: validate
+    permissions:
+      contents: read
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-15
+            target: aarch64-apple-darwin
+            artifact_glob: target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+            asset_name: DopeDB-canary-macos-arm64.dmg
+            slug: macos-arm64
+          - platform: macos-15
+            target: x86_64-apple-darwin
+            artifact_glob: target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
+            asset_name: DopeDB-canary-macos-x64.dmg
+            slug: macos-x64
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_glob: target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe
+            asset_name: DopeDB-canary-windows-x64-setup.exe
+            slug: windows-x64
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate.outputs.source_sha }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.26.1
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            src-tauri -> src-tauri/target
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Set isolated canary version
+        shell: bash
+        env:
+          CANARY_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+
+          const version = process.env.CANARY_VERSION;
+          for (const path of ["package.json", "src-tauri/tauri.conf.json"]) {
+            const data = JSON.parse(readFileSync(path, "utf8"));
+            data.version = version;
+            writeFileSync(path, `${JSON.stringify(data, null, 2)}\n`);
+          }
+
+          const cargoPath = "src-tauri/Cargo.toml";
+          const cargo = readFileSync(cargoPath, "utf8");
+          writeFileSync(cargoPath, cargo.replace(/^version = "[^"]+"/m, `version = "${version}"`));
+          NODE
+
+      - name: Build unsigned canary bundle
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          config_override='{"bundle":{"createUpdaterArtifacts":false}}'
+          pnpm tauri build --ci --no-sign --target "$TARGET" --config "$config_override"
+
+      - name: Collect canary installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=( ${{ matrix.artifact_glob }} )
+          if [[ "${#files[@]}" -ne 1 ]]; then
+            echo "Expected one installer, found ${#files[@]}." >&2
+            exit 1
+          fi
+
+          mkdir -p canary-dist
+          cp -- "${files[0]}" "canary-dist/${{ matrix.asset_name }}"
+
+      - name: Upload canary installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: canary-${{ matrix.slug }}
+          path: canary-dist/${{ matrix.asset_name }}
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs:
+      - validate
+      - build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    environment:
+      name: canary-${{ needs.validate.outputs.actor_slug }}
+      url: https://github.com/${{ github.repository }}/releases/tag/${{ needs.validate.outputs.tag }}
+    steps:
+      - name: Download installers
+        uses: actions/download-artifact@v8
+        with:
+          pattern: canary-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish immutable canary prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_REF: ${{ needs.validate.outputs.source_ref }}
+          SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
+          TAG: ${{ needs.validate.outputs.tag }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          assets=(release-assets/*)
+          if [[ "${#assets[@]}" -ne 3 ]]; then
+            echo "Expected three canary installers, found ${#assets[@]}." >&2
+            exit 1
+          fi
+
+          notes="Canary build from \`${SOURCE_REF}\` at \`${SOURCE_SHA}\`.
+
+          This prerelease is unsigned, does not contain updater metadata, and never enters the stable update channel."
+
+          gh release create "$TAG" \
+            --draft \
+            --prerelease \
+            --latest=false \
+            --target "$SOURCE_SHA" \
+            --title "DopeDB ${VERSION}" \
+            --notes "$notes"
+          gh release upload "$TAG" "${assets[@]}"
+          gh release edit "$TAG" --draft=false --prerelease --latest=false

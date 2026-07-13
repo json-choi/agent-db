@@ -124,7 +124,7 @@ CI runs on pull requests and `main` pushes:
 - stage MCP bridge sidecar
 - run `cargo check --workspace`
 
-Release runs on `app-v*` tags or manual dispatch:
+Stable release runs only on an owner-created `app-v*` tag whose commit is already in `main` and whose version matches `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and `Cargo.lock`. The `stable-release` environment requires approval from `@json-choi` before the signing key and write token are available:
 
 - build macOS Apple Silicon artifact
 - build macOS Intel artifact
@@ -132,6 +132,9 @@ Release runs on `app-v*` tags or manual dispatch:
 - upload stable direct-download aliases:
   `DopeDB-windows-x64-setup.exe`, `DopeDB-macos-arm64.dmg`, `DopeDB-macos-x64.dmg`
 - upload installers, updater archives, signatures, and `latest.json`
+- keep the release as a draft until every matrix build and stable alias upload succeeds, then publish it for immutable tag and asset protection
+
+Contributors use `work/<github-login>/<topic>` branches and may manually dispatch `.github/workflows/canary.yml` from `main` for their own branch only. Canary builds publish through a per-user `canary-<github-login>` environment as unsigned prereleases without updater artifacts, updater signatures, or `latest.json`. See `CONTRIBUTING.md` for the exact commands.
 
 Required GitHub secret:
 
