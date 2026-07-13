@@ -200,6 +200,15 @@ h1 {
   font-weight: 860;
 }
 
+.hero-korean-name {
+  display: inline-block;
+  margin-left: 0.35em;
+  color: var(--green-dark);
+  font-size: 0.22em;
+  font-weight: 780;
+  vertical-align: 0.42em;
+}
+
 .hero-title-tag {
   display: block;
   margin-top: 20px;
