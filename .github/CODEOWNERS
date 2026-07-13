@@ -1,5 +1,8 @@
 # Release automation and version sources require the repository owner's review.
 /.github/ @json-choi
+/AGENTS.md @json-choi
+/CLAUDE.md @json-choi
+/CONTRIBUTING.md @json-choi
 /package.json @json-choi
 /Cargo.lock @json-choi
 /src-tauri/Cargo.toml @json-choi

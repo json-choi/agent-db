@@ -1,5 +1,7 @@
 # Collaboration workflow
 
+AI assistants must read and follow both `AGENTS.md` and `CLAUDE.md` before changing this repository. `CONTRIBUTING.md` is the human-facing workflow; when collaboration or release rules change, keep all three files synchronized in the same pull request.
+
 ## Work branches
 
 Each contributor works in a branch under their GitHub login:
@@ -11,6 +13,8 @@ work/<github-login>/<short-topic>
 For example, `PENEKhun` uses `work/PENEKhun/query-history`. Open a pull request into `main` when the change is ready. `main` requires the macOS and Windows CI jobs, one approval, resolved conversations, and an up-to-date branch. Force pushes and deletion are blocked.
 
 Files that control GitHub Actions or the application version are owned by `@json-choi` through `CODEOWNERS`, so changing them also requires the owner's review.
+
+Before creating a work branch, confirm the authenticated login with `gh api user --jq .login`. The branch login segment is case-sensitive and must match that value exactly. Contributors must not push directly to `main`, use another contributor's namespace, or bypass required checks and reviews.
 
 ## Personal canary builds
 
