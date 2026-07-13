@@ -146,6 +146,11 @@ DopeDB safety:
           body: "Architecture, release flow, safety model, and maintainer notes.",
         },
         {
+          title: "AI-readable overview",
+          href: `${siteUrl}/llms.txt`,
+          body: "A concise, plain-text project summary for AI agents and crawlers.",
+        },
+        {
           title: "Korean README",
           href: `${repoUrl}/blob/main/README.md`,
           body: "Install, develop, release, and update details in Korean.",
@@ -276,6 +281,11 @@ DopeDB safety:
           title: "프로젝트 가이드",
           href: `${repoUrl}/blob/main/docs/PROJECT.md`,
           body: "아키텍처, 릴리스 흐름, 안전 모델, 메인테이너 노트.",
+        },
+        {
+          title: "AI용 프로젝트 개요",
+          href: `${siteUrl}/llms.txt`,
+          body: "AI 에이전트와 크롤러를 위한 간결한 일반 텍스트 프로젝트 요약.",
         },
         {
           title: "English README",

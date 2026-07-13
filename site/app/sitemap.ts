@@ -6,9 +6,13 @@ export default function sitemap(): MetadataRoute.Sitemap {
   return [
     {
       url: siteUrl,
-      lastModified: new Date(),
       changeFrequency: "weekly",
       priority: 1,
+    },
+    {
+      url: `${siteUrl}/llms.txt`,
+      changeFrequency: "monthly",
+      priority: 0.8,
     },
   ];
 }
