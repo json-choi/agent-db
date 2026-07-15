@@ -110,5 +110,8 @@ jobs:
       - name: Check Rust workspace
         run: cargo check --workspace
 
+      - name: Lint Rust workspace
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
       - name: Test Rust workspace
         run: cargo test --workspace
