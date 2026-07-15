@@ -130,4 +130,21 @@ mod tests {
         assert_ne!(obf, secret.as_bytes());
         assert_eq!(xor(&obf), secret.as_bytes());
     }
+
+    /// End-to-end store→fetch→delete against the real OS credential store
+    /// (Windows Credential Manager / macOS Keychain), or the debug file fallback
+    /// when the store rejects unsigned test binaries. Either way the public
+    /// keychain API contract is exercised on every platform CI runs on.
+    #[test]
+    fn secret_store_fetch_delete_roundtrip() {
+        let id = Uuid::new_v4();
+        let secret = "p@ss w0rd/üñî☃ non-ascii";
+
+        store_secret(&id, secret).expect("store");
+        assert_eq!(fetch_secret(&id).expect("fetch"), secret);
+
+        delete_secret(&id).expect("delete");
+        assert!(fetch_secret(&id).is_err(), "deleted secret must not fetch");
+        delete_secret(&id).expect("delete is idempotent");
+    }
 }
