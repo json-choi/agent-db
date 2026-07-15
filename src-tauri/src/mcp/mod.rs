@@ -161,44 +161,153 @@ fn write_private(path: &std::path::Path, bytes: &[u8]) {
 }
 
 #[cfg(windows)]
-fn write_private(path: &std::path::Path, bytes: &[u8]) {
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// Resolve the process token's user SID without relying on a localized or ambiguous
+/// account name such as `%USERNAME%`.
+#[cfg(windows)]
+fn current_user_sid() -> std::io::Result<String> {
+    use std::io::{Error, ErrorKind};
+    use std::ptr::null_mut;
+
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, GetLastError, LocalFree, ERROR_INSUFFICIENT_BUFFER,
+    };
+    use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
+    use windows_sys::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    let mut token = null_mut();
+    // SAFETY: `token` is a valid out-pointer, and the pseudo process handle is valid
+    // for the lifetime of this call. A successful real token handle is closed below.
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        return Err(Error::last_os_error());
+    }
+
+    let result = (|| {
+        let mut byte_len = 0u32;
+        // SAFETY: the null/zero probe is the documented way to obtain the required
+        // TOKEN_USER buffer length; no memory is read through the null pointer.
+        let probe = unsafe { GetTokenInformation(token, TokenUser, null_mut(), 0, &mut byte_len) };
+        // SAFETY: GetLastError is read immediately after the failed Win32 call.
+        let probe_error = unsafe { GetLastError() };
+        if probe != 0 || probe_error != ERROR_INSUFFICIENT_BUFFER || byte_len == 0 {
+            return Err(Error::from_raw_os_error(probe_error as i32));
+        }
+
+        // usize storage supplies enough alignment for TOKEN_USER while byte_len remains
+        // the exact size passed back to Windows.
+        let words = (byte_len as usize).div_ceil(std::mem::size_of::<usize>());
+        let mut buffer = vec![0usize; words];
+        // SAFETY: the buffer is writable, aligned, and at least byte_len bytes long.
+        if unsafe {
+            GetTokenInformation(
+                token,
+                TokenUser,
+                buffer.as_mut_ptr().cast(),
+                byte_len,
+                &mut byte_len,
+            )
+        } == 0
+        {
+            return Err(Error::last_os_error());
+        }
+
+        // SAFETY: a successful TokenUser query initialized the buffer as TOKEN_USER,
+        // whose SID pointer remains valid while `buffer` is alive.
+        let token_user = unsafe { &*buffer.as_ptr().cast::<TOKEN_USER>() };
+        let mut sid_text = null_mut();
+        // SAFETY: the SID came from the current process token and sid_text is a valid
+        // out-pointer. Windows allocates the returned null-terminated UTF-16 string.
+        if unsafe { ConvertSidToStringSidW(token_user.User.Sid, &mut sid_text) } == 0 {
+            return Err(Error::last_os_error());
+        }
+
+        let mut len = 0usize;
+        // SAFETY: ConvertSidToStringSidW guarantees a null-terminated UTF-16 string.
+        while unsafe { *sid_text.add(len) } != 0 {
+            len += 1;
+        }
+        // SAFETY: `len` was found within the allocated null-terminated string.
+        let units = unsafe { std::slice::from_raw_parts(sid_text, len) };
+        let sid = String::from_utf16(units).map_err(|e| Error::new(ErrorKind::InvalidData, e));
+        // SAFETY: this pointer was allocated by ConvertSidToStringSidW with LocalAlloc.
+        unsafe { LocalFree(sid_text.cast()) };
+        sid
+    })();
+
+    // SAFETY: OpenProcessToken returned this owned handle successfully above.
+    unsafe { CloseHandle(token) };
+    result
+}
+
+#[cfg(windows)]
+fn run_hidden_icacls<I, S>(path: &std::path::Path, args: I) -> std::io::Result<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
     use std::os::windows::process::CommandExt;
+
+    let output = std::process::Command::new("icacls")
+        .arg(path)
+        .args(args)
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    } else {
+        let detail = if output.stderr.is_empty() {
+            &output.stdout
+        } else {
+            &output.stderr
+        };
+        Err(std::io::Error::other(format!(
+            "icacls exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(detail).trim()
+        )))
+    }
+}
+
+#[cfg(windows)]
+fn write_private(path: &std::path::Path, bytes: &[u8]) {
+    let sid = match current_user_sid() {
+        Ok(sid) => sid,
+        Err(e) => {
+            tracing::error!(
+                "cannot resolve current SID; refusing to write {}: {e}",
+                path.display()
+            );
+            return;
+        }
+    };
 
     if let Err(e) = std::fs::write(path, bytes) {
         tracing::error!("failed to write {}: {e}", path.display());
         return;
     }
 
-    // Mirror the Unix 0600 branch: drop inherited ACEs and grant only the current
-    // user. %APPDATA% usually inherits user-only access already, but a relocated
-    // profile or loosened parent ACL would otherwise expose the bearer token.
-    // Failure is non-fatal — we fall back to the inherited ACLs and log it.
-    let user = match std::env::var("USERNAME") {
-        Ok(u) if !u.is_empty() => u,
-        _ => {
-            tracing::warn!(
-                "USERNAME unset; leaving {} on inherited ACLs",
+    // `/reset` replaces every explicit ACE with inherited defaults. Removing those
+    // inherited ACEs next leaves an empty protected DACL, then the numeric current-user
+    // SID becomes the sole full-control principal. SYSTEM and Administrators are not
+    // retained: this file contains a bearer token and follows the Unix 0600 policy.
+    // Every child process is hidden so a GUI startup never flashes a console window.
+    let grant = format!("*{sid}:F");
+    let restricted = run_hidden_icacls(path, ["/reset", "/q"])
+        .and_then(|_| run_hidden_icacls(path, ["/inheritance:r", "/q"]))
+        .and_then(|_| run_hidden_icacls(path, ["/grant:r", grant.as_str(), "/q"]));
+    if let Err(e) = restricted {
+        tracing::error!(
+            "failed to replace ACL for {}; deleting the token file: {e}",
+            path.display()
+        );
+        if let Err(remove_error) = std::fs::remove_file(path) {
+            tracing::error!(
+                "failed to remove insecure token file {}: {remove_error}",
                 path.display()
             );
-            return;
         }
-    };
-    // The app runs without a console (windows_subsystem = "windows"); without
-    // CREATE_NO_WINDOW this spawn would flash a console at every startup.
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let result = std::process::Command::new("icacls")
-        .arg(path)
-        .args(["/inheritance:r", "/grant:r", &format!("{user}:F")])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output();
-    match result {
-        Ok(out) if out.status.success() => {}
-        Ok(out) => tracing::warn!(
-            "icacls could not restrict {}: {}",
-            path.display(),
-            String::from_utf8_lossy(&out.stderr).trim()
-        ),
-        Err(e) => tracing::warn!("could not run icacls for {}: {e}", path.display()),
     }
 }
 
@@ -401,18 +510,27 @@ mod tests {
         let path =
             std::env::temp_dir().join(format!("dopedb-write-private-{}.json", Uuid::new_v4()));
 
+        std::fs::write(&path, b"seed").unwrap();
+        // Seed an explicit Everyone ACE. /inheritance:r + /grant:r alone would leave
+        // this behind, which is the regression covered by issue #20.
+        run_hidden_icacls(&path, ["/grant", "*S-1-1-0:R", "/q"]).unwrap();
+
         write_private(&path, b"first");
         assert_eq!(std::fs::read(&path).unwrap(), b"first");
 
-        // Inheritance stripped: icacls marks inherited ACEs with "(I)".
-        let listing = std::process::Command::new("icacls")
-            .arg(&path)
-            .output()
-            .expect("icacls runs");
-        let listing = String::from_utf8_lossy(&listing.stdout).to_string();
+        let listing = run_hidden_icacls(&path, std::iter::empty::<&str>()).unwrap();
         assert!(
             !listing.contains("(I)"),
             "expected no inherited ACEs, got: {listing}"
+        );
+        assert_eq!(
+            listing.matches(":(").count(),
+            1,
+            "expected only the current-user allow ACE, got: {listing}"
+        );
+        assert!(
+            listing.contains("(F)"),
+            "expected full control, got: {listing}"
         );
 
         write_private(&path, b"second");
