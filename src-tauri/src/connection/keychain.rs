@@ -130,4 +130,36 @@ mod tests {
         assert_ne!(obf, secret.as_bytes());
         assert_eq!(xor(&obf), secret.as_bytes());
     }
+
+    /// Exercise the debug fallback on every CI platform without opening an
+    /// interactive OS credential-store prompt.
+    #[test]
+    fn fallback_store_fetch_delete_roundtrip() {
+        let id = Uuid::new_v4();
+        let secret = "p@ss w0rd/üñî☃ non-ascii";
+
+        file_store(&id, secret).expect("store");
+        assert_eq!(file_fetch(&id).expect("fetch"), secret);
+
+        file_delete(&id).expect("delete");
+        assert!(file_fetch(&id).is_err(), "deleted secret must not fetch");
+        file_delete(&id).expect("delete is idempotent");
+    }
+
+    /// Real credential stores can require an interactive desktop session, which
+    /// GitHub-hosted runners do not provide. Run this explicitly on a signed or
+    /// otherwise credential-store-enabled desktop build.
+    #[test]
+    #[ignore = "requires an interactive OS credential store"]
+    fn os_secret_store_fetch_delete_roundtrip() {
+        let id = Uuid::new_v4();
+        let secret = "p@ss w0rd/üñî☃ non-ascii";
+
+        store_secret(&id, secret).expect("store");
+        assert_eq!(fetch_secret(&id).expect("fetch"), secret);
+
+        delete_secret(&id).expect("delete");
+        assert!(fetch_secret(&id).is_err(), "deleted secret must not fetch");
+        delete_secret(&id).expect("delete is idempotent");
+    }
 }
