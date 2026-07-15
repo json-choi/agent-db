@@ -134,9 +134,9 @@ pub fn load_or_create_token() -> String {
     token
 }
 
-/// Write `bytes` to `path` privately where the platform has a simple portable knob.
-/// On Unix we force 0600 because the file holds the MCP bearer token. On Windows the
-/// file lands under the user's roaming data directory; avoid Unix-only permission APIs.
+/// Write `bytes` to `path` privately — the file holds the MCP bearer token. On Unix
+/// we force 0600; on Windows we strip ACL inheritance and grant only the current
+/// user (the same shape OpenSSH requires for private keys on Windows).
 #[cfg(unix)]
 fn write_private(path: &std::path::Path, bytes: &[u8]) {
     use std::io::Write;
@@ -162,8 +162,43 @@ fn write_private(path: &std::path::Path, bytes: &[u8]) {
 
 #[cfg(windows)]
 fn write_private(path: &std::path::Path, bytes: &[u8]) {
+    use std::os::windows::process::CommandExt;
+
     if let Err(e) = std::fs::write(path, bytes) {
         tracing::error!("failed to write {}: {e}", path.display());
+        return;
+    }
+
+    // Mirror the Unix 0600 branch: drop inherited ACEs and grant only the current
+    // user. %APPDATA% usually inherits user-only access already, but a relocated
+    // profile or loosened parent ACL would otherwise expose the bearer token.
+    // Failure is non-fatal — we fall back to the inherited ACLs and log it.
+    let user = match std::env::var("USERNAME") {
+        Ok(u) if !u.is_empty() => u,
+        _ => {
+            tracing::warn!(
+                "USERNAME unset; leaving {} on inherited ACLs",
+                path.display()
+            );
+            return;
+        }
+    };
+    // The app runs without a console (windows_subsystem = "windows"); without
+    // CREATE_NO_WINDOW this spawn would flash a console at every startup.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let result = std::process::Command::new("icacls")
+        .arg(path)
+        .args(["/inheritance:r", "/grant:r", &format!("{user}:F")])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output();
+    match result {
+        Ok(out) if out.status.success() => {}
+        Ok(out) => tracing::warn!(
+            "icacls could not restrict {}: {}",
+            path.display(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ),
+        Err(e) => tracing::warn!("could not run icacls for {}: {e}", path.display()),
     }
 }
 
@@ -356,5 +391,33 @@ mod tests {
         assert!(!token_matches("abc", "abcd")); // prefix, differing length
         assert!(!token_matches("abd", "abc")); // same length, last byte differs
         assert!(!token_matches("", "abc"));
+    }
+
+    /// The ACL restriction must neither corrupt the payload nor break the
+    /// rewrite-on-every-startup behavior of `load_or_create_token`.
+    #[cfg(windows)]
+    #[test]
+    fn write_private_restricts_acl_and_stays_rewritable() {
+        let path =
+            std::env::temp_dir().join(format!("dopedb-write-private-{}.json", Uuid::new_v4()));
+
+        write_private(&path, b"first");
+        assert_eq!(std::fs::read(&path).unwrap(), b"first");
+
+        // Inheritance stripped: icacls marks inherited ACEs with "(I)".
+        let listing = std::process::Command::new("icacls")
+            .arg(&path)
+            .output()
+            .expect("icacls runs");
+        let listing = String::from_utf8_lossy(&listing.stdout).to_string();
+        assert!(
+            !listing.contains("(I)"),
+            "expected no inherited ACEs, got: {listing}"
+        );
+
+        write_private(&path, b"second");
+        assert_eq!(std::fs::read(&path).unwrap(), b"second");
+
+        let _ = std::fs::remove_file(&path);
     }
 }
