@@ -8,9 +8,12 @@
 //!
 //! Each user's own token is filled in from their local mcp.json, so no manual JSON.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 
 use serde::Serialize;
 use toml_edit::{value, DocumentMut, Item, Table};
@@ -67,11 +70,11 @@ fn bin_names(bin: &str) -> Vec<String> {
         if path.extension().is_some() {
             return vec![bin.to_string()];
         }
-        return ["exe", "cmd", "bat"]
+        ["exe", "cmd", "bat"]
             .into_iter()
             .map(|ext| format!("{bin}.{ext}"))
             .chain(std::iter::once(bin.to_string()))
-            .collect();
+            .collect()
     }
 
     #[cfg(not(windows))]
@@ -211,8 +214,23 @@ pub fn detect() -> Vec<PlatformInfo> {
     ]
 }
 
+/// A `Command` that never pops up a console window on Windows. Release builds run
+/// with `windows_subsystem = "windows"` (no attached console), so plainly spawning a
+/// console child (`claude.cmd`, `cmd`) makes Windows open a visible one — the
+/// Settings screen would flash a black window on every platform detect.
+fn quiet_command(program: impl AsRef<OsStr>) -> Command {
+    #[allow(unused_mut)]
+    let mut cmd = Command::new(program);
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
 fn run(bin: &Path, args: &[&str]) -> Result<String, String> {
-    let out = Command::new(bin)
+    let out = quiet_command(bin)
         .args(args)
         .env("PATH", augmented_path())
         .output()
@@ -310,7 +328,9 @@ fn open_named_app(name: &str) -> Result<String, String> {
 
 #[cfg(windows)]
 fn open_named_app(name: &str) -> Result<String, String> {
-    let status = Command::new("cmd")
+    // `start` detaches the target app, so CREATE_NO_WINDOW only hides the
+    // intermediate cmd.exe console — the launched app opens normally.
+    let status = quiet_command("cmd")
         .args(["/C", "start", "", name])
         .status()
         .map_err(|e| e.to_string())?;
