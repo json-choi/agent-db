@@ -26,6 +26,8 @@ pub enum DriverInstallMode {
 pub enum DriverInstallState {
     Installed,
     Available,
+    /// Listed for roadmap visibility but not downloadable or usable in this build.
+    Planned,
 }
 
 /// Features exposed by a driver adapter. Higher layers ask for capabilities instead of
@@ -129,17 +131,12 @@ const DEFINITIONS: &[DriverDefinition] = &[
         engine: Engine::Mongodb,
         version: "3",
         install_mode: DriverInstallMode::Managed,
-        install_state: DriverInstallState::Available,
+        install_state: DriverInstallState::Planned,
         supported_providers: &[Provider::Generic],
-        capabilities: &[
-            DriverCapability::DocumentQuery,
-            DriverCapability::Collections,
-            DriverCapability::Introspection,
-            DriverCapability::Monitoring,
-        ],
-        recommended: true,
-        // The catalog entry is visible while the adapter is being built. resolve()
-        // rejects Available drivers, so incomplete support cannot open a socket.
+        // Capabilities describe code available now, not roadmap intent.
+        capabilities: &[],
+        recommended: false,
+        // Keep the roadmap entry visible without presenting it as installable.
         adapter: None,
     },
 ];
@@ -200,9 +197,24 @@ fn resolve(profile: &ConnectionProfile) -> AppResult<&'static DriverDefinition> 
             selected.id, profile.engine, provider
         )));
     }
-    if selected.install_state != DriverInstallState::Installed {
+    match selected.install_state {
+        DriverInstallState::Installed => {}
+        DriverInstallState::Available => {
+            return Err(AppError::Config(format!(
+                "driver {:?} must be installed before connecting",
+                selected.id
+            )))
+        }
+        DriverInstallState::Planned => {
+            return Err(AppError::Config(format!(
+                "driver {:?} is planned but not available in this build",
+                selected.id
+            )))
+        }
+    }
+    if selected.adapter.is_none() {
         return Err(AppError::Config(format!(
-            "driver {:?} must be installed before connecting",
+            "installed driver {:?} has no runtime adapter in this build",
             selected.id
         )));
     }
@@ -218,6 +230,12 @@ pub fn validate(profile: &ConnectionProfile) -> AppResult<DriverDescriptor> {
 /// route through the verified pack installer once a signed pack is added to the catalog.
 pub fn install(id: &str) -> AppResult<DriverDescriptor> {
     let driver = find(id)?;
+    if driver.install_state == DriverInstallState::Planned {
+        return Err(AppError::Config(format!(
+            "driver {:?} is planned but not available in this build",
+            driver.id
+        )));
+    }
     match driver.install_mode {
         DriverInstallMode::Bundled => Ok(driver.descriptor()),
         DriverInstallMode::Managed => Err(AppError::Config(format!(
@@ -295,22 +313,24 @@ mod tests {
     }
 
     #[test]
-    fn advertises_mongodb_as_document_driver_without_sql_capability() {
+    fn lists_mongodb_as_planned_without_runtime_capabilities() {
         let mongo = list()
             .into_iter()
             .find(|driver| driver.id == "mongodb-rust")
             .unwrap();
         assert_eq!(mongo.engine, Engine::Mongodb);
-        assert_eq!(mongo.install_state, DriverInstallState::Available);
-        assert!(mongo.capabilities.contains(&DriverCapability::DocumentQuery));
-        assert!(mongo.capabilities.contains(&DriverCapability::Collections));
-        assert!(!mongo.capabilities.contains(&DriverCapability::Sql));
-        assert!(!mongo.capabilities.contains(&DriverCapability::SchemaDiff));
+        assert_eq!(mongo.install_state, DriverInstallState::Planned);
+        assert!(mongo.capabilities.is_empty());
+        assert!(!mongo.recommended);
     }
 
     #[test]
-    fn mongodb_cannot_connect_before_runtime_adapter_is_installed() {
-        let err = validate(&profile(Engine::Mongodb, Provider::Generic)).unwrap_err();
-        assert!(err.to_string().contains("must be installed"));
+    fn mongodb_cannot_install_or_connect_before_the_adapter_exists() {
+        let mut p = profile(Engine::Mongodb, Provider::Generic);
+        p.driver_id = Some("mongodb-rust".into());
+        let validate_err = validate(&p).unwrap_err();
+        let install_err = install("mongodb-rust").unwrap_err();
+        assert!(validate_err.to_string().contains("planned"));
+        assert!(install_err.to_string().contains("planned"));
     }
 }

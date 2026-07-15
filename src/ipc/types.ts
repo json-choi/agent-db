@@ -25,7 +25,7 @@ export interface ConnectionProfile {
 
 // Mirrors src-tauri/src/driver/mod.rs.
 export type DriverInstallMode = "bundled" | "managed";
-export type DriverInstallState = "installed" | "available";
+export type DriverInstallState = "installed" | "available" | "planned";
 export type DriverCapability =
   | "sql"
   | "documentQuery"
