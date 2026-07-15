@@ -425,48 +425,86 @@ fn fmt_mysql_time(t: &MySqlTime) -> String {
     out
 }
 
-pub(crate) fn mysql_value(row: &MySqlRow, i: usize) -> Value {
-    let ty = row.column(i).type_info().name().to_ascii_uppercase();
-    if ty.contains("UNSIGNED") {
-        return uint_or_null(row.try_get::<u64, _>(i));
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MySqlDecodeRoute {
+    UnsignedInteger,
+    Binary,
+    SignedInteger,
+    Float32,
+    Float64,
+    Decimal,
+    Text,
+    Set,
+    DateTime,
+    Date,
+    Time,
+    Json,
+    Fallback,
+}
+
+fn mysql_decode_route(ty: &str) -> MySqlDecodeRoute {
+    if ty.contains("UNSIGNED") || ty == "YEAR" {
+        return MySqlDecodeRoute::UnsignedInteger;
     }
     if ty.contains("BLOB") || ty.contains("BINARY") {
-        return jv(row.try_get::<Vec<u8>, _>(i).map(hex_str));
+        return MySqlDecodeRoute::Binary;
     }
-    match ty.as_str() {
+    match ty {
         "TINYINT" | "SMALLINT" | "MEDIUMINT" | "INT" | "BIGINT" => {
-            int_or_null(row.try_get::<i64, _>(i))
+            MySqlDecodeRoute::SignedInteger
         }
+        "FLOAT" => MySqlDecodeRoute::Float32,
+        "DOUBLE" => MySqlDecodeRoute::Float64,
+        "DECIMAL" | "NEWDECIMAL" => MySqlDecodeRoute::Decimal,
+        "VARCHAR" | "CHAR" | "TEXT" | "TINYTEXT" | "MEDIUMTEXT" | "LONGTEXT" | "ENUM" => {
+            MySqlDecodeRoute::Text
+        }
+        "SET" => MySqlDecodeRoute::Set,
+        "DATETIME" | "TIMESTAMP" => MySqlDecodeRoute::DateTime,
+        "DATE" => MySqlDecodeRoute::Date,
+        "TIME" => MySqlDecodeRoute::Time,
+        "JSON" => MySqlDecodeRoute::Json,
+        _ => MySqlDecodeRoute::Fallback,
+    }
+}
+
+pub(crate) fn mysql_value(row: &MySqlRow, i: usize) -> Value {
+    let ty = row.column(i).type_info().name().to_ascii_uppercase();
+    match mysql_decode_route(&ty) {
         // SQLx models YEAR as an unsigned integer even though its type name does
         // not carry the `UNSIGNED` suffix used by ordinary integer columns.
-        "YEAR" => uint_or_null(row.try_get::<u64, _>(i)),
-        "FLOAT" => jv(row.try_get::<f32, _>(i).map(|v| v as f64)),
-        "DOUBLE" => jv(row.try_get::<f64, _>(i)),
-        "DECIMAL" | "NEWDECIMAL" => match row.try_get::<Decimal, _>(i) {
+        MySqlDecodeRoute::UnsignedInteger => uint_or_null(row.try_get::<u64, _>(i)),
+        MySqlDecodeRoute::Binary => jv(row.try_get::<Vec<u8>, _>(i).map(hex_str)),
+        MySqlDecodeRoute::SignedInteger => int_or_null(row.try_get::<i64, _>(i)),
+        MySqlDecodeRoute::Float32 => jv(row.try_get::<f32, _>(i).map(|v| v as f64)),
+        MySqlDecodeRoute::Float64 => jv(row.try_get::<f64, _>(i)),
+        MySqlDecodeRoute::Decimal => match row.try_get::<Decimal, _>(i) {
             Ok(d) => Value::String(d.to_string()),
             Err(_) => null_or_marker(row, i, &ty),
         },
-        "VARCHAR" | "CHAR" | "TEXT" | "TINYTEXT" | "MEDIUMTEXT" | "LONGTEXT" | "ENUM" => {
+        MySqlDecodeRoute::Text => {
             jv(row.try_get::<String, _>(i))
         }
         // SET is textual on the wire, but SQLx 0.8 omits ColumnType::Set from
         // String::compatible. The unchecked get skips only that type guard while
         // retaining SQLx's normal UTF-8 decoder.
-        "SET" => match row.try_get_unchecked::<String, _>(i) {
+        MySqlDecodeRoute::Set => match row.try_get_unchecked::<String, _>(i) {
             Ok(value) => Value::from(value),
             Err(_) => null_or_marker(row, i, &ty),
         },
-        "DATETIME" | "TIMESTAMP" => {
+        MySqlDecodeRoute::DateTime => {
             jv(row.try_get::<chrono::NaiveDateTime, _>(i).map(iso_dt))
         }
-        "DATE" => jv(row.try_get::<chrono::NaiveDate, _>(i).map(|t| t.to_string())),
-        "TIME" => match row.try_get::<MySqlTime, _>(i) {
+        MySqlDecodeRoute::Date => {
+            jv(row.try_get::<chrono::NaiveDate, _>(i).map(|t| t.to_string()))
+        }
+        MySqlDecodeRoute::Time => match row.try_get::<MySqlTime, _>(i) {
             Ok(t) => Value::from(fmt_mysql_time(&t)),
             Err(_) => mysql_fallback(row, i, &ty),
         },
-        "JSON" => row.try_get::<Value, _>(i).unwrap_or(Value::Null),
+        MySqlDecodeRoute::Json => row.try_get::<Value, _>(i).unwrap_or(Value::Null),
         // BIT and anything unlisted fall through.
-        _ => mysql_fallback(row, i, &ty),
+        MySqlDecodeRoute::Fallback => mysql_fallback(row, i, &ty),
     }
 }
 
@@ -523,6 +561,14 @@ mod tests {
         assert_eq!(fmt_mysql_time(&negative), "-25:01:02.1234");
         assert_eq!(fmt_mysql_time(&long), "838:59:59");
         assert_eq!(fmt_mysql_time(&short), "01:02:03");
+    }
+
+    #[test]
+    fn mysql_year_and_set_use_their_required_decoder_routes() {
+        assert_eq!(mysql_decode_route("YEAR"), MySqlDecodeRoute::UnsignedInteger);
+        assert_eq!(mysql_decode_route("BIGINT UNSIGNED"), MySqlDecodeRoute::UnsignedInteger);
+        assert_eq!(mysql_decode_route("BIGINT"), MySqlDecodeRoute::SignedInteger);
+        assert_eq!(mysql_decode_route("SET"), MySqlDecodeRoute::Set);
     }
 
     #[test]
