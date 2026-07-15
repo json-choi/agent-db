@@ -84,13 +84,11 @@ pub async fn introspect(pool: &MySqlPool, skip_fk: bool) -> AppResult<Catalog> {
         let name: String = r.try_get("table_name")?;
         let Some(&i) = idx.get(&name) else { continue };
         let iname: String = r.try_get("index_name")?;
-        let col: String = r.try_get("column_name")?;
+        // Functional indexes have no physical column, so MySQL 8 reports NULL
+        // here. A single expression index must not abort the whole catalog load.
+        let col: Option<String> = r.try_get("column_name")?;
         let non_unique: i64 = r.try_get("non_unique")?;
-        let idxs = &mut tables[i].indexes;
-        match idxs.last_mut() {
-            Some(last) if last.name == iname => last.columns.push(col),
-            _ => idxs.push(Index { name: iname, columns: vec![col], unique: non_unique == 0 }),
-        }
+        push_index_part(&mut tables[i].indexes, iname, col, non_unique == 0);
     }
 
     for r in sqlx::query(EST_SQL).fetch_all(pool).await? {
@@ -111,6 +109,25 @@ pub async fn introspect(pool: &MySqlPool, skip_fk: bool) -> AppResult<Catalog> {
     Ok(Catalog { tables })
 }
 
+fn push_index_part(
+    indexes: &mut Vec<Index>,
+    name: String,
+    column: Option<String>,
+    unique: bool,
+) {
+    let column = column
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "<expression>".into());
+    match indexes.last_mut() {
+        Some(last) if last.name == name => last.columns.push(column),
+        _ => indexes.push(Index {
+            name,
+            columns: vec![column],
+            unique,
+        }),
+    }
+}
+
 /// `SHOW CREATE TABLE` — the server's own, authoritative DDL. Also works for views
 /// (returns `CREATE VIEW`). The table name is backtick-quoted (identifiers escaped).
 pub async fn table_ddl(pool: &MySqlPool, table: &str) -> AppResult<String> {
@@ -121,4 +138,22 @@ pub async fn table_ddl(pool: &MySqlPool, table: &str) -> AppResult<String> {
     // Column 1 is "Create Table" (or "Create View"); fetch by index to cover both.
     row.try_get::<String, _>(1)
         .map_err(|e| AppError::NotFound(format!("no DDL for {table}: {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn functional_index_part_does_not_abort_index_grouping() {
+        let mut indexes = Vec::new();
+
+        push_index_part(&mut indexes, "mixed_idx".into(), Some("tenant_id".into()), false);
+        push_index_part(&mut indexes, "mixed_idx".into(), None, false);
+
+        assert_eq!(indexes.len(), 1);
+        assert_eq!(indexes[0].name, "mixed_idx");
+        assert_eq!(indexes[0].columns, ["tenant_id", "<expression>"]);
+        assert!(!indexes[0].unique);
+    }
 }

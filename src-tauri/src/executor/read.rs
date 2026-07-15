@@ -12,6 +12,7 @@ use std::time::Instant;
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use futures::TryStreamExt;
 use serde_json::Value;
+use sqlx::mysql::types::{MySqlTime, MySqlTimeSign};
 use sqlx::mysql::MySqlRow;
 use sqlx::postgres::types::{Oid, PgInterval, PgMoney, PgRange, PgTimeTz};
 use sqlx::postgres::{PgRow, PgTypeKind};
@@ -401,6 +402,29 @@ fn fmt_bits(b: &BitVec) -> String {
     b.iter().map(|bit| if bit { '1' } else { '0' }).collect()
 }
 
+/// MySQL `TIME` is a signed duration with a much wider range than a time of day.
+/// Keep MySQL's familiar zero-padded rendering while preserving the full
+/// +/-838-hour range and fractional seconds.
+fn fmt_mysql_time(t: &MySqlTime) -> String {
+    let sign = if matches!(t.sign(), MySqlTimeSign::Negative) {
+        "-"
+    } else {
+        ""
+    };
+    let mut out = format!(
+        "{sign}{:02}:{:02}:{:02}",
+        t.hours(),
+        t.minutes(),
+        t.seconds()
+    );
+    if t.microseconds() != 0 {
+        let fraction = format!("{:06}", t.microseconds());
+        out.push('.');
+        out.push_str(fraction.trim_end_matches('0'));
+    }
+    out
+}
+
 pub(crate) fn mysql_value(row: &MySqlRow, i: usize) -> Value {
     let ty = row.column(i).type_info().name().to_ascii_uppercase();
     if ty.contains("UNSIGNED") {
@@ -410,24 +434,34 @@ pub(crate) fn mysql_value(row: &MySqlRow, i: usize) -> Value {
         return jv(row.try_get::<Vec<u8>, _>(i).map(hex_str));
     }
     match ty.as_str() {
-        "TINYINT" | "SMALLINT" | "MEDIUMINT" | "INT" | "BIGINT" | "YEAR" => {
+        "TINYINT" | "SMALLINT" | "MEDIUMINT" | "INT" | "BIGINT" => {
             int_or_null(row.try_get::<i64, _>(i))
         }
+        // SQLx models YEAR as an unsigned integer even though its type name does
+        // not carry the `UNSIGNED` suffix used by ordinary integer columns.
+        "YEAR" => uint_or_null(row.try_get::<u64, _>(i)),
         "FLOAT" => jv(row.try_get::<f32, _>(i).map(|v| v as f64)),
         "DOUBLE" => jv(row.try_get::<f64, _>(i)),
         "DECIMAL" | "NEWDECIMAL" => match row.try_get::<Decimal, _>(i) {
             Ok(d) => Value::String(d.to_string()),
             Err(_) => null_or_marker(row, i, &ty),
         },
-        "VARCHAR" | "CHAR" | "TEXT" | "TINYTEXT" | "MEDIUMTEXT" | "LONGTEXT" | "ENUM" | "SET" => {
+        "VARCHAR" | "CHAR" | "TEXT" | "TINYTEXT" | "MEDIUMTEXT" | "LONGTEXT" | "ENUM" => {
             jv(row.try_get::<String, _>(i))
         }
+        // SET is textual on the wire, but SQLx 0.8 omits ColumnType::Set from
+        // String::compatible. The unchecked get skips only that type guard while
+        // retaining SQLx's normal UTF-8 decoder.
+        "SET" => match row.try_get_unchecked::<String, _>(i) {
+            Ok(value) => Value::from(value),
+            Err(_) => null_or_marker(row, i, &ty),
+        },
         "DATETIME" | "TIMESTAMP" => {
             jv(row.try_get::<chrono::NaiveDateTime, _>(i).map(iso_dt))
         }
         "DATE" => jv(row.try_get::<chrono::NaiveDate, _>(i).map(|t| t.to_string())),
-        "TIME" => match row.try_get::<chrono::NaiveTime, _>(i) {
-            Ok(t) => Value::from(t.to_string()),
+        "TIME" => match row.try_get::<MySqlTime, _>(i) {
+            Ok(t) => Value::from(fmt_mysql_time(&t)),
             Err(_) => mysql_fallback(row, i, &ty),
         },
         "JSON" => row.try_get::<Value, _>(i).unwrap_or(Value::Null),
@@ -479,6 +513,17 @@ pub(crate) fn sqlite_value(row: &SqliteRow, i: usize) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mysql_time_preserves_duration_range_sign_and_fraction() {
+        let negative = MySqlTime::new(MySqlTimeSign::Negative, 25, 1, 2, 123_400).unwrap();
+        let long = MySqlTime::new(MySqlTimeSign::Positive, 838, 59, 59, 0).unwrap();
+        let short = MySqlTime::new(MySqlTimeSign::Positive, 1, 2, 3, 0).unwrap();
+
+        assert_eq!(fmt_mysql_time(&negative), "-25:01:02.1234");
+        assert_eq!(fmt_mysql_time(&long), "838:59:59");
+        assert_eq!(fmt_mysql_time(&short), "01:02:03");
+    }
 
     #[test]
     fn big_ints_become_strings() {
