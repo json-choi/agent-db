@@ -85,6 +85,7 @@ pub fn run() {
             commands::install_driver,
             commands::upsert_connection,
             commands::set_connection_schema_group,
+            commands::set_connections_schema_group,
             commands::delete_connection,
             commands::test_connection,
             commands::test_connection_profile,
