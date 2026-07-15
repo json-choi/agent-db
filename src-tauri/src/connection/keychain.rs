@@ -131,12 +131,27 @@ mod tests {
         assert_eq!(xor(&obf), secret.as_bytes());
     }
 
-    /// End-to-end store→fetch→delete against the real OS credential store
-    /// (Windows Credential Manager / macOS Keychain), or the debug file fallback
-    /// when the store rejects unsigned test binaries. Either way the public
-    /// keychain API contract is exercised on every platform CI runs on.
+    /// Exercise the debug fallback on every CI platform without opening an
+    /// interactive OS credential-store prompt.
     #[test]
-    fn secret_store_fetch_delete_roundtrip() {
+    fn fallback_store_fetch_delete_roundtrip() {
+        let id = Uuid::new_v4();
+        let secret = "p@ss w0rd/üñî☃ non-ascii";
+
+        file_store(&id, secret).expect("store");
+        assert_eq!(file_fetch(&id).expect("fetch"), secret);
+
+        file_delete(&id).expect("delete");
+        assert!(file_fetch(&id).is_err(), "deleted secret must not fetch");
+        file_delete(&id).expect("delete is idempotent");
+    }
+
+    /// Real credential stores can require an interactive desktop session, which
+    /// GitHub-hosted runners do not provide. Run this explicitly on a signed or
+    /// otherwise credential-store-enabled desktop build.
+    #[test]
+    #[ignore = "requires an interactive OS credential store"]
+    fn os_secret_store_fetch_delete_roundtrip() {
         let id = Uuid::new_v4();
         let secret = "p@ss w0rd/üñî☃ non-ascii";
 
