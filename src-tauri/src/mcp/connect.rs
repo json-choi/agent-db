@@ -67,11 +67,11 @@ fn bin_names(bin: &str) -> Vec<String> {
         if path.extension().is_some() {
             return vec![bin.to_string()];
         }
-        ["exe", "cmd", "bat"]
+        return ["exe", "cmd", "bat"]
             .into_iter()
             .map(|ext| format!("{bin}.{ext}"))
             .chain(std::iter::once(bin.to_string()))
-            .collect()
+            .collect();
     }
 
     #[cfg(not(windows))]
