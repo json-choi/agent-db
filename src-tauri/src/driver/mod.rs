@@ -58,9 +58,9 @@ pub struct DriverDescriptor {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeAdapter {
-    SqlxPostgres,
-    SqlxMysql,
-    SqlxSqlite,
+    Postgres,
+    Mysql,
+    Sqlite,
 }
 
 struct DriverDefinition {
@@ -95,7 +95,7 @@ const DEFINITIONS: &[DriverDefinition] = &[
         supported_providers: &[Provider::Generic, Provider::Neon, Provider::PlanetScale],
         capabilities: SQL_CAPABILITIES,
         recommended: true,
-        adapter: RuntimeAdapter::SqlxPostgres,
+        adapter: RuntimeAdapter::Postgres,
     },
     DriverDefinition {
         id: "sqlx-mysql",
@@ -107,7 +107,7 @@ const DEFINITIONS: &[DriverDefinition] = &[
         supported_providers: &[Provider::Generic, Provider::PlanetScale],
         capabilities: SQL_CAPABILITIES,
         recommended: true,
-        adapter: RuntimeAdapter::SqlxMysql,
+        adapter: RuntimeAdapter::Mysql,
     },
     DriverDefinition {
         id: "sqlx-sqlite",
@@ -119,7 +119,7 @@ const DEFINITIONS: &[DriverDefinition] = &[
         supported_providers: &[Provider::Generic],
         capabilities: SQL_CAPABILITIES,
         recommended: true,
-        adapter: RuntimeAdapter::SqlxSqlite,
+        adapter: RuntimeAdapter::Sqlite,
     },
 ];
 
@@ -210,9 +210,9 @@ pub fn install(id: &str) -> AppResult<DriverDescriptor> {
 pub async fn connect(profile: &ConnectionProfile, secret: &str) -> AppResult<LiveConnection> {
     let driver = resolve(profile)?;
     match driver.adapter {
-        RuntimeAdapter::SqlxPostgres => connect_sqlx(Engine::Postgres, profile, secret).await,
-        RuntimeAdapter::SqlxMysql => connect_sqlx(Engine::Mysql, profile, secret).await,
-        RuntimeAdapter::SqlxSqlite => connect_sqlx(Engine::Sqlite, profile, secret).await,
+        RuntimeAdapter::Postgres => connect_sqlx(Engine::Postgres, profile, secret).await,
+        RuntimeAdapter::Mysql => connect_sqlx(Engine::Mysql, profile, secret).await,
+        RuntimeAdapter::Sqlite => connect_sqlx(Engine::Sqlite, profile, secret).await,
     }
 }
 
