@@ -84,8 +84,14 @@ fn bin_names(bin: &str) -> Vec<String> {
 }
 
 fn which(bin: &str) -> Option<PathBuf> {
+    which_in(&augmented_path(), bin)
+}
+
+/// PATH-style lookup of `bin` (expanded through [`bin_names`]) across `path` entries.
+/// Split from [`which`] so tests can inject a synthetic PATH.
+fn which_in(path: &OsStr, bin: &str) -> Option<PathBuf> {
     let names = bin_names(bin);
-    std::env::split_paths(&augmented_path())
+    std::env::split_paths(path)
         .flat_map(|d| names.iter().map(move |name| d.join(name)))
         .find(|c| c.is_file())
 }
@@ -466,4 +472,93 @@ fn connect_claude_desktop(bridge_path: &str) -> Result<String, String> {
     let pretty = serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?;
     std::fs::write(&path, pretty).map_err(|e| e.to_string())?;
     Ok("Wrote claude_desktop_config.json — restart Claude Desktop to load it.".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn bin_names_appends_windows_launcher_extensions_in_order() {
+        // npm-installed CLIs are `.cmd` shims on Windows; losing that entry breaks
+        // Claude Code / Codex detection entirely.
+        assert_eq!(
+            bin_names("claude"),
+            ["claude.exe", "claude.cmd", "claude.bat", "claude"]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn bin_names_keeps_an_explicit_extension_as_is() {
+        assert_eq!(bin_names("dopedb-mcp-stdio.exe"), ["dopedb-mcp-stdio.exe"]);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn bin_names_is_identity_off_windows() {
+        assert_eq!(bin_names("claude"), ["claude"]);
+    }
+
+    #[test]
+    fn which_in_finds_a_binary_in_a_synthetic_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let shim = if cfg!(windows) { "claude.cmd" } else { "claude" };
+        std::fs::write(dir.path().join(shim), b"").unwrap();
+
+        let path = std::env::join_paths([dir.path()]).unwrap();
+        assert_eq!(which_in(&path, "claude"), Some(dir.path().join(shim)));
+    }
+
+    #[test]
+    fn which_in_misses_when_no_candidate_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = std::env::join_paths([dir.path()]).unwrap();
+        assert_eq!(which_in(&path, "claude"), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn which_in_prefers_exe_over_cmd() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("claude.exe"), b"").unwrap();
+        std::fs::write(dir.path().join("claude.cmd"), b"").unwrap();
+
+        let path = std::env::join_paths([dir.path()]).unwrap();
+        assert_eq!(which_in(&path, "claude"), Some(dir.path().join("claude.exe")));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn augmented_path_covers_windows_cli_install_dirs() {
+        let home = dirs::home_dir().unwrap();
+        let dirs: Vec<PathBuf> = std::env::split_paths(&augmented_path()).collect();
+        assert!(dirs.contains(&home.join("AppData/Local/Programs/OpenAI/Codex/bin")));
+        assert!(dirs.contains(&home.join("AppData/Local/Microsoft/WindowsApps")));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn claude_desktop_config_lives_under_roaming_appdata() {
+        // Claude Desktop reads %APPDATA%\Claude\claude_desktop_config.json; pin the
+        // contract so a dirs-crate or refactor regression can't silently move it.
+        let expected = dirs::config_dir()
+            .unwrap()
+            .join("Claude/claude_desktop_config.json");
+        assert_eq!(claude_desktop_config_path(), Some(expected));
+    }
+
+    #[test]
+    fn codex_config_dir_honors_codex_home_override() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("CODEX_HOME", dir.path());
+        let got = codex_config_dir();
+        std::env::remove_var("CODEX_HOME");
+        assert_eq!(got, Some(dir.path().to_path_buf()));
+        assert_eq!(
+            codex_config_dir(),
+            dirs::home_dir().map(|h| h.join(".codex"))
+        );
+    }
 }

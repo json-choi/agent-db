@@ -942,6 +942,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-process",
  "tauri-plugin-updater",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",

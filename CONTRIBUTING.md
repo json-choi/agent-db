@@ -2,6 +2,10 @@
 
 AI assistants must read and follow both `AGENTS.md` and `CLAUDE.md` before changing this repository. `CONTRIBUTING.md` is the human-facing workflow; when collaboration or release rules change, keep all three files synchronized in the same pull request.
 
+## Commit messages
+
+Write commit messages according to [`docs/commit.md`](docs/commit.md).
+
 ## Work branches
 
 Each contributor works in a branch under their GitHub login:

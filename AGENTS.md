@@ -6,6 +6,10 @@ These instructions apply to Codex, Claude Code, and every other AI agent working
 
 Before changing files, read `CLAUDE.md` for the project conventions and `CONTRIBUTING.md` for the human-facing collaboration workflow. Treat this file as the mandatory AI operating policy. If the collaboration or release policy changes, update all three files in the same change so they cannot drift.
 
+## Commit messages
+
+All commit messages must follow [`docs/commit.md`](docs/commit.md).
+
 ## Identity and work branches
 
 1. Determine the authenticated GitHub login before creating a branch or canary:

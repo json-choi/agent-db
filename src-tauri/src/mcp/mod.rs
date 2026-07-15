@@ -420,4 +420,31 @@ mod tests {
 
         let _ = std::fs::remove_file(&path);
     }
+
+    #[test]
+    fn bridge_candidates_probe_exe_dir_then_resources() {
+        let exe = Path::new("/opt/dopedb/dopedb");
+        assert_eq!(
+            bridge_binary_candidates(exe, "bridge"),
+            [
+                PathBuf::from("/opt/dopedb/bridge"),
+                PathBuf::from("/opt/dopedb/resources/bridge"),
+            ]
+        );
+    }
+
+    #[test]
+    fn bridge_candidates_include_macos_bundle_resources() {
+        let exe = Path::new("/Applications/DopeDB.app/Contents/MacOS/dopedb");
+        assert!(bridge_binary_candidates(exe, "bridge")
+            .contains(&PathBuf::from("/Applications/DopeDB.app/Contents/Resources/bridge")));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn bridge_binary_path_targets_the_exe_sidecar() {
+        // Generated MCP configs embed this path; without the .exe suffix Windows
+        // platforms cannot spawn the bridge.
+        assert!(bridge_binary_path().ends_with("dopedb-mcp-stdio.exe"));
+    }
 }
