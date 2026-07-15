@@ -16,11 +16,12 @@ use sqlparser::parser::Parser;
 use crate::error::AppResult;
 use crate::model::{Classification, Engine, QueryKind, RiskLevel};
 
-fn dialect_for(engine: Engine) -> Box<dyn Dialect> {
+fn dialect_for(engine: Engine) -> Option<Box<dyn Dialect>> {
     match engine {
-        Engine::Postgres => Box::new(PostgreSqlDialect {}),
-        Engine::Mysql => Box::new(MySqlDialect {}),
-        Engine::Sqlite => Box::new(SQLiteDialect {}),
+        Engine::Postgres => Some(Box::new(PostgreSqlDialect {})),
+        Engine::Mysql => Some(Box::new(MySqlDialect {})),
+        Engine::Sqlite => Some(Box::new(SQLiteDialect {})),
+        Engine::Mongodb => None,
     }
 }
 
@@ -41,7 +42,11 @@ fn fail_safe(note: impl Into<String>) -> Classification {
 /// (those become fail-safe writes); the `AppResult` signature is kept so callers
 /// have a uniform error channel for genuinely impossible states.
 pub fn classify(sql: &str, engine: Engine) -> AppResult<Classification> {
-    let dialect = dialect_for(engine);
+    let Some(dialect) = dialect_for(engine) else {
+        return Ok(fail_safe(
+            "MongoDB document operations must use the typed document-query API",
+        ));
+    };
     let statements = match Parser::parse_sql(&*dialect, sql) {
         Ok(s) => s,
         Err(e) => {
@@ -365,5 +370,13 @@ mod tests {
         let r = c("this is not sql");
         assert_eq!(r.kind, QueryKind::Write);
         assert_eq!(r.risk, RiskLevel::High);
+    }
+
+    #[test]
+    fn mongodb_is_rejected_by_the_sql_classifier() {
+        let r = classify(r#"{ "find": "users" }"#, Engine::Mongodb).unwrap();
+        assert_eq!(r.kind, QueryKind::Write);
+        assert_eq!(r.risk, RiskLevel::High);
+        assert!(r.notes[0].contains("typed document-query API"));
     }
 }

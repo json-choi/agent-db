@@ -16,6 +16,7 @@ pub enum Engine {
     Postgres,
     Mysql,
     Sqlite,
+    Mongodb,
 }
 
 /// Hosting/control-plane provider. `Auto` preserves connection-URL convenience while

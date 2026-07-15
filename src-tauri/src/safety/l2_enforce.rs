@@ -160,6 +160,9 @@ pub fn is_read_only_violation(engine: Engine, e: &sqlx::Error) -> bool {
         }
         // SQLITE_READONLY surfaces as "attempt to write a readonly database".
         Engine::Sqlite => msg.contains("readonly") || msg.contains("read only"),
+        // MongoDB never reaches the SQLx error mapper. Its document adapter uses a
+        // typed read allowlist and maps driver errors independently.
+        Engine::Mongodb => false,
     }
 }
 
@@ -168,6 +171,7 @@ fn engine_label(engine: Engine) -> &'static str {
         Engine::Postgres => "postgres",
         Engine::Mysql => "mysql",
         Engine::Sqlite => "sqlite",
+        Engine::Mongodb => "mongodb",
     }
 }
 

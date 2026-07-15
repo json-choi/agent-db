@@ -27,6 +27,7 @@ const DEFAULT_PORT: Record<Engine, number> = {
   postgres: 5432,
   mysql: 3306,
   sqlite: 0,
+  mongodb: 27017,
 };
 
 const PROVIDER_ORDER: Provider[] = ["auto", "generic", "neon", "planetScale"];
@@ -329,6 +330,15 @@ export function ConnectionForm({
     }
   }
 
+  function driverStatus(driver: DriverDescriptor): string {
+    if (driver.installState === "planned") return t("connections.driverPlanned");
+    if (driver.installMode === "bundled") return t("connections.driverBundled");
+    if (driver.installState === "installed") {
+      return t("connections.driverInstalledStatus");
+    }
+    return t("connections.driverDownloadRequired");
+  }
+
   return (
     <div
       className="form"
@@ -452,13 +462,7 @@ export function ConnectionForm({
         <div className="connection-driver-summary">
           <div>
             <strong>{activeDriver.name}</strong>
-            <span className="muted">
-              {activeDriver.installMode === "bundled"
-                ? t("connections.driverBundled")
-                : activeDriver.installState === "installed"
-                  ? t("connections.driverInstalledStatus")
-                  : t("connections.driverDownloadRequired")}
-            </span>
+            <span className="muted">{driverStatus(activeDriver)}</span>
           </div>
           {activeDriver.installMode === "managed" &&
             activeDriver.installState === "available" && (

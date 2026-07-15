@@ -537,6 +537,7 @@ pub(crate) fn engine_str(e: Engine) -> &'static str {
         Engine::Postgres => "postgres",
         Engine::Mysql => "mysql",
         Engine::Sqlite => "sqlite",
+        Engine::Mongodb => "mongodb",
     }
 }
 
@@ -545,6 +546,7 @@ pub(crate) fn parse_engine(s: String) -> AppResult<Engine> {
         "postgres" => Ok(Engine::Postgres),
         "mysql" => Ok(Engine::Mysql),
         "sqlite" => Ok(Engine::Sqlite),
+        "mongodb" => Ok(Engine::Mongodb),
         other => Err(AppError::Config(format!("unknown engine '{other}'"))),
     }
 }
@@ -593,7 +595,7 @@ pub(crate) fn parse_uuid(s: String) -> AppResult<Uuid> {
 
 #[cfg(test)]
 mod tests {
-    use super::{migrate_audit_no_cascade, migrations, Store};
+    use super::{engine_str, migrate_audit_no_cascade, migrations, parse_engine, Store};
     use crate::error::AppError;
     use crate::model::{
         ConnectionProfile, DashboardDraft, DashboardKind, DashboardVisualization, Engine,
@@ -869,5 +871,11 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn mongodb_engine_text_round_trips() {
+        assert_eq!(engine_str(Engine::Mongodb), "mongodb");
+        assert_eq!(parse_engine("mongodb".into()).unwrap(), Engine::Mongodb);
     }
 }
