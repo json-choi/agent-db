@@ -211,6 +211,53 @@ pub async fn set_connection_schema_group(
 }
 
 #[tauri::command]
+pub async fn set_connections_schema_group(
+    state: State<'_, AppState>,
+    ids: Vec<Uuid>,
+    schema_group: Option<String>,
+) -> AppResult<Vec<ConnectionProfile>> {
+    let mut unique_ids = Vec::with_capacity(ids.len());
+    for id in ids {
+        if !unique_ids.contains(&id) {
+            unique_ids.push(id);
+        }
+    }
+    if unique_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let normalized = normalize_schema_group(schema_group);
+    let mut connections = state.store.list_connections().await?;
+    for id in &unique_ids {
+        let profile = connections
+            .iter_mut()
+            .find(|profile| profile.id == *id)
+            .ok_or_else(|| AppError::NotFound(format!("connection {id}")))?;
+        profile.schema_group = normalized.clone();
+    }
+
+    let updated = unique_ids
+        .iter()
+        .map(|id| {
+            connections
+                .iter()
+                .find(|profile| profile.id == *id)
+                .cloned()
+                .ok_or_else(|| AppError::NotFound(format!("connection {id}")))
+        })
+        .collect::<AppResult<Vec<_>>>()?;
+    for profile in &updated {
+        validate_schema_group_engine(profile, &connections)?;
+    }
+
+    state
+        .store
+        .set_connections_schema_group(&unique_ids, normalized)
+        .await?;
+    Ok(updated)
+}
+
+#[tauri::command]
 pub async fn delete_connection(state: State<'_, AppState>, id: Uuid) -> AppResult<()> {
     state.store.delete_connection(id).await?;
     let _ = connection::delete_secret(&id);

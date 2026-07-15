@@ -51,6 +51,13 @@ export function setConnectionSchemaGroup(
   return invoke("set_connection_schema_group", { id, schemaGroup });
 }
 
+export function setConnectionsSchemaGroup(
+  ids: string[],
+  schemaGroup: string | null,
+): Promise<ConnectionProfile[]> {
+  return invoke("set_connections_schema_group", { ids, schemaGroup });
+}
+
 export function deleteConnection(id: string): Promise<void> {
   return invoke("delete_connection", { id });
 }

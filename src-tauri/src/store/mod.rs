@@ -171,6 +171,32 @@ impl Store {
         self.get_connection(id).await
     }
 
+    /// Update several connections as one transaction so a failed group operation
+    /// cannot leave only part of the requested membership persisted.
+    pub async fn set_connections_schema_group(
+        &self,
+        ids: &[Uuid],
+        schema_group: Option<String>,
+    ) -> AppResult<()> {
+        let mut tx = self.pool.begin().await?;
+        let updated_at = Utc::now();
+        for id in ids {
+            let result = sqlx::query(
+                "UPDATE connections SET schema_group = ?2, updated_at = ?3 WHERE id = ?1",
+            )
+            .bind(id.to_string())
+            .bind(schema_group.as_deref())
+            .bind(updated_at)
+            .execute(&mut *tx)
+            .await?;
+            if result.rows_affected() != 1 {
+                return Err(AppError::NotFound(format!("connection {id}")));
+            }
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     /// Delete a connection; child rows cascade (safety, history, cache). The audit log
     /// deliberately does NOT cascade — compliance history survives connection deletion.
     pub async fn delete_connection(&self, id: Uuid) -> AppResult<()> {
@@ -682,6 +708,61 @@ mod tests {
         assert_eq!(loaded.name, "legacy");
         assert_eq!(loaded.schema_group.as_deref(), Some("core"));
         store.upsert_connection(&loaded).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn schema_group_batch_rolls_back_when_any_connection_is_missing() {
+        let opts = SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::raw_sql(migrations::SCHEMA)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let store = Store::from_pool_for_test(pool);
+        let connection_id = Uuid::new_v4();
+        store
+            .upsert_connection(&ConnectionProfile {
+                id: connection_id,
+                name: "dev".into(),
+                engine: Engine::Sqlite,
+                provider: Provider::Generic,
+                driver_id: Some("sqlx-sqlite".into()),
+                host: String::new(),
+                port: 0,
+                database: ":memory:".into(),
+                username: String::new(),
+                sslmode: "disable".into(),
+                extra_params: HashMap::new(),
+                readonly_default: true,
+                allow_writes: false,
+                secret_ref: None,
+                env: Some("dev".into()),
+                schema_group: None,
+            })
+            .await
+            .unwrap();
+
+        let missing_id = Uuid::new_v4();
+        let error = store
+            .set_connections_schema_group(&[connection_id, missing_id], Some("core".into()))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, AppError::NotFound(_)));
+        assert_eq!(
+            store
+                .get_connection(connection_id)
+                .await
+                .unwrap()
+                .schema_group,
+            None
+        );
     }
 
     #[tokio::test]

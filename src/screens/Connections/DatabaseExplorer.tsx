@@ -6,7 +6,7 @@ import { useQueries, useQueryClient } from "@tanstack/react-query";
 import {
   deleteConnection,
   getTableDdl,
-  setConnectionSchemaGroup,
+  setConnectionsSchemaGroup,
 } from "../../ipc/commands";
 import type { Catalog, CatalogTable, ConnectionProfile } from "../../ipc/types";
 import { errMessage } from "../../ipc/types";
@@ -362,18 +362,16 @@ export function DatabaseExplorer({
     );
   }
 
-  async function saveSchemaGroupUpdates(updates: Array<{ id: string; group: string }>) {
-    const originals = updates
-      .map((update) => connectionById(update.id))
+  async function saveSchemaGroupUpdates(ids: string[], schemaGroup: string) {
+    const originals = ids
+      .map((id) => connectionById(id))
       .filter((conn): conn is ConnectionProfile => !!conn);
-    for (const update of updates) {
-      const original = connectionById(update.id);
-      if (original) onConnectionUpdated({ ...original, schemaGroup: update.group });
+    for (const id of ids) {
+      const original = connectionById(id);
+      if (original) onConnectionUpdated({ ...original, schemaGroup });
     }
     try {
-      const saved = await Promise.all(
-        updates.map((update) => setConnectionSchemaGroup(update.id, update.group)),
-      );
+      const saved = await setConnectionsSchemaGroup(ids, schemaGroup);
       saved.forEach(onConnectionUpdated);
     } catch (err) {
       originals.forEach(onConnectionUpdated);
@@ -392,11 +390,11 @@ export function DatabaseExplorer({
       targetGroup ||
       draggedGroup ||
       fallbackSchemaGroupName(dragged, target, connections);
-    const updates = [
-      ...(draggedGroup === group ? [] : [{ id: dragged.id, group }]),
-      ...(targetGroup === group ? [] : [{ id: target.id, group }]),
+    const ids = [
+      ...(draggedGroup === group ? [] : [dragged.id]),
+      ...(targetGroup === group ? [] : [target.id]),
     ];
-    if (updates.length === 0) return;
+    if (ids.length === 0) return;
     const confirmed = window.confirm(
       t("connections.schemaGroupConfirmPair", {
         source: dragged.name || dragged.database || t("app.unnamed"),
@@ -406,7 +404,7 @@ export function DatabaseExplorer({
     );
     if (!confirmed) return;
     try {
-      await saveSchemaGroupUpdates(updates);
+      await saveSchemaGroupUpdates(ids, group);
       toast(t("connections.schemaGroupUpdated"));
     } catch (err) {
       toast(errMessage(err), "error");
@@ -427,7 +425,7 @@ export function DatabaseExplorer({
     );
     if (!confirmed) return;
     try {
-      await saveSchemaGroupUpdates([{ id: dragged.id, group: group.label }]);
+      await saveSchemaGroupUpdates([dragged.id], group.label);
       toast(t("connections.schemaGroupUpdated"));
     } catch (err) {
       toast(errMessage(err), "error");
