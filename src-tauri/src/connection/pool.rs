@@ -189,6 +189,11 @@ pub(crate) async fn connect_sqlx(
 
             (DbPool::Sqlite(rw), DbPool::Sqlite(ro))
         }
+        Engine::Mongodb => {
+            return Err(AppError::Config(
+                "MongoDB must be opened through its document database adapter".into(),
+            ))
+        }
     };
 
     Ok(LiveConnection {

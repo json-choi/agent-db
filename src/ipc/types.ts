@@ -1,7 +1,7 @@
 // TS mirrors of the Rust `model.rs` serde types. All shapes serialize camelCase.
 // Keep this file in lockstep with src-tauri/src/model.rs — it is the data contract.
 
-export type Engine = "postgres" | "mysql" | "sqlite";
+export type Engine = "postgres" | "mysql" | "sqlite" | "mongodb";
 export type Provider = "auto" | "generic" | "neon" | "planetScale";
 
 export interface ConnectionProfile {
@@ -28,8 +28,10 @@ export type DriverInstallMode = "bundled" | "managed";
 export type DriverInstallState = "installed" | "available";
 export type DriverCapability =
   | "sql"
+  | "documentQuery"
   | "transactions"
   | "introspection"
+  | "collections"
   | "schemaDiff"
   | "monitoring";
 

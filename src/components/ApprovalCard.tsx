@@ -30,6 +30,7 @@ const ENGINE_LABEL: Record<Engine, string> = {
   postgres: "PostgreSQL",
   mysql: "MySQL",
   sqlite: "SQLite",
+  mongodb: "MongoDB",
 };
 
 function riskClass(risk: RiskLevel): string {

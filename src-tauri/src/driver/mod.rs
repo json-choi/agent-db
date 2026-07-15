@@ -34,8 +34,10 @@ pub enum DriverInstallState {
 #[serde(rename_all = "camelCase")]
 pub enum DriverCapability {
     Sql,
+    DocumentQuery,
     Transactions,
     Introspection,
+    Collections,
     SchemaDiff,
     Monitoring,
 }
@@ -73,7 +75,7 @@ struct DriverDefinition {
     supported_providers: &'static [Provider],
     capabilities: &'static [DriverCapability],
     recommended: bool,
-    adapter: RuntimeAdapter,
+    adapter: Option<RuntimeAdapter>,
 }
 
 const SQL_CAPABILITIES: &[DriverCapability] = &[
@@ -95,7 +97,7 @@ const DEFINITIONS: &[DriverDefinition] = &[
         supported_providers: &[Provider::Generic, Provider::Neon, Provider::PlanetScale],
         capabilities: SQL_CAPABILITIES,
         recommended: true,
-        adapter: RuntimeAdapter::Postgres,
+        adapter: Some(RuntimeAdapter::Postgres),
     },
     DriverDefinition {
         id: "sqlx-mysql",
@@ -107,7 +109,7 @@ const DEFINITIONS: &[DriverDefinition] = &[
         supported_providers: &[Provider::Generic, Provider::PlanetScale],
         capabilities: SQL_CAPABILITIES,
         recommended: true,
-        adapter: RuntimeAdapter::Mysql,
+        adapter: Some(RuntimeAdapter::Mysql),
     },
     DriverDefinition {
         id: "sqlx-sqlite",
@@ -119,7 +121,26 @@ const DEFINITIONS: &[DriverDefinition] = &[
         supported_providers: &[Provider::Generic],
         capabilities: SQL_CAPABILITIES,
         recommended: true,
-        adapter: RuntimeAdapter::Sqlite,
+        adapter: Some(RuntimeAdapter::Sqlite),
+    },
+    DriverDefinition {
+        id: "mongodb-rust",
+        name: "MongoDB Rust Driver",
+        engine: Engine::Mongodb,
+        version: "3",
+        install_mode: DriverInstallMode::Managed,
+        install_state: DriverInstallState::Available,
+        supported_providers: &[Provider::Generic],
+        capabilities: &[
+            DriverCapability::DocumentQuery,
+            DriverCapability::Collections,
+            DriverCapability::Introspection,
+            DriverCapability::Monitoring,
+        ],
+        recommended: true,
+        // The catalog entry is visible while the adapter is being built. resolve()
+        // rejects Available drivers, so incomplete support cannot open a socket.
+        adapter: None,
     },
 ];
 
@@ -209,7 +230,13 @@ pub fn install(id: &str) -> AppResult<DriverDescriptor> {
 /// Resolve the optimal compatible adapter, then delegate connection mechanics to it.
 pub async fn connect(profile: &ConnectionProfile, secret: &str) -> AppResult<LiveConnection> {
     let driver = resolve(profile)?;
-    match driver.adapter {
+    let adapter = driver.adapter.ok_or_else(|| {
+        AppError::Config(format!(
+            "driver {:?} has no runtime adapter in this build",
+            driver.id
+        ))
+    })?;
+    match adapter {
         RuntimeAdapter::Postgres => connect_sqlx(Engine::Postgres, profile, secret).await,
         RuntimeAdapter::Mysql => connect_sqlx(Engine::Mysql, profile, secret).await,
         RuntimeAdapter::Sqlite => connect_sqlx(Engine::Sqlite, profile, secret).await,
@@ -265,5 +292,25 @@ mod tests {
         let mut p = profile(Engine::Postgres, Provider::Generic);
         p.driver_id = Some("sqlx-mysql".into());
         assert!(validate(&p).is_err());
+    }
+
+    #[test]
+    fn advertises_mongodb_as_document_driver_without_sql_capability() {
+        let mongo = list()
+            .into_iter()
+            .find(|driver| driver.id == "mongodb-rust")
+            .unwrap();
+        assert_eq!(mongo.engine, Engine::Mongodb);
+        assert_eq!(mongo.install_state, DriverInstallState::Available);
+        assert!(mongo.capabilities.contains(&DriverCapability::DocumentQuery));
+        assert!(mongo.capabilities.contains(&DriverCapability::Collections));
+        assert!(!mongo.capabilities.contains(&DriverCapability::Sql));
+        assert!(!mongo.capabilities.contains(&DriverCapability::SchemaDiff));
+    }
+
+    #[test]
+    fn mongodb_cannot_connect_before_runtime_adapter_is_installed() {
+        let err = validate(&profile(Engine::Mongodb, Provider::Generic)).unwrap_err();
+        assert!(err.to_string().contains("must be installed"));
     }
 }

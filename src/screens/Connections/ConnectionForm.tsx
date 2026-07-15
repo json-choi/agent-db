@@ -27,6 +27,7 @@ const DEFAULT_PORT: Record<Engine, number> = {
   postgres: 5432,
   mysql: 3306,
   sqlite: 0,
+  mongodb: 27017,
 };
 
 const PROVIDER_ORDER: Provider[] = ["auto", "generic", "neon", "planetScale"];
