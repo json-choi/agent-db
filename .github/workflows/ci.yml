@@ -63,6 +63,12 @@ jobs:
       - name: Check Rust workspace
         run: cargo check --workspace
 
+      - name: Lint Rust workspace
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test Rust workspace
+        run: cargo test --workspace
+
   windows-check:
     runs-on: windows-latest
     timeout-minutes: 25
@@ -103,3 +109,6 @@ jobs:
 
       - name: Check Rust workspace
         run: cargo check --workspace
+
+      - name: Test Rust workspace
+        run: cargo test --workspace
