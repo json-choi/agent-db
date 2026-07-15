@@ -57,14 +57,11 @@ pub struct ConnectionProfile {
     pub allow_writes: bool,
     /// Credential-store item id for the secret, if one has been stored.
     pub secret_ref: Option<String>,
-    /// Working project folder for this connection (used to locate migrations).
-    #[serde(default)]
-    pub project_dir: Option<String>,
     /// Environment label ("dev" | "staging" | "prod") — drives the sidebar/header chip.
     #[serde(default)]
     pub env: Option<String>,
     /// Shared schema family. Connections with the same value are compared as
-    /// dev/staging/prod siblings, using prod as the baseline when present.
+    /// dev/staging/prod siblings, using prod as the default baseline when present.
     #[serde(default)]
     pub schema_group: Option<String>,
 }

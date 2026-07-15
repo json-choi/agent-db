@@ -58,7 +58,6 @@ axum = "0.8.9"
 tokio-util = "0.7.18"
 dashmap = "6.2.1"
 schemars = "1.2.1"
-notify = "8.2.0"
 tauri-plugin-dialog = "2.7.1"
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]

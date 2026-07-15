@@ -19,7 +19,6 @@ export interface ConnectionProfile {
   readonlyDefault: boolean;
   allowWrites: boolean;
   secretRef: string | null;
-  projectDir: string | null;
   env: string | null; // "dev" | "staging" | "prod" | null
   schemaGroup: string | null; // shared group for dev/staging/prod schema comparison
 }
@@ -230,46 +229,6 @@ export interface PlatformInfo {
   connected: boolean; // dopedb entry already present in the platform's MCP config
   method: string; // "http" | "bridge"
   note: string;
-}
-
-// Migration change-log (mirrors src-tauri/src/migrations/mod.rs).
-interface ChangeView {
-  kind: string;
-  summary: string;
-  down: string | null;
-  reversible: boolean;
-}
-export interface MigrationView {
-  version: string;
-  name: string;
-  upFile: string;
-  hasDownFile: boolean;
-  changes: ChangeView[];
-  generatedDown: string;
-  parseError: string | null;
-  // Additive fields from the applied-state backend stage.
-  partialParse: boolean;
-  applied: boolean | null; // null when no connection/tracker detected
-  applyScript: string | null; // up SQL + tracking mark (always populated)
-  rollbackScript: string | null; // down SQL + tracking un-mark (always populated)
-}
-interface ColumnDiff {
-  table: string;
-  missingInDb: string[];
-  extraInDb: string[];
-}
-interface Drift {
-  pendingTables: string[];
-  extraTables: string[];
-  columnDiffs: ColumnDiff[];
-}
-export interface MigrationReport {
-  dir: string;
-  migrations: MigrationView[];
-  drift: Drift | null;
-  error: string | null;
-  tracker: string | null; // "prisma" | "sqlx" | "rails" | "golang-migrate" | "flyway" | "drizzle"
-  trackerTable: string | null;
 }
 
 // The `{ kind, message, position? }` object AppError serializes to.

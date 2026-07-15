@@ -22,7 +22,7 @@ import SchemaExplorer from "./screens/Schema";
 import Sql from "./screens/Sql";
 import Dashboards from "./screens/Dashboards";
 import Activity from "./screens/Activity";
-import Migrations from "./screens/Migrations";
+import SchemaDiff from "./screens/SchemaDiff";
 import Onboarding from "./screens/Onboarding";
 import Settings from "./screens/Settings";
 import AgentResultView from "./components/AgentResultView";
@@ -33,7 +33,7 @@ import { AgentFeedProvider, useAgentFeed } from "./lib/agentFeed";
 import { useI18n, type I18nKey } from "./lib/i18n";
 
 // App-level tabs. Agent is a live feed/result surface, connection-independent; the rest
-// are per-connection data views. Migrations lives in the sidebar; Settings behind ⚙.
+// are per-connection data views. Settings lives behind the sidebar gear.
 type Tab = "data" | "schema" | "sql" | "dashboard" | "agent" | "activity";
 // Agent is last: it's connection-independent, so it sits apart from the per-connection
 // data tabs (the .agent-tab class pushes it right with a divider via shared CSS).
@@ -206,7 +206,7 @@ function Shell() {
   const [settingsSection, setSettingsSection] = useState<
     "mcp" | "safety" | "updates" | undefined
   >(undefined);
-  const [migrationsOpen, setMigrationsOpen] = useState(false);
+  const [schemaDiffGroupKey, setSchemaDiffGroupKey] = useState<string | null>(null);
   const [mcpBadge, setMcpBadge] = useState<McpBadgeState | null>(null);
   const [mcpBadgeReady, setMcpBadgeReady] = useState(false);
   const [mcpRefreshTick, setMcpRefreshTick] = useState(0);
@@ -219,7 +219,7 @@ function Shell() {
     setSelectedTable(null);
     setEditing(null);
     setSettingsOpen(false);
-    setMigrationsOpen(false);
+    setSchemaDiffGroupKey(null);
     setDashboardFocusId(dashboard.id);
     setTab("dashboard");
   }, []);
@@ -246,6 +246,19 @@ function Shell() {
   }, [selectedId]);
 
   const selected = conns.find((c) => c.id === selectedId) ?? null;
+  const schemaGroups = useMemo(
+    () =>
+      buildConnectionSections(conns).flatMap((section) =>
+        section.kind === "group" ? [section.group] : [],
+      ),
+    [conns],
+  );
+  const activeSchemaGroup =
+    schemaGroups.find((group) => group.key === schemaDiffGroupKey) ?? null;
+
+  useEffect(() => {
+    if (schemaDiffGroupKey && !activeSchemaGroup) setSchemaDiffGroupKey(null);
+  }, [activeSchemaGroup, schemaDiffGroupKey]);
 
   function refresh(): Promise<ConnectionProfile[]> {
     return listConnections()
@@ -398,14 +411,14 @@ function Shell() {
   function openMcpSettings() {
     setSettingsSection("mcp");
     setSettingsOpen(true);
-    setMigrationsOpen(false);
+    setSchemaDiffGroupKey(null);
     setEditing(null);
   }
 
   function openUpdateSettings() {
     setSettingsSection("updates");
     setSettingsOpen(true);
-    setMigrationsOpen(false);
+    setSchemaDiffGroupKey(null);
     setEditing(null);
   }
 
@@ -423,7 +436,7 @@ function Shell() {
     setSelectedTable(null);
     setEditing(null);
     setSettingsOpen(false);
-    setMigrationsOpen(false);
+    setSchemaDiffGroupKey(null);
     setDashboardFocusId(null);
     setTab(nextTab);
   }
@@ -431,7 +444,7 @@ function Shell() {
   function startNewConnection() {
     setEditing("new");
     setSettingsOpen(false);
-    setMigrationsOpen(false);
+    setSchemaDiffGroupKey(null);
   }
 
   function renderMain() {
@@ -448,11 +461,13 @@ function Shell() {
         />
       );
     }
-    if (migrationsOpen && selected) {
+    if (activeSchemaGroup) {
       return (
-        <div className="main-view">
-          <Migrations connection={selected} onClose={() => setMigrationsOpen(false)} />
-        </div>
+        <SchemaDiff
+          key={activeSchemaGroup.key}
+          group={activeSchemaGroup}
+          onClose={() => setSchemaDiffGroupKey(null)}
+        />
       );
     }
     if (editing !== null) {
@@ -677,7 +692,7 @@ function Shell() {
         connections={conns}
         selectedId={selectedId}
         selectedTableKey={selectedTable ? tableKey(selectedTable) : null}
-        migrationsOpen={migrationsOpen}
+        activeSchemaGroupKey={schemaDiffGroupKey}
         onSelectConn={(id) => {
           selectConnection(id);
         }}
@@ -686,15 +701,14 @@ function Shell() {
           setSelectedTable(t);
           setEditing(null);
           setSettingsOpen(false);
-          setMigrationsOpen(false);
+          setSchemaDiffGroupKey(null);
           setTab("data");
         }}
-        onOpenMigrations={(conn) => {
-          setSelectedId(conn.id);
+        onOpenSchemaDiff={(group) => {
           setSelectedTable(null);
           setEditing(null);
           setSettingsOpen(false);
-          setMigrationsOpen(true);
+          setSchemaDiffGroupKey(group.key);
         }}
         onNew={() => {
           startNewConnection();
@@ -702,15 +716,15 @@ function Shell() {
         onEdit={(conn) => {
           setEditing(conn);
           setSettingsOpen(false);
-          setMigrationsOpen(false);
+          setSchemaDiffGroupKey(null);
         }}
         onDeleted={async (id) => {
           await refresh();
           if (selectedId === id) {
             setSelectedId(null);
             setSelectedTable(null);
-            setMigrationsOpen(false);
           }
+          if (schemaDiffGroupKey) setSchemaDiffGroupKey(null);
           setEditing((current) => {
             if (current && current !== "new" && current.id === id) return null;
             return current;
@@ -730,7 +744,7 @@ function Shell() {
         onOpenSettings={() => {
           setSettingsSection(undefined);
           setSettingsOpen(true);
-          setMigrationsOpen(false);
+          setSchemaDiffGroupKey(null);
         }}
       />
       <div

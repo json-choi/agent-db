@@ -900,7 +900,6 @@ mod tests {
             readonly_default: true,
             allow_writes: false,
             secret_ref: None,
-            project_dir: None,
             env: env.map(str::to_string),
             schema_group: None,
         }

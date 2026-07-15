@@ -94,7 +94,6 @@ mod tests {
             readonly_default: true,
             allow_writes: false,
             secret_ref: None,
-            project_dir: None,
             env: None,
             schema_group: None,
         }

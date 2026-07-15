@@ -93,12 +93,54 @@
   font-size: var(--ds-font-size-xs);
 }
 .db-group-name {
+  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 700;
   color: var(--ds-text);
+}
+.db-group-head.active {
+  color: var(--ds-accent-text);
+}
+.db-group-compare {
+  min-width: 0;
+  min-height: var(--ds-control-xs);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--ds-segment-gap);
+  padding: 0 var(--ds-chip-pad-x);
+  border: var(--ds-border-width) solid var(--ds-border-subtle);
+  border-radius: var(--ds-radius-pill);
+  background: var(--ds-surface-0);
+  color: var(--ds-text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--ds-font-size-2xs);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.db-group-compare:hover,
+.db-group-head.active .db-group-compare {
+  border-color: var(--ds-accent-text);
+  color: var(--ds-accent-text);
+}
+.db-group-diff-counts {
+  display: inline-flex;
+  gap: var(--ds-segment-gap);
+  font-family: var(--ds-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.db-group-diff-counts .diff-add {
+  color: var(--ds-success);
+}
+.db-group-diff-counts .diff-remove {
+  color: var(--ds-danger);
+}
+.db-group-diff-counts .diff-change {
+  color: var(--ds-warning);
 }
 .db-group .db-node {
   position: relative;
@@ -149,6 +191,9 @@
   border-radius: 999px;
   flex-shrink: 0;
   background: var(--ds-text-subtle);
+}
+.schema-diff-dot.diff-none {
+  background: transparent;
 }
 .schema-diff-dot.diff-added {
   background: var(--ds-success);
@@ -333,14 +378,16 @@
   position: relative;
   margin-left: auto;
   flex-shrink: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
 }
 
-.db-menu summary {
-  list-style: none;
-}
-
-.db-menu summary::-webkit-details-marker {
-  display: none;
+.db-conn:hover .db-menu,
+.db-menu:focus-within,
+.db-menu.open {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .db-menu-trigger {
@@ -349,16 +396,29 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: none;
-  border-radius: var(--ds-radius-sm);
+  border: var(--ds-border-width) solid transparent;
+  border-radius: var(--ds-radius-pill);
+  background: transparent;
   color: var(--ds-text-muted);
   cursor: pointer;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease,
+    box-shadow 0.12s ease;
+}
+
+.db-menu-trigger .icon {
+  font-size: var(--ds-font-size-ui);
 }
 
 .db-menu-trigger:hover,
-.db-menu[open] .db-menu-trigger {
-  background: var(--ds-hover);
+.db-menu-trigger:focus-visible,
+.db-menu.open .db-menu-trigger {
+  border-color: var(--ds-border-subtle);
+  background: var(--ds-surface-1);
   color: var(--ds-text);
+  box-shadow: var(--ds-shadow-control);
 }
 
 .db-menu-panel {
@@ -402,6 +462,13 @@
 
 .db-menu-item.danger {
   color: var(--ds-danger);
+}
+
+@media (hover: none) {
+  .db-menu {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 .db-tables {
@@ -471,14 +538,6 @@
 .db-table.selected .muted {
   color: var(--ds-text-on-accent-muted);
 }
-.db-table-ico {
-  color: var(--ds-text-muted);
-  font-size: var(--ds-font-size-xs);
-  flex-shrink: 0;
-}
-.db-table.selected .db-table-ico {
-  color: var(--ds-text-on-accent-muted);
-}
 .small-pad {
   padding: var(--ds-space-1) var(--ds-space-2);
 }
@@ -535,36 +594,6 @@
 
 .foot-btn .gear {
   color: var(--ds-text-muted);
-}
-
-/* Sidebar "Migrations" nav row (under an expanded connection) */
-.db-nav {
-  display: flex;
-  align-items: center;
-  gap: var(--ds-space-2);
-  margin-bottom: var(--ds-optical-offset-xs);
-  padding: var(--ds-space-1) var(--ds-space-2);
-  border-radius: var(--ds-radius-sm);
-  cursor: pointer;
-  font-size: var(--ds-font-size-ui);
-}
-
-.db-nav:hover {
-  background: var(--ds-hover);
-}
-
-.db-nav.active {
-  background: var(--ds-accent);
-  color: var(--ds-text-inverse);
-}
-
-.db-nav-ico {
-  color: var(--ds-text-muted);
-  font-size: var(--ds-font-size-xs);
-}
-
-.db-nav.active .db-nav-ico {
-  color: var(--ds-text-on-accent-muted);
 }
 
 @media (max-width: 760px) {

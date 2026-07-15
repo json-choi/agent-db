@@ -1,4 +1,4 @@
-// Client-side statement splitter — mirrors the Rust migrations::split_statements +
+// Client-side statement splitter — mirrors the Rust sql_script::split_statements +
 // is_effective_sql so the SQL screen can decide single-vs-script mode, badge the count,
 // and list statements in the approval panel to match what the backend will execute.
 // Purely a UX heuristic: the backend re-splits authoritatively before running.
