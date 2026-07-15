@@ -9,7 +9,6 @@
 //! DB's own read-only session) remains the authoritative stop.
 
 use chrono::Utc;
-use std::time::Duration;
 use tauri::State;
 use uuid::Uuid;
 
@@ -52,6 +51,36 @@ async fn get_live(state: &AppState, id: Uuid) -> AppResult<LiveConnection> {
     let handle = live.clone();
     state.connections.lock().unwrap().insert(id, live);
     Ok(handle)
+}
+
+fn normalize_schema_group(schema_group: Option<String>) -> Option<String> {
+    schema_group.and_then(|value| {
+        let trimmed = value.trim().to_string();
+        (!trimmed.is_empty()).then_some(trimmed)
+    })
+}
+
+fn validate_schema_group_engine(
+    profile: &ConnectionProfile,
+    connections: &[ConnectionProfile],
+) -> AppResult<()> {
+    let Some(group) = profile.schema_group.as_deref() else {
+        return Ok(());
+    };
+    let incompatible = connections.iter().any(|connection| {
+        connection.id != profile.id
+            && connection
+                .schema_group
+                .as_deref()
+                .is_some_and(|candidate| candidate.trim().eq_ignore_ascii_case(group))
+            && connection.engine != profile.engine
+    });
+    if incompatible {
+        return Err(AppError::Config(format!(
+            "schema group '{group}' already contains a different database engine"
+        )));
+    }
+    Ok(())
 }
 
 /// Best-effort resolve the introspected catalog: schema cache first, live DB otherwise.
@@ -149,8 +178,11 @@ pub async fn upsert_connection(
     password: Option<String>,
 ) -> AppResult<ConnectionProfile> {
     let mut profile = profile;
+    profile.schema_group = normalize_schema_group(profile.schema_group);
     // Reject stale or incompatible explicit driver choices before persisting the profile.
     crate::driver::validate(&profile)?;
+    let connections = state.store.list_connections().await?;
+    validate_schema_group_engine(&profile, &connections)?;
     // Stash any supplied secret in the OS credential store and point the profile at it.
     if let Some(pw) = password.filter(|p| !p.is_empty()) {
         connection::store_secret(&profile.id, &pw)?;
@@ -170,10 +202,11 @@ pub async fn set_connection_schema_group(
     id: Uuid,
     schema_group: Option<String>,
 ) -> AppResult<ConnectionProfile> {
-    let normalized = schema_group.and_then(|value| {
-        let trimmed = value.trim().to_string();
-        if trimmed.is_empty() { None } else { Some(trimmed) }
-    });
+    let normalized = normalize_schema_group(schema_group);
+    let mut profile = state.store.get_connection(id).await?;
+    profile.schema_group = normalized.clone();
+    let connections = state.store.list_connections().await?;
+    validate_schema_group_engine(&profile, &connections)?;
     state.store.set_connection_schema_group(id, normalized).await
 }
 
@@ -561,7 +594,7 @@ fn script_has_write(kinds: &[QueryKind]) -> bool {
 /// commits. Returns `(per-statement outcomes, committed)`.
 // ponytail: SELECTs inside a write script report `affected` only (no grid). To see
 // query results, run a read-only script — that path streams rows per statement.
-// NOTE: mirrors migrations::applied::run_in_tx — MySQL implicit-commits DDL, so a
+// NOTE: MySQL implicitly commits DDL, so a
 // mixed DDL script's atomicity is best-effort there.
 async fn execute_script_tx(
     pool: &DbPool,
@@ -626,7 +659,7 @@ async fn execute_script_tx(
 ///   ONE write-pool transaction (rollback on the first error).
 ///
 /// This is the escape hatch from `run_sql`'s single-statement L4 hard block: a seed or
-/// migration-style file that `run_sql` refuses can run here, still gated + audited.
+/// multi-statement file that `run_sql` refuses can run here, still gated + audited.
 #[tauri::command]
 pub async fn run_script(
     state: State<'_, AppState>,
@@ -643,11 +676,8 @@ pub async fn run_script(
     let engine = profile.engine;
     let origin = origin.unwrap_or_else(|| "manual".into());
 
-    // Split + drop comment-only statements (reusing the migration scanner), classify each.
-    let statements: Vec<String> = crate::migrations::split_statements_for(&sql, engine)
-        .into_iter()
-        .filter(|s| crate::migrations::applied::is_effective_sql(s))
-        .collect();
+    // Split authoritatively in the backend; comment-only segments are discarded.
+    let statements = crate::sql_script::split_statements(&sql, engine);
     if statements.is_empty() {
         return Err(AppError::Config("no executable statements in the script".into()));
     }
@@ -1040,241 +1070,17 @@ pub fn open_agent_app(platform: String) -> AppResult<String> {
     crate::mcp::connect::open_app(&platform).map_err(AppError::Config)
 }
 
-// ── native pickers ────────────────────────────────────────────────────────────
-// Rust-side dialog plugin (no webview capability wiring needed). The blocking_*
-// calls dispatch to the main thread; async commands keep them off the IPC pool.
+// ── native picker ─────────────────────────────────────────────────────────────
 
-/// Native folder picker (project folder / migrations dir). None = user cancelled.
-#[tauri::command]
-pub async fn pick_folder(app: tauri::AppHandle) -> Option<String> {
-    use tauri_plugin_dialog::DialogExt;
-    app.dialog()
-        .file()
-        .blocking_pick_folder()
-        .and_then(|p| p.into_path().ok())
-        .map(|p| p.to_string_lossy().into_owned())
-}
-
-/// Native file picker (SQLite database path). None = user cancelled.
+/// Native file picker for a SQLite database path. None means the user cancelled.
 #[tauri::command]
 pub async fn pick_file(app: tauri::AppHandle) -> Option<String> {
     use tauri_plugin_dialog::DialogExt;
     app.dialog()
         .file()
         .blocking_pick_file()
-        .and_then(|p| p.into_path().ok())
-        .map(|p| p.to_string_lossy().into_owned())
-}
-
-// ── migration change-log ──────────────────────────────────────────────────────
-
-/// Scan a folder of `.sql` migrations, replay them into a schema model (change log +
-/// generated down SQL), and — if a connection is given — diff the result against the
-/// live DB schema.
-#[tauri::command]
-pub async fn analyze_migrations(
-    state: State<'_, AppState>,
-    dir: String,
-    connection_id: Option<Uuid>,
-) -> AppResult<crate::migrations::MigrationReport> {
-    const LIVE_COMPARE_TIMEOUT: Duration = Duration::from_secs(2);
-    const LOCAL_ANALYZE_TIMEOUT: Duration = Duration::from_secs(6);
-
-    let (catalog, tracker) = match connection_id {
-        Some(id) => {
-            // Keep the local migration report responsive even when the live DB is
-            // slow or unreachable. Drift/tracker data is useful, but best-effort.
-            let catalog = match tokio::time::timeout(LIVE_COMPARE_TIMEOUT, load_catalog(&state, id)).await {
-                Ok(Ok(catalog)) => Some(catalog),
-                Ok(Err(_)) | Err(_) => None,
-            };
-            // Probe the read-only pool for the ORM's applied-state table (best-effort).
-            let tracker = match tokio::time::timeout(LIVE_COMPARE_TIMEOUT, get_live(&state, id)).await {
-                Ok(Ok(live)) => tokio::time::timeout(
-                    LIVE_COMPARE_TIMEOUT,
-                    crate::migrations::applied::detect(live.ro()),
-                )
-                .await
-                .ok()
-                .flatten(),
-                Ok(Err(_)) | Err(_) => None,
-            };
-            (catalog, tracker)
-        }
-        None => (None, None),
-    };
-    let analysis_dir = dir.clone();
-    match tokio::time::timeout(
-        LOCAL_ANALYZE_TIMEOUT,
-        tokio::task::spawn_blocking(move || {
-            crate::migrations::analyze(&analysis_dir, catalog.as_ref(), tracker.as_ref())
-        }),
-    )
-    .await
-    {
-        Ok(Ok(report)) => Ok(report),
-        Ok(Err(e)) => Err(AppError::Config(format!("migration analysis failed: {e}"))),
-        Err(_) => Ok(crate::migrations::MigrationReport {
-            dir,
-            migrations: vec![],
-            drift: None,
-            error: Some(
-                "Migration analysis timed out. Choose the actual migrations folder instead of a broad project folder."
-                    .into(),
-            ),
-            tracker: None,
-            tracker_table: None,
-        }),
-    }
-}
-
-/// Actually run a migration: re-analyze the folder fresh against the live tracker, pick
-/// the apply/rollback script for `version`, and execute it in ONE transaction on the
-/// write pool. Requires `approved` AND the connection's `allow_writes` (same gate as
-/// `run_sql`), and enforces order — rollback only the latest applied migration, apply
-/// only the earliest pending one. Audits the attempt + outcome and clears the schema
-/// cache on success.
-#[tauri::command]
-pub async fn run_migration_script(
-    state: State<'_, AppState>,
-    connection_id: Uuid,
-    dir: String,
-    version: String,
-    direction: String,
-    approved: bool,
-    // Optional so existing invokes keep working; wires the executor cancel slot and
-    // (even when None) the wall-clock timeout, matching run_sql/run_script.
-    query_id: Option<Uuid>,
-) -> AppResult<ExecOutcome> {
-    use crate::migrations::applied::{self, Direction};
-
-    let dir_kind = match direction.as_str() {
-        "apply" => Direction::Apply,
-        "rollback" => Direction::Rollback,
-        other => {
-            return Err(AppError::Config(format!(
-                "unknown direction {other:?} — use \"apply\" or \"rollback\""
-            )))
-        }
-    };
-
-    let profile = state.store.get_connection(connection_id).await?;
-    let settings = state.store.get_safety(connection_id).await?;
-    let engine = profile.engine;
-
-    // Gate (mirrors run_sql): explicit approval AND writes enabled, or it never runs.
-    if !approved {
-        return Err(AppError::Blocked {
-            reason: "this migration modifies the database and requires explicit approval".into(),
-        });
-    }
-    if !settings.allow_writes {
-        return Err(AppError::Blocked {
-            reason: "writes are disabled for this connection (allow_writes = 0)".into(),
-        });
-    }
-
-    // Re-analyze FRESH against the live tracker — never trust a stale client copy.
-    let live = get_live(&state, connection_id).await?;
-    let tracker = applied::detect(live.ro()).await;
-    let report = crate::migrations::analyze(&dir, None, tracker.as_ref());
-    if let Some(err) = report.error {
-        return Err(AppError::NotFound(err));
-    }
-
-    let target = applied::pick_target(&report.migrations, &version, dir_kind)?;
-    let script = match dir_kind {
-        Direction::Apply => target.apply_script.clone(),
-        Direction::Rollback => target.rollback_script.clone(),
-    }
-    .unwrap_or_default();
-
-    // Split into executable statements, skipping pure-comment (`-- MANUAL:`) ones.
-    let statements: Vec<String> = crate::migrations::split_statements_for(&script, engine)
-        .into_iter()
-        .filter(|s| applied::is_effective_sql(s))
-        .collect();
-
-    let (action_attempt, action_done) = match dir_kind {
-        Direction::Apply => ("migration:apply:attempt", "migration:apply"),
-        Direction::Rollback => ("migration:rollback:attempt", "migration:rollback"),
-    };
-
-    // Compliance: persist the attempt BEFORE touching the DB; fail closed if we can't.
-    audit::record(
-        &state.store,
-        RecordArgs {
-            connection_id,
-            engine,
-            agent_prompt: None,
-            sql: script.clone(),
-            kind: QueryKind::Ddl,
-            action: action_attempt.into(),
-            approved_by: None,
-            affected_estimate: None,
-            error: None,
-        },
-    )
-    .await
-    .map_err(|e| {
-        AppError::Config(format!("audit pre-record failed — refusing to run migration: {e}"))
-    })?;
-
-    // Wrap in the same cancel/timeout guard as run_sql/run_script: a slow backfill or
-    // CREATE INDEX must not pin the write-pool connection forever with no way to abort.
-    // A cancel/timeout drops the tx future mid-flight (uncommitted → rolled back).
-    let tx_fut = applied::run_in_tx(&live.write_pool, &statements);
-    match executor::cancel::guard(query_id, executor::cancel::QUERY_TIMEOUT, tx_fut).await {
-        Ok(affected) => {
-            // Structure changed — drop the cached catalog so the sidebar/agent refresh.
-            let _ = state.store.clear_schema_cache(connection_id).await;
-            record_run(
-                &state, connection_id, engine, &script, QueryKind::Ddl, action_done, "ok",
-                Some(affected as i64), None, None, "migration",
-            )
-            .await;
-            Ok(ExecOutcome { result: None, affected: Some(affected), committed: true })
-        }
-        Err(e) => {
-            record_run(
-                &state, connection_id, engine, &script, QueryKind::Ddl, action_done, "error",
-                None, None, Some(e.to_string()), "migration",
-            )
-            .await;
-            Err(e)
-        }
-    }
-}
-
-/// Auto-detect the migrations folder inside a project root (Prisma/Drizzle/Rails/… layouts).
-#[tauri::command]
-pub fn detect_migrations_dir(project_dir: String) -> Option<String> {
-    crate::migrations::detect_dir(&project_dir)
-}
-
-/// Watch the migrations folder; emit `migrations:changed` on any change so the UI can
-/// re-analyze live. Replaces any previous watcher.
-#[tauri::command]
-pub fn start_migration_watch(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-    dir: String,
-) -> AppResult<()> {
-    use notify::{RecursiveMode, Watcher};
-    use tauri::Emitter;
-
-    let handle = app.clone();
-    let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        if res.is_ok() {
-            let _ = handle.emit("migrations:changed", ());
-        }
-    })
-    .map_err(|e| AppError::Config(format!("migration watch init failed: {e}")))?;
-    watcher
-        .watch(std::path::Path::new(&dir), RecursiveMode::Recursive)
-        .map_err(|e| AppError::Config(format!("migration watch failed: {e}")))?;
-    *state.mig_watcher.lock().unwrap() = Some(watcher);
-    Ok(())
+        .and_then(|path| path.into_path().ok())
+        .map(|path| path.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]
@@ -1349,5 +1155,55 @@ mod script_tests {
         assert!(rows.iter().all(|r| r.error.is_none()));
         let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM t").fetch_one(&pool).await.unwrap();
         assert_eq!(n, 2);
+    }
+}
+
+#[cfg(test)]
+mod schema_group_tests {
+    use std::collections::HashMap;
+
+    use uuid::Uuid;
+
+    use super::{normalize_schema_group, validate_schema_group_engine};
+    use crate::model::{ConnectionProfile, Engine, Provider};
+
+    fn profile(id: u128, engine: Engine, group: Option<&str>) -> ConnectionProfile {
+        ConnectionProfile {
+            id: Uuid::from_u128(id),
+            name: format!("connection-{id}"),
+            engine,
+            provider: Provider::Generic,
+            driver_id: None,
+            host: "localhost".into(),
+            port: 0,
+            database: "test".into(),
+            username: "tester".into(),
+            sslmode: "disable".into(),
+            extra_params: HashMap::new(),
+            readonly_default: true,
+            allow_writes: false,
+            secret_ref: None,
+            env: None,
+            schema_group: group.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn normalizes_empty_and_padded_group_names() {
+        assert_eq!(normalize_schema_group(Some("  Core  ".into())).as_deref(), Some("Core"));
+        assert_eq!(normalize_schema_group(Some("   ".into())), None);
+    }
+
+    #[test]
+    fn rejects_a_different_engine_in_the_same_case_insensitive_group() {
+        let postgres = profile(1, Engine::Postgres, Some("Core"));
+        let mysql = profile(2, Engine::Mysql, Some(" core "));
+
+        assert!(validate_schema_group_engine(&postgres, &[mysql]).is_err());
+        assert!(validate_schema_group_engine(
+            &postgres,
+            &[profile(3, Engine::Postgres, Some("CORE"))],
+        )
+        .is_ok());
     }
 }

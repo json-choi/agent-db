@@ -42,7 +42,7 @@ export default function Settings({
     onClose();
   }
 
-  // Esc closes the overlay, matching Migrations/RowEditor. Ref keeps the handler
+  // Esc closes the overlay, matching other full-screen overlays. Ref keeps the handler
   // pinned to the latest close() (refreshSafety side-effect) without re-binding.
   const closeRef = useRef(close);
   closeRef.current = close;

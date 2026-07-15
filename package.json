@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "test": "vitest run",
     "build:bridge": "bash scripts/build-bridge.sh",
     "sign:dev": "bash src-tauri/sign-dev.sh",
     "dev:app": "cargo build --manifest-path src-tauri/Cargo.toml && pnpm sign:dev && ./target/debug/dopedb",
@@ -37,7 +38,8 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
     "typescript": "^6.0.3",
-    "vite": "^8.1.3"
+    "vite": "^8.1.3",
+    "vitest": "^4.1.10"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

@@ -31,8 +31,6 @@ pub struct AppState {
     pub mcp_token: String,
     /// Live status of the MCP HTTP + bridge listeners.
     pub mcp_runtime: Arc<Mutex<McpRuntime>>,
-    /// Active filesystem watcher for the migrations folder (kept alive here).
-    pub mig_watcher: Mutex<Option<notify::RecommendedWatcher>>,
 }
 
 impl AppState {
@@ -42,7 +40,6 @@ impl AppState {
             connections: Arc::new(Mutex::new(HashMap::new())),
             mcp_token: crate::mcp::load_or_create_token(),
             mcp_runtime: Arc::new(Mutex::new(McpRuntime::default())),
-            mig_watcher: Mutex::new(None),
         })
     }
 }

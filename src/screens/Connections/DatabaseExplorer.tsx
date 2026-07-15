@@ -14,7 +14,10 @@ import { catalogQuery, fetchFreshCatalog, qk } from "../../lib/queries";
 import {
   buildConnectionSections,
   compareCatalogs,
+  defaultSchemaBaseline,
   diffCounts,
+  orderTablesBySchemaDiff,
+  schemaGroupIsCompatible,
   tableDiffTone,
   type SchemaConnectionGroup,
   type SchemaDiffSummary,
@@ -158,28 +161,28 @@ export function DatabaseExplorer({
   connections,
   selectedId,
   selectedTableKey,
+  activeSchemaGroupKey,
   onSelectConn,
   onOpenTable,
-  onOpenMigrations,
+  onOpenSchemaDiff,
   onNew,
   onEdit,
   onDeleted,
   onConnectionUpdated,
   onOpenSettings,
-  migrationsOpen,
 }: {
   connections: ConnectionProfile[];
   selectedId: string | null;
   selectedTableKey: string | null;
+  activeSchemaGroupKey: string | null;
   onSelectConn: (id: string) => void;
   onOpenTable: (conn: ConnectionProfile, table: CatalogTable) => void;
-  onOpenMigrations: (conn: ConnectionProfile) => void;
+  onOpenSchemaDiff: (group: SchemaConnectionGroup) => void;
   onNew: () => void;
   onEdit: (conn: ConnectionProfile) => void;
   onDeleted: (id: string) => void;
   onConnectionUpdated: (conn: ConnectionProfile) => void;
   onOpenSettings: () => void;
-  migrationsOpen: boolean;
 }) {
   const { t } = useI18n();
   const toast = useToast();
@@ -197,6 +200,7 @@ export function DatabaseExplorer({
   const [tablesOpen, setTablesOpen] = useState(true);
   const [viewsOpen, setViewsOpen] = useState(true);
   const [showRowCounts, setShowRowCounts] = useState(true);
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [ddl, setDdl] = useState<{ conn: ConnectionProfile; table: CatalogTable } | null>(
     null,
   );
@@ -217,6 +221,17 @@ export function DatabaseExplorer({
     }
     return map;
   }, [sections]);
+
+  useEffect(() => {
+    if (!openMenuId) return;
+    const closeOnOutsidePointer = (event: globalThis.PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest(".db-menu")) return;
+      setOpenMenuId(null);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePointer);
+  }, [openMenuId]);
 
   const wantedIds = useMemo(() => [...wanted].sort(), [wanted]);
   const { catalogs, loadErrs } = useQueries({
@@ -332,11 +347,19 @@ export function DatabaseExplorer({
   }
 
   function canDropOnConnection(dragId: string | null, target: ConnectionProfile) {
-    return !!dragId && dragId !== target.id && !!connectionById(dragId);
+    const dragged = dragId ? connectionById(dragId) : null;
+    return !!dragged && dragged.id !== target.id && dragged.engine === target.engine;
   }
 
   function canDropOnGroup(dragId: string | null, group: SchemaConnectionGroup) {
-    return !!dragId && !group.connections.some((conn) => conn.id === dragId);
+    const dragged = dragId ? connectionById(dragId) : null;
+    const engine = group.connections[0]?.engine;
+    return (
+      !!dragged &&
+      !!engine &&
+      dragged.engine === engine &&
+      !group.connections.some((conn) => conn.id === dragged.id)
+    );
   }
 
   async function saveSchemaGroupUpdates(updates: Array<{ id: string; group: string }>) {
@@ -533,19 +556,19 @@ export function DatabaseExplorer({
     clearPointerDrag();
   }
 
-  function prodBaseline(group: SchemaConnectionGroup): ConnectionProfile | null {
-    return group.connections.find((conn) => conn.env === "prod") ?? null;
+  function groupBaseline(group: SchemaConnectionGroup): ConnectionProfile | null {
+    return defaultSchemaBaseline(group);
   }
 
   function schemaDiffForConnection(conn: ConnectionProfile): SchemaDiffSummary | null {
     const group = groupByConnectionId.get(conn.id);
     if (!group) return null;
-    const baseline = prodBaseline(group);
+    const baseline = groupBaseline(group);
     if (!baseline || baseline.id === conn.id) return null;
     const current = catalogs[conn.id];
-    const prod = catalogs[baseline.id];
-    if (!current || !prod) return null;
-    return compareCatalogs(current, prod);
+    const baselineCatalog = catalogs[baseline.id];
+    if (!current || !baselineCatalog) return null;
+    return compareCatalogs(current, baselineCatalog);
   }
 
   function schemaDiffTitle(diff: SchemaDiffSummary) {
@@ -570,18 +593,18 @@ export function DatabaseExplorer({
   function renderSchemaDiffBadge(conn: ConnectionProfile) {
     const group = groupByConnectionId.get(conn.id);
     if (!group) return null;
-    const baseline = prodBaseline(group);
+    const baseline = groupBaseline(group);
     if (!baseline || baseline.id === conn.id) return null;
     const current = catalogs[conn.id];
-    const prod = catalogs[baseline.id];
-    if (!current || !prod) {
+    const baselineCatalog = catalogs[baseline.id];
+    if (!current || !baselineCatalog) {
       return (
         <span className="schema-diff-chip diff-pending" title={t("connections.schemaDiffPendingTitle")}>
           {t("connections.schemaDiffPendingChip")}
         </span>
       );
     }
-    const diff = compareCatalogs(current, prod);
+    const diff = compareCatalogs(current, baselineCatalog);
     if (diff.total === 0) {
       return (
         <span className="schema-diff-chip diff-ok" title={t("connections.schemaDiffInSync")}>
@@ -665,43 +688,71 @@ export function DatabaseExplorer({
           <span className="db-conn-name">{c.name || t("app.unnamed")}</span>
           {c.env && <span className={`env-chip env-${c.env}`}>{c.env}</span>}
           {renderSchemaDiffBadge(c)}
-          <details className="db-menu" onClick={(e) => e.stopPropagation()}>
-            <summary
+          <div
+            className={`db-menu${openMenuId === c.id ? " open" : ""}`}
+            onPointerDown={(e) => e.stopPropagation()}
+            onPointerUp={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Escape") {
+                e.preventDefault();
+                setOpenMenuId(null);
+                e.currentTarget.querySelector<HTMLButtonElement>(".db-menu-trigger")?.focus();
+              }
+            }}
+          >
+            <button
+              type="button"
               className="db-menu-trigger"
               title={t("connections.connectionMenu")}
               aria-label={t("connections.connectionMenu")}
+              aria-expanded={openMenuId === c.id}
+              aria-controls={`connection-menu-${c.id}`}
+              onClick={() => setOpenMenuId((current) => (current === c.id ? null : c.id))}
             >
-              <Icon name="gear" />
-            </summary>
-            <div className="db-menu-panel">
-              <button type="button" onClick={() => onEdit(c)}>
-                {t("connections.edit")}
-              </button>
-              <button
-                type="button"
-                disabled={refreshing === c.id}
-                onClick={() => void refreshSchema(c.id)}
-              >
-                {refreshing === c.id ? t("mcp.working") : t("connections.refreshSchema")}
-              </button>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={showRowCounts}
-                  onChange={(e) => setShowRowCounts(e.target.checked)}
-                />
-                {t("connections.showRowCounts")}
-              </label>
-              <ConfirmButton
-                className="db-menu-item danger"
-                confirmLabel={t("common.reallyDelete")}
-                disabled={deleting === c.id}
-                onConfirm={() => void removeConnection(c)}
-              >
-                {t("common.delete")}
-              </ConfirmButton>
-            </div>
-          </details>
+              <Icon name="moreVertical" />
+            </button>
+            {openMenuId === c.id && (
+              <div className="db-menu-panel" id={`connection-menu-${c.id}`}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOpenMenuId(null);
+                    onEdit(c);
+                  }}
+                >
+                  {t("connections.edit")}
+                </button>
+                <button
+                  type="button"
+                  disabled={refreshing === c.id}
+                  onClick={() => {
+                    setOpenMenuId(null);
+                    void refreshSchema(c.id);
+                  }}
+                >
+                  {refreshing === c.id ? t("mcp.working") : t("connections.refreshSchema")}
+                </button>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={showRowCounts}
+                    onChange={(e) => setShowRowCounts(e.target.checked)}
+                  />
+                  {t("connections.showRowCounts")}
+                </label>
+                <ConfirmButton
+                  className="db-menu-item danger"
+                  confirmLabel={t("common.reallyDelete")}
+                  disabled={deleting === c.id}
+                  onConfirm={() => void removeConnection(c)}
+                >
+                  {t("common.delete")}
+                </ConfirmButton>
+              </div>
+            )}
+          </div>
         </div>
 
         {open.has(c.id) &&
@@ -711,11 +762,12 @@ export function DatabaseExplorer({
             const diff = schemaDiffForConnection(c);
             const filter = filters[c.id] ?? "";
             const f = filter.trim().toLowerCase();
-            const all = cat
+            const filteredTables = cat
               ? f
                 ? cat.tables.filter((t) => tableMatchesFilter(t, f))
                 : cat.tables
               : [];
+            const all = orderTablesBySchemaDiff(filteredTables, diff);
             const missingTables = diff
               ? f
                 ? diff.missingTables.filter((t) => tableMatchesFilter(t, f))
@@ -751,15 +803,11 @@ export function DatabaseExplorer({
                   }}
                   title={tableDiff ? tableDiffTitle(tableDiff) : t("connections.columns", { count: table.columns.length })}
                 >
-                  {tone && (
-                    <span
-                      className={`schema-diff-dot diff-${tone}`}
-                      title={tableDiff ? tableDiffTitle(tableDiff) : undefined}
-                    />
-                  )}
-                  <span className="db-table-ico">
-                    {table.kind === "view" ? "◇" : "▦"}
-                  </span>
+                  <span
+                    className={`schema-diff-dot${tone ? ` diff-${tone}` : " diff-none"}`}
+                    title={tableDiff ? tableDiffTitle(tableDiff) : undefined}
+                    aria-hidden="true"
+                  />
                   <span className="tbl-name">
                     {tableLabel(c.engine, table)}
                   </span>
@@ -787,30 +835,16 @@ export function DatabaseExplorer({
                 className="db-table schema-diff-missing-row ds-object-row"
                 title={t("connections.schemaDiffTableMissing")}
               >
-                <span className="schema-diff-dot diff-missing" />
-                <span className="db-table-ico">{table.kind === "view" ? "◇" : "▦"}</span>
+                <span className="schema-diff-dot diff-missing" aria-hidden="true" />
                 <span className="tbl-name">{tableLabel(c.engine, table)}</span>
-                <span className="schema-diff-inline diff-missing">prod</span>
+                <span className="schema-diff-kind">
+                  {t(table.kind === "view" ? "schemaDiff.objectView" : "schemaDiff.objectTable")}
+                </span>
+                <span className="schema-diff-inline diff-missing">base</span>
               </div>
             );
             return (
               <div className="db-tables">
-                <div
-                  className={migrationsOpen && isSel ? "db-nav active" : "db-nav"}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => onOpenMigrations(c)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      onOpenMigrations(c);
-                    }
-                  }}
-                  title={t("connections.migrationsTitle")}
-                >
-                  <span className="db-nav-ico">◱</span>{" "}
-                  {t("connections.migrations")}
-                </div>
                 {cat && cat.tables.length > 5 && (
                   <input
                     className="table-filter"
@@ -899,6 +933,27 @@ export function DatabaseExplorer({
     const isDropTarget =
       dropTarget?.kind === "group" && dropTarget.key === group.key;
     const engine = group.connections[0]?.engine;
+    const baseline = defaultSchemaBaseline(group);
+    const baselineCatalog = baseline ? catalogs[baseline.id] : undefined;
+    const targets = group.connections.filter((connection) => connection.id !== baseline?.id);
+    const diffs = baselineCatalog
+      ? targets.flatMap((connection) => {
+          const catalog = catalogs[connection.id];
+          return catalog ? [compareCatalogs(catalog, baselineCatalog)] : [];
+        })
+      : [];
+    const complete = targets.length > 0 && diffs.length === targets.length;
+    const groupCounts = diffs.reduce(
+      (total, diff) => {
+        const counts = diffCounts(diff);
+        total.added += counts.added;
+        total.missing += counts.missing;
+        total.changed += counts.changed;
+        return total;
+      },
+      { added: 0, missing: 0, changed: 0 },
+    );
+    const groupTotal = groupCounts.added + groupCounts.missing + groupCounts.changed;
     return (
       <div
         key={`group-${group.key}`}
@@ -906,11 +961,35 @@ export function DatabaseExplorer({
         className={isDropTarget ? "db-group drop-target" : "db-group"}
       >
         <div
-          className="db-group-head"
+          className={`db-group-head${activeSchemaGroupKey === group.key ? " active" : ""}`}
           title={t("connections.schemaGroupTitle", { group: group.label })}
         >
           {engine && <EngineMark engine={engine} />}
           <span className="db-group-name">{group.label}</span>
+          <button
+            type="button"
+            className="db-group-compare"
+            title={t("schemaDiff.openTitle")}
+            aria-label={t("schemaDiff.openTitle")}
+            onClick={() => {
+              for (const connection of group.connections) ensureLoaded(connection.id);
+              onOpenSchemaDiff(group);
+            }}
+          >
+            {!schemaGroupIsCompatible(group) ? (
+              <Icon name="alert" />
+            ) : complete && groupTotal === 0 ? (
+              <Icon name="check" />
+            ) : complete ? (
+              <span className="db-group-diff-counts">
+                {groupCounts.added > 0 && <span className="diff-add">+{groupCounts.added}</span>}
+                {groupCounts.missing > 0 && <span className="diff-remove">−{groupCounts.missing}</span>}
+                {groupCounts.changed > 0 && <span className="diff-change">~{groupCounts.changed}</span>}
+              </span>
+            ) : (
+              <span>{t("schemaDiff.open")}</span>
+            )}
+          </button>
         </div>
         {group.connections.map((conn) => renderConnection(conn, true))}
       </div>

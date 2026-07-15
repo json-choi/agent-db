@@ -6,7 +6,6 @@ import { useQuery } from "@tanstack/react-query";
 import {
   installDriver,
   pickFile,
-  pickFolder,
   testConnectionProfile,
   upsertConnection,
 } from "../../ipc/commands";
@@ -192,7 +191,6 @@ function blank(): ConnectionProfile {
     readonlyDefault: true,
     allowWrites: false,
     secretRef: null,
-    projectDir: null,
     env: null,
     schemaGroup: null,
   };
@@ -566,28 +564,6 @@ export function ConnectionForm({
           </label>
         </>
       )}
-
-      <label>
-        <span className="label-with-help">
-          {t("connections.projectFolder")}
-          <InfoTip label={t("connections.projectFolderHint")} />
-        </span>
-        <div className="row">
-          <input
-            className="grow"
-            value={form.projectDir ?? ""}
-            onChange={(e) => set("projectDir", e.target.value || null)}
-            placeholder="/path/to/your/project"
-          />
-          <button
-            type="button"
-            className="btn small"
-            onClick={() => void pickFolder().then((d) => d && set("projectDir", d))}
-          >
-            {t("connections.browse")}
-          </button>
-        </div>
-      </label>
 
       <label>
         <span className="label-with-help">

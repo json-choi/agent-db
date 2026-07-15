@@ -54,6 +54,9 @@ jobs:
       - name: Build desktop frontend
         run: pnpm build
 
+      - name: Test desktop frontend
+        run: pnpm test
+
       - name: Build landing site
         run: pnpm site:build
 
@@ -103,6 +106,9 @@ jobs:
 
       - name: Build desktop frontend
         run: pnpm build
+
+      - name: Test desktop frontend
+        run: pnpm test
 
       - name: Stage Windows MCP bridge sidecar
         run: pnpm build:bridge

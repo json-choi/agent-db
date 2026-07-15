@@ -357,7 +357,7 @@
   max-width: 760px;
 }
 
-/* Full-area main view (Migrations when opened from the sidebar) */
+/* Full-area main view for sidebar-launched workspaces. */
 .main-view { flex: 1; min-height: 0; overflow: auto; padding: var(--ds-pane-pad); }
 
 @media (max-width: 860px) {

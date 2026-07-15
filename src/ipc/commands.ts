@@ -13,7 +13,6 @@ import type {
   DriverDescriptor,
   ExecOutcome,
   HistoryEntry,
-  MigrationReport,
   MonitoringStatus,
   PreviewReport,
   ScriptOutcome,
@@ -233,40 +232,7 @@ export function openAgentApp(platform: string): Promise<string> {
   return invoke("open_agent_app", { platform });
 }
 
-// Native pickers (null = user cancelled the dialog).
-export function pickFolder(): Promise<string | null> {
-  return invoke("pick_folder");
-}
+// Native picker (null = user cancelled the dialog).
 export function pickFile(): Promise<string | null> {
   return invoke("pick_file");
-}
-
-// Analyze a folder of .sql migrations (change log + generated down SQL + optional drift).
-export function analyzeMigrations(
-  dir: string,
-  connectionId?: string,
-): Promise<MigrationReport> {
-  return invoke("analyze_migrations", { dir, connectionId: connectionId ?? null });
-}
-
-// Auto-detect the migrations subfolder inside a project root.
-export function detectMigrationsDir(projectDir: string): Promise<string | null> {
-  return invoke("detect_migrations_dir", { projectDir });
-}
-
-// Watch the migrations folder; the backend emits `migrations.changed` on any change.
-export function startMigrationWatch(dir: string): Promise<void> {
-  return invoke("start_migration_watch", { dir });
-}
-
-// Apply or roll back a single migration in one transaction. Re-analyzes fresh,
-// gates on approved + allow_writes, enforces order, audits, and records history.
-export function runMigrationScript(
-  connectionId: string,
-  dir: string,
-  version: string,
-  direction: "apply" | "rollback",
-  approved: boolean,
-): Promise<ExecOutcome> {
-  return invoke("run_migration_script", { connectionId, dir, version, direction, approved });
 }

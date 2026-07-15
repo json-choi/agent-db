@@ -56,9 +56,6 @@ impl Store {
         sqlx::raw_sql(migrations::SCHEMA).execute(&pool).await?;
         // Idempotent column adds for DBs created before the column existed (SQLite has
         // no `ADD COLUMN IF NOT EXISTS`, so we run it and ignore the duplicate-column error).
-        let _ = sqlx::query("ALTER TABLE connections ADD COLUMN project_dir TEXT")
-            .execute(&pool)
-            .await;
         let _ = sqlx::query("ALTER TABLE connections ADD COLUMN env TEXT")
             .execute(&pool)
             .await;
@@ -107,13 +104,13 @@ impl Store {
             r#"INSERT INTO connections
                 (id, name, engine, provider, driver_id, host, port, db_name, username, sslmode,
                  extra_params, secret_ref, readonly_default, allow_writes,
-                 created_at, updated_at, project_dir, env, schema_group)
-               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?15,?16,?17,?18)
+                 created_at, updated_at, env, schema_group)
+               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?15,?16,?17)
                ON CONFLICT(id) DO UPDATE SET
                  name=?2, engine=?3, provider=?4, driver_id=?5, host=?6, port=?7,
                  db_name=?8, username=?9, sslmode=?10, extra_params=?11, secret_ref=?12,
-                 readonly_default=?13, allow_writes=?14, updated_at=?15, project_dir=?16,
-                 env=?17, schema_group=?18"#,
+                 readonly_default=?13, allow_writes=?14, updated_at=?15,
+                 env=?16, schema_group=?17"#,
         )
         .bind(p.id.to_string())
         .bind(&p.name)
@@ -130,7 +127,6 @@ impl Store {
         .bind(p.readonly_default)
         .bind(p.allow_writes)
         .bind(now)
-        .bind(&p.project_dir)
         .bind(&p.env)
         .bind(&p.schema_group)
         .execute(&self.pool)
@@ -472,7 +468,6 @@ fn row_to_connection(r: &sqlx::sqlite::SqliteRow) -> AppResult<ConnectionProfile
         readonly_default: r.try_get("readonly_default")?,
         allow_writes: r.try_get("allow_writes")?,
         secret_ref: r.try_get("secret_ref")?,
-        project_dir: r.try_get("project_dir").unwrap_or(None),
         env: r.try_get("env").unwrap_or(None),
         schema_group: r.try_get("schema_group").unwrap_or(None),
     })
@@ -639,6 +634,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn connections_with_legacy_project_dir_column_still_round_trip() {
+        let opts = SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::raw_sql(migrations::SCHEMA)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("ALTER TABLE connections ADD COLUMN project_dir TEXT")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let store = Store::from_pool_for_test(pool);
+        let profile = ConnectionProfile {
+            id: Uuid::new_v4(),
+            name: "legacy".into(),
+            engine: Engine::Sqlite,
+            provider: Provider::Generic,
+            driver_id: Some("sqlx-sqlite".into()),
+            host: String::new(),
+            port: 0,
+            database: ":memory:".into(),
+            username: String::new(),
+            sslmode: "disable".into(),
+            extra_params: HashMap::new(),
+            readonly_default: true,
+            allow_writes: false,
+            secret_ref: None,
+            env: Some("dev".into()),
+            schema_group: Some("core".into()),
+        };
+        store.upsert_connection(&profile).await.unwrap();
+        sqlx::query("UPDATE connections SET project_dir = '/old/project' WHERE id = ?1")
+            .bind(profile.id.to_string())
+            .execute(store.pool())
+            .await
+            .unwrap();
+
+        let loaded = store.get_connection(profile.id).await.unwrap();
+        assert_eq!(loaded.name, "legacy");
+        assert_eq!(loaded.schema_group.as_deref(), Some("core"));
+        store.upsert_connection(&loaded).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn dashboard_round_trip_delete_and_connection_cascade() {
         let opts = SqliteConnectOptions::from_str("sqlite::memory:")
             .unwrap()
@@ -670,7 +716,6 @@ mod tests {
                 readonly_default: true,
                 allow_writes: false,
                 secret_ref: None,
-                project_dir: None,
                 env: None,
                 schema_group: None,
             })

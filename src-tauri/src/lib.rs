@@ -10,10 +10,10 @@ mod error;
 mod executor;
 mod introspect;
 mod mcp;
-mod migrations;
 mod model;
 mod monitoring;
 mod safety;
+mod sql_script;
 mod state;
 mod store;
 
@@ -111,12 +111,7 @@ pub fn run() {
             commands::connect_platform,
             commands::disconnect_platform,
             commands::open_agent_app,
-            commands::pick_folder,
             commands::pick_file,
-            commands::analyze_migrations,
-            commands::run_migration_script,
-            commands::detect_migrations_dir,
-            commands::start_migration_watch,
             executor::cancel::cancel_query,
             mcp::mcp_runtime_status,
         ])
