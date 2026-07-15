@@ -130,10 +130,12 @@ export default function SchemaDiff({
 
   const selectedTarget = targets.find((connection) => connection.id === targetId) ?? null;
   const selectedDiff = selectedTarget ? comparisons.get(selectedTarget.id) : undefined;
+  const baselineLoadError = baseline
+    ? refreshErrors[baseline.id] ?? queryById.get(baseline.id)?.error
+    : null;
   const selectedLoadError = (() => {
-    if (baseline) {
-      const error = refreshErrors[baseline.id] ?? queryById.get(baseline.id)?.error;
-      if (error) return { connection: baseline, error: errMessage(error) };
+    if (baseline && baselineLoadError) {
+      return { connection: baseline, error: errMessage(baselineLoadError) };
     }
     if (selectedTarget) {
       const error = refreshErrors[selectedTarget.id] ?? queryById.get(selectedTarget.id)?.error;
@@ -238,7 +240,8 @@ export default function SchemaDiff({
           <div className="schema-diff-overview" aria-label={t("schemaDiff.groupOverview")}>
             {targets.map((target) => {
               const result = queryById.get(target.id);
-              const error = refreshErrors[target.id] ?? (result?.error ? errMessage(result.error) : null);
+              const targetError = refreshErrors[target.id] ?? result?.error;
+              const error = baselineLoadError ?? targetError;
               const diff = comparisons.get(target.id);
               const counts = diff ? diffCounts(diff) : null;
               const selected = target.id === targetId;

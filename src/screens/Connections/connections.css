@@ -212,6 +212,14 @@
   cursor: default;
   color: var(--ds-text-muted);
 }
+.schema-diff-kind {
+  flex-shrink: 0;
+  color: var(--ds-text-subtle);
+  font-size: var(--ds-font-size-2xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
 .schema-diff-inline {
   flex-shrink: 0;
   font-size: var(--ds-font-size-2xs);

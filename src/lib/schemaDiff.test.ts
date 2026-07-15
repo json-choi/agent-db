@@ -206,6 +206,42 @@ describe("compareCatalogs", () => {
     expect(diffCounts(diff)).toEqual({ added: 2, missing: 2, changed: 2 });
   });
 
+  it("preserves multiple foreign keys that share one source column", () => {
+    const sharedUserForeignKey = {
+      column: "subject_id",
+      referencesSchema: "public",
+      referencesTable: "users",
+      referencesColumn: "id",
+    };
+    const baseline = catalog(
+      table("events", {
+        foreignKeys: [
+          sharedUserForeignKey,
+          {
+            column: "subject_id",
+            referencesSchema: "public",
+            referencesTable: "teams",
+            referencesColumn: "id",
+          },
+        ],
+      }),
+    );
+    const target = catalog(table("events", { foreignKeys: [sharedUserForeignKey] }));
+
+    const foreignKeyDiffs = compareCatalogs(target, baseline).objects.filter(
+      (object) => object.objectType === "foreignKey",
+    );
+
+    expect(foreignKeyDiffs).toEqual([
+      expect.objectContaining({
+        label: "subject_id",
+        status: "missing",
+        baselineValue: "subject_id → public.teams.id",
+        targetValue: "—",
+      }),
+    ]);
+  });
+
   it("distinguishes a table from a view kind change", () => {
     const baseline = catalog(table("active_users"));
     const target = catalog(table("active_users", { kind: "view" }));

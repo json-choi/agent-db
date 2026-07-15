@@ -311,13 +311,7 @@ function diffTable(current: CatalogTable, baseline: CatalogTable): TableSchemaDi
     new Map(current.indexes.map((index) => [index.name, indexValue(index)])),
     new Map(baseline.indexes.map((index) => [index.name, indexValue(index)])),
   );
-  appendNamedObjectDiffs(
-    diff.objectDiffs,
-    key,
-    "foreignKey",
-    new Map(current.foreignKeys.map((foreignKey) => [foreignKey.column, foreignKeyValue(foreignKey)])),
-    new Map(baseline.foreignKeys.map((foreignKey) => [foreignKey.column, foreignKeyValue(foreignKey)])),
-  );
+  appendForeignKeyDiffs(diff.objectDiffs, key, current.foreignKeys, baseline.foreignKeys);
 
   diff.relationChanged = diff.objectDiffs.some(
     (object) => object.objectType === "index" || object.objectType === "foreignKey",
@@ -345,6 +339,95 @@ function appendNamedObjectDiffs(
       objects.push(objectDiff(table, objectType, name, "missing", value, "—"));
     }
   }
+}
+
+function appendForeignKeyDiffs(
+  objects: SchemaObjectDiff[],
+  table: string,
+  currentForeignKeys: CatalogTable["foreignKeys"],
+  baselineForeignKeys: CatalogTable["foreignKeys"],
+) {
+  const current = groupForeignKeysByColumn(currentForeignKeys);
+  const baseline = groupForeignKeysByColumn(baselineForeignKeys);
+  const columns = new Set([...current.keys(), ...baseline.keys()]);
+
+  for (const column of columns) {
+    const currentValues = current.get(column) ?? [];
+    const baselineValues = baseline.get(column) ?? [];
+    if (
+      currentValues.length === 1 &&
+      baselineValues.length === 1 &&
+      currentValues[0] !== baselineValues[0]
+    ) {
+      objects.push(
+        foreignKeyObjectDiff(
+          table,
+          column,
+          "changed",
+          baselineValues[0],
+          currentValues[0],
+          "changed",
+        ),
+      );
+      continue;
+    }
+
+    const added = unmatchedValues(currentValues, baselineValues);
+    const missing = unmatchedValues(baselineValues, currentValues);
+    added.forEach((value, index) => {
+      objects.push(
+        foreignKeyObjectDiff(table, column, "added", "—", value, `added:${index}:${value}`),
+      );
+    });
+    missing.forEach((value, index) => {
+      objects.push(
+        foreignKeyObjectDiff(table, column, "missing", value, "—", `missing:${index}:${value}`),
+      );
+    });
+  }
+}
+
+function groupForeignKeysByColumn(
+  foreignKeys: CatalogTable["foreignKeys"],
+): Map<string, string[]> {
+  const grouped = new Map<string, string[]>();
+  for (const foreignKey of foreignKeys) {
+    const values = grouped.get(foreignKey.column) ?? [];
+    values.push(foreignKeyValue(foreignKey));
+    grouped.set(foreignKey.column, values);
+  }
+  for (const values of grouped.values()) values.sort();
+  return grouped;
+}
+
+function unmatchedValues(source: string[], comparison: string[]): string[] {
+  const remaining = [...comparison];
+  return source.filter((value) => {
+    const match = remaining.indexOf(value);
+    if (match < 0) return true;
+    remaining.splice(match, 1);
+    return false;
+  });
+}
+
+function foreignKeyObjectDiff(
+  table: string,
+  column: string,
+  status: "added" | "missing" | "changed",
+  baselineValue: string,
+  targetValue: string,
+  identity: string,
+): SchemaObjectDiff {
+  return {
+    id: `${table}:foreignKey:${column}:${identity}`,
+    tableKey: table,
+    objectType: "foreignKey",
+    path: `${table}.${column}`,
+    label: column,
+    status,
+    baselineValue,
+    targetValue,
+  };
 }
 
 function objectDiff(

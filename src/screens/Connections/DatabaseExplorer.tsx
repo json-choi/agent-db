@@ -837,6 +837,9 @@ export function DatabaseExplorer({
               >
                 <span className="schema-diff-dot diff-missing" aria-hidden="true" />
                 <span className="tbl-name">{tableLabel(c.engine, table)}</span>
+                <span className="schema-diff-kind">
+                  {t(table.kind === "view" ? "schemaDiff.objectView" : "schemaDiff.objectTable")}
+                </span>
                 <span className="schema-diff-inline diff-missing">base</span>
               </div>
             );
