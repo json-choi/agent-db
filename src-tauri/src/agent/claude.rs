@@ -79,28 +79,44 @@ pub(super) fn command(
     let bin = which("claude").ok_or_else(|| AppError::Agent("Claude Code (`claude`) not found".into()))?;
     let cfg = mcp_config_path()?;
     let mut cmd: Command = quiet_command(&bin).into();
-    cmd.args(["-p", "--output-format", "stream-json", "--verbose"])
-        .args(["--mcp-config", &cfg.to_string_lossy(), "--strict-mcp-config"])
-        .arg("--allowedTools")
-        .args(ALLOWED_TOOLS)
-        .arg("--disallowedTools")
-        .args(DISALLOWED_TOOLS)
+    cmd.args(build_args(message, resume, &cfg.to_string_lossy(), model, effort))
         .env("DOPEDB_MCP_TOKEN", token);
+    Ok(cmd)
+}
+
+/// The full argv (after the binary) for one turn. Pure — no filesystem or PATH lookups —
+/// so the argument-order regression tests run on machines without a `claude` install
+/// (CI runners have none; the old tests that went through `command()` failed there).
+fn build_args(
+    message: &str,
+    resume: Option<&str>,
+    mcp_config: &str,
+    model: Option<&str>,
+    effort: Option<&str>,
+) -> Vec<String> {
+    let mut args: Vec<String> = ["-p", "--output-format", "stream-json", "--verbose"]
+        .map(String::from)
+        .into();
+    args.extend(["--mcp-config".into(), mcp_config.into(), "--strict-mcp-config".into()]);
+    args.push("--allowedTools".into());
+    args.extend(ALLOWED_TOOLS.map(String::from));
+    args.push("--disallowedTools".into());
+    args.extend(DISALLOWED_TOOLS.map(String::from));
     if let Some(id) = resume {
-        cmd.args(["--resume", id]);
+        args.extend(["--resume".into(), id.into()]);
     }
     if let Some(m) = model {
-        cmd.args(["--model", m]);
+        args.extend(["--model".into(), m.into()]);
     }
     if let Some(e) = effort {
-        cmd.args(["--effort", e]);
+        args.extend(["--effort".into(), e.into()]);
     }
     // `--` must come after EVERY option and right before the message: it marks the end
     // of options, so anything following it — including our own flags — would be
     // swallowed into the prompt. It exists so a message starting with `-` (e.g.
     // "-1 rows are wrong") can't be reinterpreted as an option.
-    cmd.arg("--").arg(message);
-    Ok(cmd)
+    args.extend(["--".into(), message.into()]);
+    args
 }
 
 /// Parse one line of `claude --output-format stream-json` JSONL into zero or more
@@ -217,11 +233,10 @@ mod tests {
     /// is a regression that has already happened once, so it gets its own test.
     #[test]
     fn model_and_effort_flags_come_before_the_message_separator() {
-        let cmd = command("hi", None, "tok", Some("opus"), Some("high")).unwrap();
-        let args: Vec<&str> = cmd.as_std().get_args().map(|a| a.to_str().unwrap()).collect();
-        let dash_dash = args.iter().position(|a| *a == "--").expect("-- present");
-        let model_pos = args.iter().position(|a| *a == "--model").expect("--model present");
-        let effort_pos = args.iter().position(|a| *a == "--effort").expect("--effort present");
+        let args = build_args("hi", None, "/cfg.json", Some("opus"), Some("high"));
+        let dash_dash = args.iter().position(|a| a == "--").expect("-- present");
+        let model_pos = args.iter().position(|a| a == "--model").expect("--model present");
+        let effort_pos = args.iter().position(|a| a == "--effort").expect("--effort present");
         assert!(model_pos < dash_dash, "--model must precede --");
         assert!(effort_pos < dash_dash, "--effort must precede --");
         assert_eq!(args[model_pos + 1], "opus");
@@ -231,9 +246,8 @@ mod tests {
     /// No model/effort selected: no flags added, existing behavior unchanged.
     #[test]
     fn no_model_or_effort_omits_both_flags() {
-        let cmd = command("hi", None, "tok", None, None).unwrap();
-        let args: Vec<&str> = cmd.as_std().get_args().map(|a| a.to_str().unwrap()).collect();
-        assert!(!args.contains(&"--model"));
-        assert!(!args.contains(&"--effort"));
+        let args = build_args("hi", None, "/cfg.json", None, None);
+        assert!(!args.iter().any(|a| a == "--model"));
+        assert!(!args.iter().any(|a| a == "--effort"));
     }
 }

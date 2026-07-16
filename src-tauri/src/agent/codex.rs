@@ -45,30 +45,48 @@ pub(super) fn command(
 ) -> AppResult<Command> {
     let bin = which("codex").ok_or_else(|| AppError::Agent("Codex (`codex`) not found".into()))?;
     let mut cmd: Command = quiet_command(&bin).into();
-    cmd.arg("exec")
-        .arg("--json")
-        .arg("--skip-git-repo-check")
+    cmd.args(build_args(message, resume, model, effort))
+        .env("DOPEDB_MCP_TOKEN", token);
+    Ok(cmd)
+}
+
+/// The full argv (after the binary) for one turn. Pure — no PATH lookups — so the
+/// argument-order regression tests run on machines without a `codex` install (CI
+/// runners have none; the old tests that went through `command()` failed there).
+fn build_args(
+    message: &str,
+    resume: Option<&str>,
+    model: Option<&str>,
+    effort: Option<&str>,
+) -> Vec<String> {
+    let mut args: Vec<String> = vec![
+        "exec".into(),
+        "--json".into(),
+        "--skip-git-repo-check".into(),
         // Read-only sandbox: the model can't touch the filesystem/shell even if a
         // prompt tries to talk it into something outside the MCP tools.
-        .args(["-s", "read-only"])
-        .args(["-c", &format!("mcp_servers.dopedb-chat.url={}", crate::mcp::mcp_url())])
-        .args(["-c", "mcp_servers.dopedb-chat.bearer_token_env_var=DOPEDB_MCP_TOKEN"])
-        .env("DOPEDB_MCP_TOKEN", token);
+        "-s".into(),
+        "read-only".into(),
+        "-c".into(),
+        format!("mcp_servers.dopedb-chat.url={}", crate::mcp::mcp_url()),
+        "-c".into(),
+        "mcp_servers.dopedb-chat.bearer_token_env_var=DOPEDB_MCP_TOKEN".into(),
+    ];
     if let Some(m) = model {
-        cmd.args(["-m", m]);
+        args.extend(["-m".into(), m.into()]);
     }
     if let Some(e) = effort {
-        cmd.args(["-c", &format!("model_reasoning_effort={e}")]);
+        args.extend(["-c".into(), format!("model_reasoning_effort={e}")]);
     }
     if let Some(id) = resume {
-        cmd.args(["resume", id]);
+        args.extend(["resume".into(), id.into()]);
     }
     // `--` stops the message from being absorbed as the value of a preceding `-c`
     // (or otherwise reinterpreted as an option) — verified on a real `codex` binary:
     // without it, a message starting with `-` overwrites the last `-c` flag's value
     // and the actual prompt never reaches the model.
-    cmd.arg("--").arg(message);
-    Ok(cmd)
+    args.extend(["--".into(), message.into()]);
+    args
 }
 
 /// Parse one line of `codex exec --json` JSONL into zero or more chat signals. Every
@@ -193,15 +211,14 @@ mod tests {
     /// its own test.
     #[test]
     fn model_and_effort_flags_come_before_the_resume_subcommand() {
-        let cmd = command("hi", Some("thr-1"), "tok", Some("o3"), Some("high")).unwrap();
-        let args: Vec<&str> = cmd.as_std().get_args().map(|a| a.to_str().unwrap()).collect();
-        let resume_pos = args.iter().position(|a| *a == "resume").expect("resume present");
-        let m_pos = args.iter().position(|a| *a == "-m").expect("-m present");
+        let args = build_args("hi", Some("thr-1"), Some("o3"), Some("high"));
+        let resume_pos = args.iter().position(|a| a == "resume").expect("resume present");
+        let m_pos = args.iter().position(|a| a == "-m").expect("-m present");
         assert!(m_pos < resume_pos, "-m must precede resume");
         assert_eq!(args[m_pos + 1], "o3");
         let effort_pos = args
             .iter()
-            .position(|a| *a == "model_reasoning_effort=high")
+            .position(|a| a == "model_reasoning_effort=high")
             .expect("model_reasoning_effort=high present");
         assert!(effort_pos < resume_pos, "-c model_reasoning_effort must precede resume");
         assert_eq!(args[effort_pos - 1], "-c");
@@ -210,9 +227,8 @@ mod tests {
     /// No model/effort selected: no flags added, existing behavior unchanged.
     #[test]
     fn no_model_or_effort_omits_both_flags() {
-        let cmd = command("hi", None, "tok", None, None).unwrap();
-        let args: Vec<&str> = cmd.as_std().get_args().map(|a| a.to_str().unwrap()).collect();
-        assert!(!args.contains(&"-m"));
+        let args = build_args("hi", None, None, None);
+        assert!(!args.iter().any(|a| a == "-m"));
         assert!(!args.iter().any(|a| a.starts_with("model_reasoning_effort=")));
     }
 }
