@@ -1,0 +1,293 @@
+/* In-app agent chat, Codex-desktop-style: a thread rail + a centered conversation column.
+   Bubbles are custom (not `.card`) because the assistant side is meant to read as plain
+   text, not a bordered surface — only the user side keeps a soft background. */
+
+.agent-chat-screen {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-3);
+  height: 100%;
+  min-height: 0;
+}
+
+.agent-chat-layout {
+  display: flex;
+  flex: 1 1 auto;
+  gap: var(--ds-space-3);
+  min-height: 0;
+}
+
+/* Rail: solid surface (this is tab-body content, not the app shell — no glass here). */
+.agent-chat-rail {
+  display: flex;
+  flex: 0 0 240px;
+  flex-direction: column;
+  gap: var(--ds-space-2);
+  min-width: 0;
+  padding: var(--ds-space-2);
+  border: var(--ds-border-width) solid var(--ds-border-subtle);
+  border-radius: var(--ds-radius-md);
+  background: var(--ds-surface-1);
+}
+
+.agent-chat-new-btn {
+  justify-content: center;
+  width: 100%;
+}
+
+.agent-chat-thread-list {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--ds-segment-gap);
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.agent-chat-thread-empty {
+  padding: var(--ds-space-2);
+}
+
+/* Two classes (matching the row's `ds-object-row agent-chat-thread-row` element) so the
+   padding-right override reliably beats `.ds-object-row`'s own shorthand `padding` — see the
+   composer textarea rule below for why a single-class selector isn't safe here. */
+.agent-chat-thread-row.ds-object-row {
+  position: relative;
+  justify-content: space-between;
+  padding-right: var(--ds-control-lg);
+}
+
+.agent-chat-thread-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: var(--ds-segment-gap);
+}
+
+.agent-chat-thread-title {
+  overflow: hidden;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-chat-thread-sub {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-1);
+  overflow: hidden;
+  color: var(--ds-text-muted);
+  font-size: var(--ds-font-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-chat-thread-row[aria-selected="true"] .agent-chat-thread-sub {
+  color: var(--ds-text-on-accent-muted);
+}
+
+.agent-chat-thread-delete {
+  position: absolute;
+  top: 50%;
+  right: var(--ds-space-1);
+  transform: translateY(-50%);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.agent-chat-thread-row:hover .agent-chat-thread-delete,
+.agent-chat-thread-row:focus-within .agent-chat-thread-delete {
+  opacity: 1;
+}
+
+.agent-chat-main {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--ds-space-3);
+  min-width: 0;
+  min-height: 0;
+}
+
+.agent-chat-topbar {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: var(--ds-space-2);
+}
+
+.agent-chat-provider-tabs {
+  display: inline-flex;
+  align-self: center;
+  flex: 0 0 auto;
+  gap: var(--ds-segment-gap);
+  padding: var(--ds-space-1);
+  border: var(--ds-border-width) solid var(--ds-border-subtle);
+  border-radius: var(--ds-radius-lg);
+  background: var(--ds-surface-1);
+}
+
+.agent-chat-provider-seg {
+  min-width: 88px;
+  min-height: var(--ds-control-md);
+  padding: 0 var(--ds-space-3);
+  border: var(--ds-border-width) solid var(--ds-border-subtle);
+  border-radius: var(--ds-radius-sm);
+  background: var(--ds-surface-0);
+  color: var(--ds-text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--ds-font-size-ui);
+}
+
+.agent-chat-provider-seg.active {
+  background: var(--ds-accent);
+  color: var(--ds-text-inverse);
+  border-color: transparent;
+}
+
+/* Connection scope indicator next to the provider tabs — same chip shape as a thread row's,
+   dimmed instead of colored when the thread's connection has since been deleted. */
+.agent-chat-connection-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-1);
+  margin-left: auto;
+  color: var(--ds-text-muted);
+  font-size: var(--ds-font-size-sm);
+}
+
+.agent-chat-connection-chip.agent-chat-connection-missing {
+  opacity: 0.6;
+}
+
+.agent-chat-command {
+  margin: 0;
+  padding: var(--ds-space-2) var(--ds-space-3);
+  overflow: auto;
+  border: var(--ds-border-width) solid var(--ds-border-subtle);
+  border-radius: var(--ds-radius-sm);
+  background: var(--ds-surface-1);
+  color: var(--ds-text);
+  cursor: pointer;
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-font-size-sm);
+  white-space: pre-wrap;
+}
+
+/* Centered conversation column, ~720px, like the Codex desktop app. */
+.agent-chat-conversation {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--ds-space-3);
+  min-height: 0;
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.agent-chat-auth-warning {
+  flex: 0 0 auto;
+}
+
+.agent-chat-messages {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--ds-space-3);
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: var(--ds-space-1);
+}
+
+.agent-chat-msg {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-1);
+}
+
+.agent-chat-msg.user {
+  align-items: flex-end;
+  align-self: flex-end;
+  max-width: 78%;
+}
+
+.agent-chat-msg.assistant {
+  align-items: flex-start;
+  align-self: stretch;
+  max-width: 100%;
+}
+
+.agent-chat-bubble {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+/* User: a soft, borderless pill. Assistant: plain text, no surface at all — the minimal
+   Codex-app look the design brief calls for. */
+.agent-chat-msg.user .agent-chat-bubble {
+  padding: var(--ds-space-2) var(--ds-space-3);
+  border-radius: var(--ds-radius-lg);
+  background: var(--ds-surface-2);
+}
+
+.agent-chat-tool-chip {
+  align-self: flex-start;
+}
+
+/* Composer: one rounded shell (reusing .card) holding the textarea and a pill control row. */
+.agent-chat-composer {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: var(--ds-space-2);
+}
+
+.agent-chat-model-error {
+  align-items: center;
+  display: flex;
+  gap: var(--ds-space-2);
+}
+
+/* Two classes on the selector (matching the container's `class="card agent-chat-composer"`)
+   so this reliably outranks the global `.app textarea` rule regardless of CSS bundle order —
+   a single-class selector has the same specificity and can lose depending on import order. */
+.card.agent-chat-composer textarea {
+  min-height: 64px;
+  border: none;
+  resize: vertical;
+}
+
+.agent-chat-composer-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ds-space-2);
+}
+
+/* Two ancestor classes (`.agent-chat-composer` + `.agent-chat-composer-controls`) so this
+   reliably outranks the global `.app select` rule — see the textarea rule above for why a
+   single-class selector isn't safe here. */
+.agent-chat-composer .agent-chat-composer-controls select {
+  min-width: 0;
+  height: var(--ds-control-md);
+  min-height: var(--ds-control-md);
+  border-radius: var(--ds-radius-pill);
+  font-size: var(--ds-font-size-sm);
+}
+
+@media (max-width: 760px) {
+  .agent-chat-layout {
+    flex-direction: column;
+  }
+
+  .agent-chat-rail {
+    flex: 0 0 auto;
+    max-height: 200px;
+  }
+
+  .agent-chat-msg.user {
+    max-width: 100%;
+  }
+}

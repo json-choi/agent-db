@@ -83,7 +83,9 @@ fn bin_names(bin: &str) -> Vec<String> {
     }
 }
 
-fn which(bin: &str) -> Option<PathBuf> {
+/// Public within the crate so `agent::claude`/`agent::codex` can locate the same CLIs
+/// this module already knows how to find, without a second PATH-search implementation.
+pub(crate) fn which(bin: &str) -> Option<PathBuf> {
     which_in(&augmented_path(), bin)
 }
 
@@ -224,7 +226,7 @@ pub fn detect() -> Vec<PlatformInfo> {
 /// with `windows_subsystem = "windows"` (no attached console), so plainly spawning a
 /// console child (`claude.cmd`, `cmd`) makes Windows open a visible one — the
 /// Settings screen would flash a black window on every platform detect.
-fn quiet_command(program: impl AsRef<OsStr>) -> Command {
+pub(crate) fn quiet_command(program: impl AsRef<OsStr>) -> Command {
     #[allow(unused_mut)]
     let mut cmd = Command::new(program);
     #[cfg(windows)]
@@ -235,7 +237,7 @@ fn quiet_command(program: impl AsRef<OsStr>) -> Command {
     cmd
 }
 
-fn run(bin: &Path, args: &[&str]) -> Result<String, String> {
+pub(crate) fn run(bin: &Path, args: &[&str]) -> Result<String, String> {
     let out = quiet_command(bin)
         .args(args)
         .env("PATH", augmented_path())

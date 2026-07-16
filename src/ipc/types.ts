@@ -257,6 +257,59 @@ export interface PlatformInfo {
   note: string;
 }
 
+// In-app agent chat: which subscription CLI a turn runs through, and its installed/
+// authenticated status. Mirrors src-tauri/src/agent/mod.rs.
+export type AgentProvider = "claude" | "codex";
+
+export interface CliInfo {
+  id: AgentProvider;
+  name: string;
+  installed: boolean;
+  authenticated: boolean;
+  authMethod: string | null;
+  // Present on the wire but deliberately unused for display — the onboarding card renders
+  // a per-provider i18n string instead (src/screens/AgentChat/index.tsx PROVIDER_NOTE_KEYS)
+  // so the subscription-login disclosure follows the app's language, not the backend's.
+  note: string;
+}
+
+// One selectable model for a provider's chat composer (codex's own catalog, or a static
+// list for claude, which has none). Mirrors src-tauri/src/agent/mod.rs.
+export interface AgentModel {
+  id: string;
+  name: string;
+  efforts: string[];
+  defaultEffort: string | null;
+}
+
+// A persisted conversation (Store/SQLite `agent_chat_threads`). model/effort are the values
+// used by the thread's most recent turn, seeded back into the composer when it's reopened.
+// connectionId is null for an unscoped thread (pre-dating connection scoping, or explicitly
+// started without one) — never used to pre-fill send_turn's context block in that case.
+// Mirrors src-tauri/src/agent/mod.rs.
+export interface ChatThread {
+  id: string;
+  provider: AgentProvider;
+  connectionId: string | null;
+  title: string;
+  cliSessionId: string | null;
+  model: string | null;
+  effort: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// One persisted message row (Store/SQLite `agent_chat_messages`). Mirrors
+// src-tauri/src/agent/mod.rs.
+export interface ChatMessageRecord {
+  id: string;
+  threadId: string;
+  role: "user" | "assistant";
+  text: string;
+  error: string | null;
+  createdAt: string;
+}
+
 // The `{ kind, message, position? }` object AppError serializes to.
 interface AppErrorShape {
   kind: string;

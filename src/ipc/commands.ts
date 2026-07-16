@@ -4,8 +4,13 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AgentModel,
+  AgentProvider,
   AuditSnapshot,
   Catalog,
+  ChatMessageRecord,
+  ChatThread,
+  CliInfo,
   Classification,
   ConnectionProfile,
   Dashboard,
@@ -262,4 +267,68 @@ export function openAgentApp(platform: string): Promise<string> {
 // Native picker (null = user cancelled the dialog).
 export function pickFile(): Promise<string | null> {
   return invoke("pick_file");
+}
+
+// In-app agent chat: install/auth status for the supported subscription CLIs.
+export function detectAgentClis(): Promise<CliInfo[]> {
+  return invoke("detect_agent_clis");
+}
+
+// The composer's model picker: codex's own catalog (parsed from `codex debug models`) or
+// claude's static list. Rejects rather than resolving an empty list on a real failure.
+export function listAgentModels(provider: AgentProvider): Promise<AgentModel[]> {
+  return invoke("list_agent_models", { provider });
+}
+
+// Sidebar thread list, newest-updated first.
+export function listChatThreads(): Promise<ChatThread[]> {
+  return invoke("list_chat_threads");
+}
+
+// One thread's message history, oldest first.
+export function getChatMessages(threadId: string): Promise<ChatMessageRecord[]> {
+  return invoke("get_chat_messages", { threadId });
+}
+
+// Creates the DB row for a still-draft conversation. Called only on its first message,
+// so an abandoned draft never leaves an empty thread in the sidebar. connectionId scopes
+// the thread to one DB connection (schema context is injected into the first turn only);
+// null leaves it unscoped.
+export function createChatThread(
+  provider: AgentProvider,
+  connectionId?: string | null,
+  model?: string,
+  effort?: string,
+): Promise<ChatThread> {
+  return invoke("create_chat_thread", {
+    provider,
+    connectionId: connectionId ?? null,
+    model: model ?? null,
+    effort: effort ?? null,
+  });
+}
+
+// Deletes a thread and (via ON DELETE CASCADE) its messages.
+export function deleteChatThread(threadId: string): Promise<void> {
+  return invoke("delete_chat_thread", { threadId });
+}
+
+// Runs one chat turn against an existing thread (its provider/cli_session_id come from the
+// thread row itself). Progress streams as agent:chat_event/agent:chat_done; this promise
+// itself only resolves once the spawned CLI process exits (or fails to start). model/effort
+// override the provider's CLI default for this turn when set.
+export function sendChatTurn(
+  threadId: string,
+  message: string,
+  turnId: string,
+  model?: string,
+  effort?: string,
+): Promise<void> {
+  return invoke("send_chat_turn", {
+    threadId,
+    message,
+    turnId,
+    model: model ?? null,
+    effort: effort ?? null,
+  });
 }
