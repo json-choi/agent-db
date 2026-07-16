@@ -736,6 +736,18 @@ h3 {
   gap: var(--ds-space-1);
 }
 
+/* Inside a form label the default 20px help dot is taller than the sm text line,
+   inflating that label's row and knocking two-column fields (e.g. provider/driver)
+   out of vertical alignment — shrink it to fit within the text line box. */
+.label-with-help > .ui-help {
+  width: 16px;
+  height: 16px;
+}
+
+.label-with-help > .ui-help .icon {
+  font-size: 11px;
+}
+
 .ds-attention-stack {
   position: fixed;
   right: var(--ds-space-4);
