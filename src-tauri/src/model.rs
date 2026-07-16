@@ -192,6 +192,53 @@ pub struct QueryResult {
     pub duration_ms: u64,
 }
 
+/// One typed, read-only MongoDB request — the ONLY way document operations run.
+/// There is deliberately no raw-command variant: reads are constructed from these
+/// shapes plus a pipeline-stage allowlist, never classified from strings.
+/// `filter`/`pipeline`/… accept MongoDB Extended JSON.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", tag = "op")]
+pub enum DocumentQuery {
+    /// `db.collection.find(filter)` with optional projection/sort/skip/limit.
+    Find {
+        collection: String,
+        #[serde(default)]
+        filter: Option<serde_json::Value>,
+        #[serde(default)]
+        projection: Option<serde_json::Value>,
+        #[serde(default)]
+        sort: Option<serde_json::Value>,
+        #[serde(default)]
+        skip: Option<u64>,
+        #[serde(default)]
+        limit: Option<u64>,
+    },
+    /// `db.collection.aggregate(pipeline)` — stages pass a read-only allowlist.
+    Aggregate {
+        collection: String,
+        pipeline: Vec<serde_json::Value>,
+    },
+    /// `db.collection.countDocuments(filter)`.
+    Count {
+        collection: String,
+        #[serde(default)]
+        filter: Option<serde_json::Value>,
+    },
+}
+
+/// A page of documents from one [`DocumentQuery`] run. Each element is one BSON
+/// document rendered as relaxed Extended JSON (ObjectId/Date/Decimal128/Int64/
+/// Binary keep their meaning — never cast to lossy plain numbers).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentPage {
+    pub documents: Vec<serde_json::Value>,
+    pub doc_count: usize,
+    /// True if the result was cut off at the row cap.
+    pub truncated: bool,
+    pub duration_ms: u64,
+}
+
 /// Supported saved-dashboard renderers. `Auto` lets the client choose from the
 /// returned result shape; the other variants are explicit user/agent choices.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]

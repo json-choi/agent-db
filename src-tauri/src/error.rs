@@ -12,6 +12,10 @@ pub enum AppError {
     #[error("database error: {0}")]
     Db(#[from] sqlx::Error),
 
+    /// Errors from the MongoDB document-database driver.
+    #[error("database error: {0}")]
+    Mongo(#[from] mongodb::error::Error),
+
     /// An agent-facing operation failed or returned unusable output.
     #[error("agent error: {0}")]
     Agent(String),
@@ -51,6 +55,7 @@ impl AppError {
     pub fn kind(&self) -> &'static str {
         match self {
             AppError::Db(_) => "db",
+            AppError::Mongo(_) => "db",
             AppError::Agent(_) => "agent",
             AppError::Safety(_) => "safety",
             AppError::Parse(_) => "parse",

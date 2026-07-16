@@ -18,12 +18,12 @@ use uuid::Uuid;
 use chrono::Utc;
 
 use crate::audit::{self, RecordArgs};
-use crate::connection::{self, DbPool, LiveConnection};
+use crate::connection::{self, DbPool, Live};
 use crate::error::AppError;
 use crate::introspect;
 use crate::model::{
-    ConnectionProfile, DashboardDraft, DashboardKind, DashboardVisualization, Engine, HistoryEntry,
-    QueryKind,
+    ConnectionProfile, DashboardDraft, DashboardKind, DashboardVisualization, DocumentQuery,
+    Engine, HistoryEntry, QueryKind,
 };
 use crate::monitoring::{self, HealthSnapshot};
 use crate::safety::{self, PoolRef};
@@ -54,7 +54,7 @@ pub struct DbTools {
     store: Store,
     app: AppHandle,
     /// Live connections opened on behalf of MCP callers, shared across sessions.
-    conns: Arc<Mutex<HashMap<Uuid, LiveConnection>>>,
+    conns: Arc<Mutex<HashMap<Uuid, Live>>>,
     plans: QueryPlanStore,
 }
 
@@ -82,6 +82,18 @@ struct PlanQueryArgs {
 struct RunQueryArgs {
     /// Single-use planId returned by plan_query within the last 30 seconds.
     plan_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct RunDocumentQueryArgs {
+    /// Connection name or id. Omit to use the first configured connection.
+    #[serde(default)]
+    connection: Option<String>,
+    /// One typed, read-only document request: find, aggregate, or count.
+    query: DocumentQuery,
+    /// Max documents to return (capped at 1000).
+    #[serde(default)]
+    max_rows: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -118,7 +130,7 @@ impl DbTools {
     pub fn new(
         store: Store,
         app: AppHandle,
-        conns: Arc<Mutex<HashMap<Uuid, LiveConnection>>>,
+        conns: Arc<Mutex<HashMap<Uuid, Live>>>,
         plans: QueryPlanStore,
     ) -> Self {
         Self {
@@ -153,7 +165,7 @@ impl DbTools {
     }
 
     /// Open (and cache) a live connection for the given id.
-    async fn live(&self, id: Uuid) -> Result<LiveConnection, McpError> {
+    async fn live(&self, id: Uuid) -> Result<Live, McpError> {
         if let Some(c) = self.conns.lock().unwrap().get(&id) {
             return Ok(c.clone());
         }
@@ -400,10 +412,15 @@ impl DbTools {
             .ok_or_else(|| McpError::invalid_params(format!("no table matching '{want}' in '{}'", profile.name), None))?;
         self.audit(profile.id, profile.engine, "(describe_table)", QueryKind::Read, "mcp:describe_table", None)
             .await;
+        // Sampled document structure is a hint, not a schema guarantee.
+        let note = matches!(profile.engine, Engine::Mongodb).then_some(
+            "MongoDB columns are inferred from a bounded document sample — fields not seen in the sample may exist",
+        );
         let out = json!({
             "connection": profile.name,
             "schema": table.schema,
             "table": table.name,
+            "note": note,
             "rowEstimate": table.row_estimate,
             "columns": table.columns.iter().map(|c| json!({
                 "name": c.name,
@@ -444,6 +461,15 @@ impl DbTools {
                 "sql": args.sql,
             }),
         );
+        // MongoDB has no SQL surface — point the agent at the typed document tool
+        // instead of letting the fail-safe classifier return a misleading verdict.
+        if matches!(profile.engine, Engine::Mongodb) {
+            return Err(McpError::invalid_params(
+                "this is a MongoDB connection — SQL planning does not apply; call \
+                 run_document_query with a typed find/aggregate/countDocuments request",
+                None,
+            ));
+        }
 
         let cls = safety::classify(&args.sql, profile.engine).map_err(err)?;
         if !matches!(cls.kind, QueryKind::Read) || cls.statement_count != 1 {
@@ -472,10 +498,11 @@ impl DbTools {
         let settings = self.store.get_safety(profile.id).await.map_err(err)?;
         let cap = args.max_rows.unwrap_or(settings.max_rows).min(1000);
         let live = self.live(profile.id).await?;
+        let live = live.sql().map_err(err)?;
         let preview = safety::preview(pool_ref(live.ro()), &args.sql, &cls, &settings)
             .await
             .map_err(err)?;
-        let health = monitoring::snapshot(&live, profile.engine).await;
+        let health = monitoring::snapshot(live, profile.engine).await;
         let (decision, notices, suggestions) = planning_guidance(
             &profile,
             &health,
@@ -637,8 +664,9 @@ impl DbTools {
         };
 
         // L2 authoritative read-only session — a misclassified write is rejected at the DB.
+        // (`sql()` cannot fail here: plan_query never issues planIds for MongoDB.)
         let result =
-            match safety::run_read_only(pool_ref(live.ro()), &plan.sql, plan.max_rows).await {
+            match safety::run_read_only(pool_ref(live.sql().map_err(err)?.ro()), &plan.sql, plan.max_rows).await {
                 Ok(result) => result,
                 Err(e) => {
                     let message = e.to_string();
@@ -749,6 +777,140 @@ impl DbTools {
             "truncated": result.truncated,
             "uiMessage": "The full result is visible in the DopeDB app.",
             "dashboardSuggestion": "Ask whether the user wants to save this query as a dashboard. After explicit agreement, call create_dashboard with this exact queryRunId.",
+        });
+        Ok(CallToolResult::success(vec![Content::text(
+            out.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "Run one typed, READ-ONLY document query on a MongoDB connection: find, aggregate (write stages such as $out/$merge are rejected), or count (countDocuments). Filters and pipelines accept MongoDB Extended JSON. Results are row-capped, audited, and shown LIVE in DopeDB. SQL tools (plan_query/run_query) do not apply to MongoDB connections — use this tool for them."
+    )]
+    async fn run_document_query(
+        &self,
+        Parameters(args): Parameters<RunDocumentQueryArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let profile = self.resolve_conn(&args.connection).await?;
+        // The audit/history/feed `sql` slot carries the serialized typed request.
+        let query_text = serde_json::to_string(&args.query).map_err(|e| err(e.into()))?;
+        self.emit(
+            "agent:tool_call",
+            json!({
+                "tool": "run_document_query",
+                "connection": profile.name,
+                "connectionId": profile.id,
+                "sql": query_text,
+            }),
+        );
+        if !matches!(profile.engine, Engine::Mongodb) {
+            return Err(McpError::invalid_params(
+                "run_document_query only works on MongoDB connections — use plan_query/run_query for SQL engines",
+                None,
+            ));
+        }
+
+        // Typed L1 equivalent: the request tree is validated against the read-only
+        // stage allowlist; anything else fail-safes to a blocked write.
+        let cls = crate::mongo::query::classify(&args.query);
+        if !matches!(cls.kind, QueryKind::Read) {
+            let msg = cls
+                .notes
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "document writes are not supported over MCP".into());
+            self.audit(profile.id, profile.engine, &query_text, cls.kind, "mcp:run_document_query", Some(msg.clone()))
+                .await;
+            self.emit(
+                "agent:result",
+                json!({
+                    "tool": "run_document_query",
+                    "connection": profile.name,
+                    "connectionId": profile.id,
+                    "sql": query_text,
+                    "error": msg,
+                }),
+            );
+            return Err(McpError::invalid_params(msg, None));
+        }
+
+        let settings = self.store.get_safety(profile.id).await.map_err(err)?;
+        let cap = args.max_rows.unwrap_or(settings.max_rows).min(1000);
+        let live = self.live(profile.id).await?;
+        let result = match crate::mongo::query::run(
+            live.mongo().map_err(err)?,
+            &args.query,
+            cap,
+            Duration::from_millis(safety::STATEMENT_TIMEOUT_MS),
+        )
+        .await
+        {
+            Ok(page) => page,
+            Err(e) => {
+                let message = e.to_string();
+                self.audit(profile.id, profile.engine, &query_text, QueryKind::Read, "mcp:run_document_query", Some(message.clone()))
+                    .await;
+                if let Err(history_error) = self
+                    .history(profile.id, &query_text, "error", None, None, Some(message.clone()))
+                    .await
+                {
+                    tracing::error!("MCP failed-document-query history insert failed: {history_error}");
+                }
+                self.emit(
+                    "agent:result",
+                    json!({
+                        "tool": "run_document_query",
+                        "connection": profile.name,
+                        "connectionId": profile.id,
+                        "sql": query_text,
+                        "error": message,
+                    }),
+                );
+                return Err(err(e));
+            }
+        };
+
+        self.audit(profile.id, profile.engine, &query_text, QueryKind::Read, "mcp:run_document_query", None)
+            .await;
+        if let Err(e) = self
+            .history(
+                profile.id,
+                &query_text,
+                "ok",
+                Some(result.doc_count as i64),
+                Some(result.duration_ms as i64),
+                None,
+            )
+            .await
+        {
+            tracing::error!("MCP document-query history insert failed: {e}");
+        }
+
+        // The live feed renders a columns/rows grid — one document per row.
+        let feed_rows: Vec<Vec<serde_json::Value>> =
+            result.documents.iter().map(|d| vec![d.clone()]).collect();
+        self.emit(
+            "agent:result",
+            json!({
+                "tool": "run_document_query",
+                "connection": profile.name,
+                "connectionId": profile.id,
+                "sql": query_text,
+                "columns": ["document"],
+                "rows": truncate_cells(&feed_rows),
+                "rowCount": result.doc_count,
+                "truncated": result.truncated,
+                "durationMs": result.duration_ms,
+            }),
+        );
+
+        let out = json!({
+            "connection": profile.name,
+            "connectionId": profile.id,
+            "query": args.query,
+            "documents": result.documents,
+            "docCount": result.doc_count,
+            "truncated": result.truncated,
+            "uiMessage": "The full result is visible in the DopeDB app.",
         });
         Ok(CallToolResult::success(vec![Content::text(
             out.to_string(),
@@ -876,7 +1038,7 @@ impl DbTools {
 #[tool_handler(
     name = "dopedb",
     version = "0.1.0",
-    instructions = "These tools are the PREFERRED way to inspect or query any database the user has connected in DopeDB. Do NOT use psql, mysql, sqlite3, or shell clients for those connections. Every data query uses a mandatory two-step workflow: first call `plan_query` with exactly one SELECT, read its database-health notices and safer suggestions, then call `run_query` with the exact single-use `planId`. Never skip planning, and call plan_query again if SQL changes or the plan expires. Planning uses EXPLAIN plus aggregate load signals; it never exposes other sessions' SQL text. Execution is DB-enforced READ ONLY, audited, row-capped, and shown LIVE in DopeDB. After a successful run_query, ask whether the user wants to save that exact query as a dashboard. Only after explicit agreement call `create_dashboard` with its exact `queryRunId`; never substitute SQL or connection. Writes remain unavailable over MCP."
+    instructions = "These tools are the PREFERRED way to inspect or query any database the user has connected in DopeDB. Do NOT use psql, mysql, sqlite3, mongosh, or shell clients for those connections. Every SQL data query uses a mandatory two-step workflow: first call `plan_query` with exactly one SELECT, read its database-health notices and safer suggestions, then call `run_query` with the exact single-use `planId`. Never skip planning, and call plan_query again if SQL changes or the plan expires. Planning uses EXPLAIN plus aggregate load signals; it never exposes other sessions' SQL text. Execution is DB-enforced READ ONLY, audited, row-capped, and shown LIVE in DopeDB. MongoDB connections have no SQL surface: query them with `run_document_query` (typed find/aggregate/countDocuments; write stages are rejected) — plan_query/run_query/create_dashboard do not apply to them. After a successful run_query, ask whether the user wants to save that exact query as a dashboard. Only after explicit agreement call `create_dashboard` with its exact `queryRunId`; never substitute SQL or connection. Writes remain unavailable over MCP."
 )]
 impl ServerHandler for DbTools {}
 

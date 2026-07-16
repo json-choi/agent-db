@@ -1,0 +1,58 @@
+/* Document query console (Documents tab). Toolbar mirrors sql-actions; param textareas
+   lay out per operation below it. */
+
+.documents-toolbar {
+  min-height: var(--ds-control-lg);
+}
+.documents-toolbar h2 {
+  margin-right: var(--ds-space-3);
+}
+
+.documents-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-1);
+  font-size: var(--ds-font-size-sm);
+  color: var(--ds-text-muted);
+}
+.documents-field select {
+  min-width: 160px;
+}
+
+.documents-params {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--ds-space-3);
+  margin: var(--ds-space-3) 0;
+}
+.documents-params label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-1);
+  font-size: var(--ds-font-size-sm);
+  color: var(--ds-text-muted);
+}
+.documents-params textarea {
+  width: 100%;
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-font-size-sm);
+  resize: vertical;
+}
+.documents-limit input {
+  width: 120px;
+}
+.documents-pipeline {
+  grid-column: 1 / -1;
+}
+.documents-pipeline textarea {
+  min-height: 160px;
+}
+
+@media (max-width: 760px) {
+  .documents-toolbar {
+    align-items: flex-start;
+  }
+  .documents-params {
+    grid-template-columns: 1fr;
+  }
+}

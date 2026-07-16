@@ -24,7 +24,7 @@ use rmcp::transport::streamable_http_server::StreamableHttpService;
 use tauri::AppHandle;
 use uuid::Uuid;
 
-use crate::connection::LiveConnection;
+use crate::connection::Live;
 use crate::state::McpRuntime;
 use crate::store::Store;
 use tools::{DbTools, QueryPlanStore};
@@ -33,7 +33,7 @@ pub(crate) use tools::query_plan_store;
 
 /// Shared live-connection cache — the SAME instance as `AppState.connections`, so a
 /// connection edit/delete evicts the agent's cached pool too.
-pub type SharedConns = Arc<Mutex<HashMap<Uuid, LiveConnection>>>;
+pub type SharedConns = Arc<Mutex<HashMap<Uuid, Live>>>;
 
 /// Fixed loopback port for the Streamable HTTP MCP endpoint.
 pub const MCP_PORT: u16 = 7686;

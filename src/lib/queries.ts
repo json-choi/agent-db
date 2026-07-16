@@ -14,6 +14,7 @@ import {
   listHistory,
   refreshCatalog,
   runDashboard,
+  runDocumentQuery,
   runSql,
 } from "../ipc/commands";
 import type { CatalogTable, Engine, QueryResult } from "../ipc/types";
@@ -37,6 +38,13 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
 }
 
 export type TableRowsPage = { result: QueryResult | null; total: number | null };
+
+export type DocumentRowsArgs = {
+  connectionId: string;
+  collection: string;
+  pageSize: number;
+  page: number;
+};
 
 export type TableRowsArgs = {
   connectionId: string;
@@ -67,6 +75,15 @@ export const qk = {
       tableKey(args.table),
       { filters: args.filters, sort: args.sort, pageSize: args.pageSize, page: args.page },
     ] as const,
+  documentRows: (args: DocumentRowsArgs) =>
+    [
+      "documentRows",
+      args.connectionId,
+      args.collection,
+      { pageSize: args.pageSize, page: args.page },
+    ] as const,
+  documentCount: (connectionId: string, collection: string) =>
+    ["documentCount", connectionId, collection] as const,
 };
 
 export function driversQuery() {
@@ -156,6 +173,37 @@ export function dashboardRunQuery(dashboardId: string | null) {
       const queryId = window.crypto.randomUUID();
       signal.addEventListener("abort", () => void cancelQuery(queryId), { once: true });
       return runDashboard(dashboardId!, queryId);
+    },
+  });
+}
+
+// One page of documents — the MongoDB sibling of tableRowsQuery's page half. The exact
+// total is cached separately (documentCountQuery) so paging through a large collection
+// doesn't re-run count_documents on every page.
+export function documentRowsQuery(args: DocumentRowsArgs) {
+  const { connectionId, collection, pageSize, page } = args;
+  return queryOptions({
+    queryKey: qk.documentRows(args),
+    staleTime: LOG_STALE_MS,
+    queryFn: () =>
+      runDocumentQuery(
+        connectionId,
+        { op: "find", collection, skip: page * pageSize, limit: pageSize },
+        true,
+      ),
+  });
+}
+
+// A collection's exact document count, cached independent of page/pageSize so every page
+// of the same collection shares one count_documents run.
+export function documentCountQuery(connectionId: string, collection: string) {
+  return queryOptions({
+    queryKey: qk.documentCount(connectionId, collection),
+    staleTime: LOG_STALE_MS,
+    queryFn: async (): Promise<number | null> => {
+      const countOut = await runDocumentQuery(connectionId, { op: "count", collection }, true);
+      const count = (countOut.documents[0] as { count?: number } | undefined)?.count;
+      return count == null ? null : Number(count);
     },
   });
 }

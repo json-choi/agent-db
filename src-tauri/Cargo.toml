@@ -39,6 +39,8 @@ sqlx = { version = "0.8", features = [
     "mac_address", # MACADDR    -> MacAddress
     "bit-vec",     # BIT/VARBIT -> BitVec
 ] }
+# ~3.2: 3.3+ raises the required rustc above this crate's rust-version (1.82).
+mongodb = "~3.2"
 sqlparser = "0.52"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -9,8 +9,8 @@ mod sqlite;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::connection::{DbPool, LiveConnection};
-use crate::error::AppResult;
+use crate::connection::{DbPool, Live};
+use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
 /// A relational column.
@@ -75,19 +75,23 @@ pub struct Catalog {
     pub tables: Vec<Table>,
 }
 
-/// Introspect a live connection's schema via its read-only pool.
-pub async fn introspect(conn: &LiveConnection) -> AppResult<Catalog> {
-    match conn.ro() {
-        DbPool::Postgres(pool) => pg::introspect(pool).await,
-        DbPool::Mysql(pool) => mysql::introspect(pool, conn.skip_fk_metadata).await,
-        DbPool::Sqlite(pool) => sqlite::introspect(pool).await,
+/// Introspect a live connection's schema. SQL engines read via the read-only
+/// pool; MongoDB lists collections with sampled field structure.
+pub async fn introspect(conn: &Live) -> AppResult<Catalog> {
+    match conn {
+        Live::Sql(live) => match live.ro() {
+            DbPool::Postgres(pool) => pg::introspect(pool).await,
+            DbPool::Mysql(pool) => mysql::introspect(pool, live.skip_fk_metadata).await,
+            DbPool::Sqlite(pool) => sqlite::introspect(pool).await,
+        },
+        Live::Mongo(conn) => crate::mongo::introspect::introspect(conn).await,
     }
 }
 
 /// Get (opening/caching on first use) a live connection. Mirrors `commands::get_live` —
 /// kept here because that helper is private to the commands module and this command
 /// lives outside it.
-async fn live_for(state: &AppState, id: Uuid) -> AppResult<LiveConnection> {
+async fn live_for(state: &AppState, id: Uuid) -> AppResult<Live> {
     if let Some(existing) = state.connections.lock().unwrap().get(&id) {
         return Ok(existing.clone());
     }
@@ -112,9 +116,14 @@ pub async fn get_table_ddl(
     table: String,
 ) -> AppResult<String> {
     let live = live_for(&state, id).await?;
-    match live.ro() {
-        DbPool::Postgres(pool) => pg::table_ddl(pool, schema.as_deref(), &table).await,
-        DbPool::Mysql(pool) => mysql::table_ddl(pool, &table).await,
-        DbPool::Sqlite(pool) => sqlite::table_ddl(pool, &table).await,
+    match &live {
+        Live::Sql(live) => match live.ro() {
+            DbPool::Postgres(pool) => pg::table_ddl(pool, schema.as_deref(), &table).await,
+            DbPool::Mysql(pool) => mysql::table_ddl(pool, &table).await,
+            DbPool::Sqlite(pool) => sqlite::table_ddl(pool, &table).await,
+        },
+        Live::Mongo(_) => Err(AppError::Config(
+            "MongoDB collections have no SQL DDL".into(),
+        )),
     }
 }

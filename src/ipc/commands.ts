@@ -10,6 +10,8 @@ import type {
   ConnectionProfile,
   Dashboard,
   DashboardDraft,
+  DocumentPage,
+  DocumentQuery,
   DriverDescriptor,
   ExecOutcome,
   HistoryEntry,
@@ -111,6 +113,24 @@ export function runSql(
   return invoke("run_sql", {
     id,
     sql,
+    approved,
+    queryId: queryId ?? null,
+    origin: origin ?? null,
+  });
+}
+
+// Run one typed, read-only document query on a MongoDB connection. Aggregate
+// write stages are rejected backend-side; there is no document write path.
+export function runDocumentQuery(
+  id: string,
+  query: DocumentQuery,
+  approved: boolean,
+  queryId?: string,
+  origin?: string,
+): Promise<DocumentPage> {
+  return invoke("run_document_query", {
+    id,
+    query,
     approved,
     queryId: queryId ?? null,
     origin: origin ?? null,
