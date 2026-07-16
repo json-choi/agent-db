@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { check, type Update } from "@tauri-apps/plugin-updater";
+import { useQuery } from "@tanstack/react-query";
 import {
   getSafety,
   listConnections,
@@ -14,12 +15,15 @@ import type {
   SafetySettings,
 } from "./ipc/types";
 import { errMessage } from "./ipc/types";
+import { hasCapability } from "./lib/capabilities";
+import { driversQuery } from "./lib/queries";
 import { buildConnectionSections, type SchemaConnectionGroup } from "./lib/schemaDiff";
 import { tableKey, tableLabel } from "./lib/tableRef";
 import { ConnectionForm, DatabaseExplorer } from "./screens/Connections";
 import TableData from "./screens/Tables";
 import SchemaExplorer from "./screens/Schema";
 import Sql from "./screens/Sql";
+import Documents from "./screens/Documents";
 import Dashboards from "./screens/Dashboards";
 import Activity from "./screens/Activity";
 import SchemaDiff from "./screens/SchemaDiff";
@@ -33,16 +37,19 @@ import { AgentFeedProvider, useAgentFeed } from "./lib/agentFeed";
 import { useI18n, type I18nKey } from "./lib/i18n";
 
 // App-level tabs. Agent is a live feed/result surface, connection-independent; the rest
-// are per-connection data views. Settings lives behind the sidebar gear.
-type Tab = "data" | "schema" | "sql" | "dashboard" | "agent" | "activity";
+// are per-connection data views. Settings lives behind the sidebar gear. SQL and
+// Documents are mutually exclusive: a connection's driver capabilities decide which one
+// shows (see visibleTabs in Shell), so both live in ALL_TABS but never render together.
+type Tab = "data" | "schema" | "sql" | "dashboard" | "documents" | "agent" | "activity";
 // Agent is last: it's connection-independent, so it sits apart from the per-connection
 // data tabs (the .agent-tab class pushes it right with a divider via shared CSS).
-const TABS: Tab[] = ["data", "schema", "sql", "dashboard", "activity", "agent"];
+const ALL_TABS: Tab[] = ["data", "schema", "sql", "dashboard", "documents", "activity", "agent"];
 const TAB_LABELS: Record<Tab, I18nKey> = {
   data: "tabs.data",
   schema: "tabs.schema",
   sql: "tabs.sql",
   dashboard: "tabs.dashboard",
+  documents: "tabs.documents",
   activity: "tabs.activity",
   agent: "tabs.agent",
 };
@@ -197,7 +204,7 @@ function Shell() {
   const [tab, setTab] = useState<Tab>(() => {
     const saved = localStorage.getItem("tab");
     if (saved === "history" || saved === "audit") return "activity";
-    return (TABS as string[]).includes(saved ?? "") ? (saved as Tab) : "data";
+    return (ALL_TABS as string[]).includes(saved ?? "") ? (saved as Tab) : "data";
   });
   const [sqlDraft, setSqlDraft] = useState("SELECT 1;");
   const [dashboardFocusId, setDashboardFocusId] = useState<string | null>(null);
@@ -246,15 +253,45 @@ function Shell() {
   }, [selectedId]);
 
   const selected = conns.find((c) => c.id === selectedId) ?? null;
+  // Schema diff is a SQL-only comparison feature — a group whose connections are MongoDB
+  // is never a valid diff candidate, even if one somehow carries a schemaGroup value.
   const schemaGroups = useMemo(
     () =>
       buildConnectionSections(conns).flatMap((section) =>
-        section.kind === "group" ? [section.group] : [],
+        section.kind === "group" && section.group.connections[0]?.engine !== "mongodb"
+          ? [section.group]
+          : [],
       ),
     [conns],
   );
   const activeSchemaGroup =
     schemaGroups.find((group) => group.key === schemaDiffGroupKey) ?? null;
+
+  // SQL and Documents are mutually exclusive per connection, gated by the resolved
+  // driver's capabilities (fail-closed: no match hides SQL). No connection selected keeps
+  // the full SQL tab set (existing behavior) and hides Documents.
+  const driversQ = useQuery(driversQuery());
+  // While the driver list is still loading, keep the SQL tab set — deciding on an
+  // empty list would flash Documents and kick a restored "sql" tab back to "data".
+  const supportsSql =
+    !selected || !driversQ.data || hasCapability(driversQ.data, selected, "sql");
+  const visibleTabs = useMemo(
+    () =>
+      ALL_TABS.filter((t) => {
+        if (t === "sql" || t === "dashboard") return supportsSql;
+        if (t === "documents") return !supportsSql;
+        return true;
+      }),
+    [supportsSql],
+  );
+  // A restored selectedId with conns still loading means visibleTabs is not final
+  // yet — resetting now would clobber a persisted "documents" tab on every launch.
+  // Once conns arrive, a selectedId that matches nothing is stale, not pending.
+  const selectionPending = selectedId !== null && !selected && conns.length === 0;
+  useEffect(() => {
+    if (selectionPending) return;
+    if (!visibleTabs.includes(tab)) setTab("data");
+  }, [selectionPending, visibleTabs, tab]);
 
   useEffect(() => {
     if (schemaDiffGroupKey && !activeSchemaGroup) setSchemaDiffGroupKey(null);
@@ -565,7 +602,7 @@ function Shell() {
         )}
 
         <nav className="tabs" role="tablist">
-          {TABS.map((tabId) => (
+          {visibleTabs.map((tabId) => (
             <button
               key={tabId}
               ref={(el) => {
@@ -584,9 +621,9 @@ function Shell() {
               onKeyDown={(e) => {
                 if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
                 e.preventDefault();
-                const i = TABS.findIndex((x) => x === tab);
+                const i = visibleTabs.findIndex((x) => x === tab);
                 const d = e.key === "ArrowRight" ? 1 : -1;
-                const next = TABS[(i + d + TABS.length) % TABS.length];
+                const next = visibleTabs[(i + d + visibleTabs.length) % visibleTabs.length];
                 setTab(next);
                 tabRefs.current[next]?.focus();
               }}
@@ -647,6 +684,8 @@ function Shell() {
             ) : (
               safetyFallback
             ))}
+          {tab === "documents" &&
+            (selected ? <Documents connection={selected} /> : needsConn)}
           {tab === "dashboard" &&
             (selected ? (
               <Dashboards

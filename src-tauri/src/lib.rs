@@ -11,6 +11,7 @@ mod executor;
 mod introspect;
 mod mcp;
 mod model;
+mod mongo;
 mod monitoring;
 mod safety;
 mod sql_script;
@@ -99,6 +100,7 @@ pub fn run() {
             commands::classify_sql,
             commands::preview_sql,
             commands::run_sql,
+            commands::run_document_query,
             commands::run_script,
             commands::get_safety,
             commands::set_safety,

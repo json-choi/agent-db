@@ -5,8 +5,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::connection::pool::{connect_sqlx, LiveConnection};
+use crate::connection::pool::connect_sqlx;
 use crate::connection::providers;
+use crate::connection::Live;
 use crate::error::{AppError, AppResult};
 use crate::model::{ConnectionProfile, Engine, Provider};
 
@@ -65,6 +66,7 @@ enum RuntimeAdapter {
     Postgres,
     Mysql,
     Sqlite,
+    Mongodb,
 }
 
 struct DriverDefinition {
@@ -129,15 +131,20 @@ const DEFINITIONS: &[DriverDefinition] = &[
         id: "mongodb-rust",
         name: "MongoDB Rust Driver",
         engine: Engine::Mongodb,
-        version: "3",
-        install_mode: DriverInstallMode::Managed,
-        install_state: DriverInstallState::Planned,
+        version: "3.2",
+        // Statically linked like the sqlx drivers — same Bundled pattern.
+        install_mode: DriverInstallMode::Bundled,
+        install_state: DriverInstallState::Installed,
         supported_providers: &[Provider::Generic],
-        // Capabilities describe code available now, not roadmap intent.
-        capabilities: &[],
-        recommended: false,
-        // Keep the roadmap entry visible without presenting it as installable.
-        adapter: None,
+        // Read-only document surface. Sql/Transactions/SchemaDiff stay absent on
+        // purpose: their omission is what hides SQL-only features in the UI/MCP.
+        capabilities: &[
+            DriverCapability::DocumentQuery,
+            DriverCapability::Collections,
+            DriverCapability::Introspection,
+        ],
+        recommended: true,
+        adapter: Some(RuntimeAdapter::Mongodb),
     },
 ];
 
@@ -246,7 +253,7 @@ pub fn install(id: &str) -> AppResult<DriverDescriptor> {
 }
 
 /// Resolve the optimal compatible adapter, then delegate connection mechanics to it.
-pub async fn connect(profile: &ConnectionProfile, secret: &str) -> AppResult<LiveConnection> {
+pub async fn connect(profile: &ConnectionProfile, secret: &str) -> AppResult<Live> {
     let driver = resolve(profile)?;
     let adapter = driver.adapter.ok_or_else(|| {
         AppError::Config(format!(
@@ -254,11 +261,12 @@ pub async fn connect(profile: &ConnectionProfile, secret: &str) -> AppResult<Liv
             driver.id
         ))
     })?;
-    match adapter {
-        RuntimeAdapter::Postgres => connect_sqlx(Engine::Postgres, profile, secret).await,
-        RuntimeAdapter::Mysql => connect_sqlx(Engine::Mysql, profile, secret).await,
-        RuntimeAdapter::Sqlite => connect_sqlx(Engine::Sqlite, profile, secret).await,
-    }
+    Ok(match adapter {
+        RuntimeAdapter::Postgres => Live::Sql(connect_sqlx(Engine::Postgres, profile, secret).await?),
+        RuntimeAdapter::Mysql => Live::Sql(connect_sqlx(Engine::Mysql, profile, secret).await?),
+        RuntimeAdapter::Sqlite => Live::Sql(connect_sqlx(Engine::Sqlite, profile, secret).await?),
+        RuntimeAdapter::Mongodb => Live::Mongo(crate::mongo::connect(profile, secret).await?),
+    })
 }
 
 #[cfg(test)]
@@ -313,24 +321,31 @@ mod tests {
     }
 
     #[test]
-    fn lists_mongodb_as_planned_without_runtime_capabilities() {
+    fn lists_mongodb_as_installed_with_a_document_only_surface() {
         let mongo = list()
             .into_iter()
             .find(|driver| driver.id == "mongodb-rust")
             .unwrap();
         assert_eq!(mongo.engine, Engine::Mongodb);
-        assert_eq!(mongo.install_state, DriverInstallState::Planned);
-        assert!(mongo.capabilities.is_empty());
-        assert!(!mongo.recommended);
+        assert_eq!(mongo.install_state, DriverInstallState::Installed);
+        assert!(mongo.capabilities.contains(&DriverCapability::DocumentQuery));
+        assert!(mongo.capabilities.contains(&DriverCapability::Collections));
+        // SQL-only capabilities must stay absent — their omission hides SQL UI/MCP.
+        assert!(!mongo.capabilities.contains(&DriverCapability::Sql));
+        assert!(!mongo.capabilities.contains(&DriverCapability::Transactions));
+        assert!(!mongo.capabilities.contains(&DriverCapability::SchemaDiff));
+        assert!(mongo.recommended);
     }
 
     #[test]
-    fn mongodb_cannot_install_or_connect_before_the_adapter_exists() {
-        let mut p = profile(Engine::Mongodb, Provider::Generic);
-        p.driver_id = Some("mongodb-rust".into());
-        let validate_err = validate(&p).unwrap_err();
-        let install_err = install("mongodb-rust").unwrap_err();
-        assert!(validate_err.to_string().contains("planned"));
-        assert!(install_err.to_string().contains("planned"));
+    fn mongodb_profiles_validate_and_the_driver_installs() {
+        let auto = validate(&profile(Engine::Mongodb, Provider::Generic)).unwrap();
+        assert_eq!(auto.id, "mongodb-rust");
+
+        let mut explicit = profile(Engine::Mongodb, Provider::Generic);
+        explicit.driver_id = Some("mongodb-rust".into());
+        assert!(validate(&explicit).is_ok());
+
+        assert_eq!(install("mongodb-rust").unwrap().id, "mongodb-rust");
     }
 }

@@ -346,9 +346,17 @@ export function DatabaseExplorer({
     return null;
   }
 
+  // Schema group comparison is SQL-only, so MongoDB connections can neither be dragged
+  // into a group nor accept one dropped on them — same-engine already implies "both or
+  // neither" once one side is excluded.
   function canDropOnConnection(dragId: string | null, target: ConnectionProfile) {
     const dragged = dragId ? connectionById(dragId) : null;
-    return !!dragged && dragged.id !== target.id && dragged.engine === target.engine;
+    return (
+      !!dragged &&
+      dragged.id !== target.id &&
+      dragged.engine === target.engine &&
+      dragged.engine !== "mongodb"
+    );
   }
 
   function canDropOnGroup(dragId: string | null, group: SchemaConnectionGroup) {
@@ -358,6 +366,7 @@ export function DatabaseExplorer({
       !!dragged &&
       !!engine &&
       dragged.engine === engine &&
+      dragged.engine !== "mongodb" &&
       !group.connections.some((conn) => conn.id === dragged.id)
     );
   }
@@ -814,16 +823,19 @@ export function DatabaseExplorer({
                       ~{table.rowEstimate.toLocaleString()}
                     </span>
                   )}
-                  <button
-                    className="ddl-btn"
-                    title={t("connections.showDdl")}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setDdl({ conn: c, table });
-                    }}
-                  >
-                    DDL
-                  </button>
+                  {/* CREATE-TABLE DDL is a SQL-only concept; MongoDB collections have none. */}
+                  {c.engine !== "mongodb" && (
+                    <button
+                      className="ddl-btn"
+                      title={t("connections.showDdl")}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDdl({ conn: c, table });
+                      }}
+                    >
+                      DDL
+                    </button>
+                  )}
                 </div>
               );
             };

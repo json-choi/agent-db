@@ -100,6 +100,30 @@ export interface QueryResult {
   durationMs: number;
 }
 
+// One typed, read-only MongoDB request (mirrors model.rs DocumentQuery). Filters,
+// projections, sorts, and pipeline stages accept MongoDB Extended JSON objects.
+export type DocumentQuery =
+  | {
+      op: "find";
+      collection: string;
+      filter?: unknown;
+      projection?: unknown;
+      sort?: unknown;
+      skip?: number;
+      limit?: number;
+    }
+  | { op: "aggregate"; collection: string; pipeline: unknown[] }
+  | { op: "count"; collection: string; filter?: unknown };
+
+// A page of documents from one DocumentQuery run; each element is one BSON
+// document as relaxed Extended JSON (mirrors model.rs DocumentPage).
+export interface DocumentPage {
+  documents: unknown[];
+  docCount: number;
+  truncated: boolean;
+  durationMs: number;
+}
+
 export type DashboardKind = "auto" | "metric" | "line" | "bar" | "table";
 
 export interface DashboardVisualization {

@@ -13,14 +13,14 @@ use tauri::State;
 use uuid::Uuid;
 
 use crate::audit::{self, RecordArgs};
-use crate::connection::{self, DbPool, LiveConnection};
+use crate::connection::{self, DbPool, Live};
 use crate::error::{AppError, AppResult};
 use crate::executor;
 use crate::introspect;
 use crate::model::{
-    Classification, ConnectionProfile, Dashboard, DashboardDraft, Engine, ExecOutcome,
-    HistoryEntry, MonitoringStatus, PreviewMode, PreviewReport, QueryKind, QueryResult,
-    SafetySettings,
+    Classification, ConnectionProfile, Dashboard, DashboardDraft, DocumentPage, DocumentQuery,
+    Engine, ExecOutcome, HistoryEntry, MonitoringStatus, PreviewMode, PreviewReport, QueryKind,
+    QueryResult, SafetySettings,
 };
 use crate::monitoring;
 use crate::safety::{classify, decide, preview, GateDecision, PoolRef};
@@ -40,7 +40,7 @@ fn pool_ref(db: &DbPool) -> PoolRef<'_> {
 ///
 /// Never holds the connections lock across an `.await`: it either clones an existing
 /// handle out under the lock, or opens a fresh one and inserts the clone afterwards.
-async fn get_live(state: &AppState, id: Uuid) -> AppResult<LiveConnection> {
+async fn get_live(state: &AppState, id: Uuid) -> AppResult<Live> {
     if let Some(existing) = state.connections.lock().unwrap().get(&id) {
         return Ok(existing.clone());
     }
@@ -381,7 +381,7 @@ pub async fn run_dashboard(
         }
     };
     let max_rows = settings.max_rows.clamp(1, 100_000);
-    let run = crate::safety::run_read_only(pool_ref(live.ro()), &dashboard.sql, max_rows);
+    let run = crate::safety::run_read_only(pool_ref(live.sql()?.ro()), &dashboard.sql, max_rows);
     match executor::cancel::guard(query_id, executor::cancel::QUERY_TIMEOUT, run).await {
         Ok(result) => {
             record_run(
@@ -481,6 +481,7 @@ pub async fn preview_sql(
     }
 
     let live = get_live(&state, id).await?;
+    let live = live.sql()?;
 
     // explain_preview off → EXPLAIN-plan only, never execute+rollback. EXPLAIN (no
     // ANALYZE) plans a write without running it, so route the write through the
@@ -577,7 +578,20 @@ pub async fn run_sql(
     }
 
     let live = get_live(&state, id).await?;
-    match executor::execute(&live, engine, &classification, &sql, &settings, authorized, query_id)
+    // A document connection can reach here (fail-safe Write + writes enabled);
+    // the attempt row above must still get its closing error record.
+    let live = match live.sql() {
+        Ok(live) => live,
+        Err(e) => {
+            record_run(
+                &state, id, engine, &sql, classification.kind, "error", "error", None, None,
+                Some(e.to_string()), &origin,
+            )
+            .await;
+            return Err(e);
+        }
+    };
+    match executor::execute(live, engine, &classification, &sql, &settings, authorized, query_id)
         .await
     {
         Ok(outcome) => {
@@ -603,6 +617,90 @@ pub async fn run_sql(
         Err(e) => {
             record_run(
                 &state, id, engine, &sql, classification.kind, "error", "error", None, None,
+                Some(e.to_string()), &origin,
+            )
+            .await;
+            Err(e)
+        }
+    }
+}
+
+// ── typed document queries (MongoDB) ─────────────────────────────────────────
+
+/// The document counterpart of `run_sql`: same L4 gate and audit/history trail,
+/// but classification walks the TYPED request (aggregate-stage allowlist) instead
+/// of SQL text, and there is no write path at all — a non-Read classification is
+/// blocked regardless of `allow_writes`/`approved`.
+#[tauri::command]
+pub async fn run_document_query(
+    state: State<'_, AppState>,
+    id: Uuid,
+    query: DocumentQuery,
+    approved: bool,
+    query_id: Option<Uuid>,
+    origin: Option<String>,
+) -> AppResult<DocumentPage> {
+    let profile = state.store.get_connection(id).await?;
+    if !matches!(profile.engine, Engine::Mongodb) {
+        return Err(AppError::Config(
+            "document queries are only available on MongoDB connections".into(),
+        ));
+    }
+    let settings = state.store.get_safety(id).await?;
+    let classification = crate::mongo::query::classify(&query);
+    let engine = profile.engine;
+    let origin = origin.unwrap_or_else(|| "manual".into());
+    // The audit/history `sql` column carries the serialized typed request.
+    let audited = serde_json::to_string(&query)?;
+
+    let blocked_reason = if !matches!(classification.kind, QueryKind::Read) {
+        Some(
+            classification
+                .notes
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "document writes are not supported".into()),
+        )
+    } else {
+        match decide(&settings, &classification) {
+            GateDecision::Block { reason } => Some(reason),
+            GateDecision::RequireApproval if !approved => {
+                Some("this query requires explicit approval".into())
+            }
+            _ => None,
+        }
+    };
+    if let Some(reason) = blocked_reason {
+        record_run(
+            &state, id, engine, &audited, classification.kind, "blocked", "blocked", None, None,
+            Some(reason.clone()), &origin,
+        )
+        .await;
+        return Err(AppError::Blocked { reason });
+    }
+
+    let live = get_live(&state, id).await?;
+    let max_rows = settings.max_rows.clamp(1, 100_000);
+    // maxTimeMS mirrors the wall-clock guard so a dropped client future cannot
+    // leave a runaway server-side operation behind.
+    let run = crate::mongo::query::run(
+        live.mongo()?,
+        &query,
+        max_rows,
+        executor::cancel::QUERY_TIMEOUT,
+    );
+    match executor::cancel::guard(query_id, executor::cancel::QUERY_TIMEOUT, run).await {
+        Ok(page) => {
+            record_run(
+                &state, id, engine, &audited, QueryKind::Read, "read", "ok",
+                Some(page.doc_count as i64), Some(page.duration_ms as i64), None, &origin,
+            )
+            .await;
+            Ok(page)
+        }
+        Err(e) => {
+            record_run(
+                &state, id, engine, &audited, QueryKind::Read, "error", "error", None, None,
                 Some(e.to_string()), &origin,
             )
             .await;
@@ -748,6 +846,7 @@ pub async fn run_script(
         }
 
         let live = get_live(&state, id).await?;
+        let live = live.sql()?;
         let mut out: Vec<ScriptStatement> = Vec::with_capacity(statements.len());
         let mut failure: Option<String> = None;
         for stmt in &statements {
@@ -756,7 +855,7 @@ pub async fn run_script(
                 continue;
             }
             // query_id threaded in so a long read script is cancellable per statement.
-            match executor::run_read(&live, engine, stmt, settings.max_rows, query_id).await {
+            match executor::run_read(live, engine, stmt, settings.max_rows, query_id).await {
                 Ok(result) => out.push(ScriptStatement {
                     sql: stmt.clone(),
                     result: Some(result),
@@ -840,6 +939,19 @@ pub async fn run_script(
     })?;
 
     let live = get_live(&state, id).await?;
+    // Same audit-closure rule as run_sql: a document connection reaching the
+    // write path must not leave a dangling attempt record.
+    let live = match live.sql() {
+        Ok(live) => live,
+        Err(e) => {
+            record_run(
+                &state, id, engine, &sql, script_kind, "script:execute", "error", None, None,
+                Some(e.to_string()), &origin,
+            )
+            .await;
+            return Err(e);
+        }
+    };
     // Wrap the whole transaction in the cancel/timeout guard; a cancel drops the tx
     // future mid-flight (uncommitted → rolled back), same as the single-write path.
     let tx_fut = async { Ok::<_, AppError>(execute_script_tx(&live.write_pool, &statements).await) };
@@ -902,8 +1014,20 @@ pub async fn get_monitoring_status(
     id: Uuid,
 ) -> AppResult<MonitoringStatus> {
     let profile = state.store.get_connection(id).await?;
+    if matches!(profile.engine, Engine::Mongodb) {
+        // No PostgreSQL-style predefined roles — the basic collector, no probe needed.
+        return Ok(MonitoringStatus {
+            engine: profile.engine,
+            coverage: "basic".into(),
+            role_available: false,
+            role_granted: false,
+            current_user: None,
+            can_manage: false,
+            note: "MongoDB connections use the basic, role-free collector.".into(),
+        });
+    }
     let live = get_live(&state, id).await?;
-    monitoring::status(&live, profile.engine).await
+    monitoring::status(live.sql()?, profile.engine).await
 }
 
 /// Grant/revoke one fixed PostgreSQL predefined role for CURRENT_USER. This narrow
@@ -971,7 +1095,7 @@ pub async fn set_postgres_monitoring(
     })?;
 
     let live = get_live(&state, id).await?;
-    if let Err(e) = monitoring::set_postgres_role(&live, enabled).await {
+    if let Err(e) = monitoring::set_postgres_role(live.sql()?, enabled).await {
         record_monitoring_change(
             &state,
             &profile,
@@ -984,7 +1108,7 @@ pub async fn set_postgres_monitoring(
         return Err(e);
     }
     record_monitoring_change(&state, &profile, sql, "ok", None, Some("local-user")).await;
-    monitoring::status(&live, profile.engine).await
+    monitoring::status(live.sql()?, profile.engine).await
 }
 
 async fn record_monitoring_change(

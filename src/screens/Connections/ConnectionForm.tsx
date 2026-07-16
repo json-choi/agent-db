@@ -57,9 +57,9 @@ function decodeUrlPart(value: string): string {
   }
 }
 
-function firstSearchParam(url: URL, keys: string[]): string | null {
+function firstSearchParam(params: URLSearchParams, keys: string[]): string | null {
   for (const key of keys) {
-    const value = url.searchParams.get(key);
+    const value = params.get(key);
     if (value != null && value !== "") return value;
   }
   return null;
@@ -96,9 +96,91 @@ function sqliteDatabaseFromUrl(url: URL): string {
   return decodeUrlPart(url.pathname);
 }
 
+// mongodb:// and mongodb+srv:// support a comma-separated host list (replica set
+// members), which the WHATWG URL parser can't represent — parse by hand instead. The
+// schema group is deliberately not read from the URL: MongoDB has no schema-diff path,
+// and the form hides that field for this engine (see the isMongo branch below).
+function parseMongoConnectionUrl(text: string): ParsedConnectionUrl | null {
+  const match =
+    /^mongodb(\+srv)?:\/\/(?:([^:@/]+)(?::([^@/]*))?@)?([^/?]+)(?:\/([^?]*))?(?:\?(.*))?$/i.exec(
+      text,
+    );
+  if (!match) return null;
+  const [, srvFlag, rawUser, rawPass, hostPart, rawDatabase, rawQuery] = match;
+  const srv = !!srvFlag;
+  const database = rawDatabase ? decodeUrlPart(rawDatabase) : "";
+  const params = new URLSearchParams(rawQuery ?? "");
+
+  // Unlike the SQL engines (whose extraParams are only read selectively), every
+  // mongo extraParams entry is re-serialized into the driver URI — DopeDB's own
+  // meta parameters must not leak into it as unknown MongoDB options.
+  const dopedbMetaKeys = new Set([
+    "allow_writes", "allowwrites", "connection_name", "connectionname", "env",
+    "environment", "name", "pass", "password", "read_only", "readonly", "writes",
+  ]);
+  const extraParams: Record<string, string> = {};
+  params.forEach((value, key) => {
+    if (dopedbMetaKeys.has(key.toLowerCase())) return;
+    extraParams[key] = value;
+  });
+  if (srv) extraParams.srv = "true";
+
+  const hosts = hostPart.split(",").map((h) => h.trim()).filter(Boolean);
+  let host: string;
+  let port: number;
+  if (hosts.length > 1) {
+    // Replica-set host list: each member resolves its own port, so keep the raw
+    // comma-separated string and fall back to the driver default port.
+    host = hostPart;
+    port = DEFAULT_PORT.mongodb;
+  } else {
+    const single = hosts[0] ?? "";
+    const m = /^(.+?)(?::(\d+))?$/.exec(single);
+    host = decodeUrlPart(m?.[1] ?? single);
+    port = m?.[2] ? Number(m[2]) : DEFAULT_PORT.mongodb;
+  }
+
+  const name =
+    firstSearchParam(params, ["name", "connectionName", "connection_name"]) ||
+    database ||
+    hosts[0] ||
+    "";
+  const env = firstSearchParam(params, ["env", "environment"]);
+  const readonlyDefault = parseOptionalBoolean(
+    firstSearchParam(params, ["readonly", "readOnly", "read_only"]),
+  );
+  const allowWrites = parseOptionalBoolean(
+    firstSearchParam(params, ["allowWrites", "allow_writes", "writes"]),
+  );
+  const update: Partial<ConnectionProfile> = {
+    name,
+    engine: "mongodb",
+    provider: "auto",
+    driverId: null,
+    host,
+    port,
+    database,
+    username: rawUser ? decodeUrlPart(rawUser) : "",
+    sslmode: "prefer",
+    extraParams,
+  };
+  if (env) update.env = env;
+  if (readonlyDefault != null) update.readonlyDefault = readonlyDefault;
+  if (allowWrites != null) update.allowWrites = allowWrites;
+
+  return {
+    update,
+    password:
+      (rawPass != null ? decodeUrlPart(rawPass) : "") ||
+      firstSearchParam(params, ["password", "pass"]) ||
+      null,
+  };
+}
+
 function parseConnectionUrl(raw: string): ParsedConnectionUrl | null {
   const text = raw.trim().replace(/^['"`]+|['"`]+$/g, "");
   if (!text) return null;
+  if (/^mongodb(\+srv)?:\/\//i.test(text)) return parseMongoConnectionUrl(text);
 
   let url: URL;
   try {
@@ -126,22 +208,22 @@ function parseConnectionUrl(raw: string): ParsedConnectionUrl | null {
 
   const sslmode = normalizeSslMode(
     engine,
-    firstSearchParam(url, ["sslmode", "ssl-mode", "sslMode", "ssl"]),
+    firstSearchParam(url.searchParams, ["sslmode", "ssl-mode", "sslMode", "ssl"]),
   );
   const database =
     engine === "sqlite"
       ? sqliteDatabaseFromUrl(url)
       : decodeUrlPart(url.pathname.replace(/^\/+/, ""));
   const name =
-    firstSearchParam(url, ["name", "connectionName", "connection_name"]) ||
+    firstSearchParam(url.searchParams, ["name", "connectionName", "connection_name"]) ||
     database ||
     url.hostname ||
     "";
   const readonlyDefault = parseOptionalBoolean(
-    firstSearchParam(url, ["readonly", "readOnly", "read_only"]),
+    firstSearchParam(url.searchParams, ["readonly", "readOnly", "read_only"]),
   );
   const allowWrites = parseOptionalBoolean(
-    firstSearchParam(url, ["allowWrites", "allow_writes", "writes"]),
+    firstSearchParam(url.searchParams, ["allowWrites", "allow_writes", "writes"]),
   );
   const update: Partial<ConnectionProfile> = {
     name,
@@ -155,9 +237,9 @@ function parseConnectionUrl(raw: string): ParsedConnectionUrl | null {
     sslmode: sslmode ?? "prefer",
     extraParams,
   };
-  const env = firstSearchParam(url, ["env", "environment"]);
+  const env = firstSearchParam(url.searchParams, ["env", "environment"]);
   if (env) update.env = env;
-  const schemaGroup = firstSearchParam(url, [
+  const schemaGroup = firstSearchParam(url.searchParams, [
     "schemaGroup",
     "schema_group",
     "schema-group",
@@ -171,7 +253,7 @@ function parseConnectionUrl(raw: string): ParsedConnectionUrl | null {
     update,
     password:
       decodeUrlPart(url.password) ||
-      firstSearchParam(url, ["password", "pass"]) ||
+      firstSearchParam(url.searchParams, ["password", "pass"]) ||
       null,
   };
 }
@@ -298,6 +380,16 @@ export function ConnectionForm({
   }
 
   const isSqlite = form.engine === "sqlite";
+  const isMongo = form.engine === "mongodb";
+  const srv = form.extraParams.srv === "true";
+  function setSrv(checked: boolean) {
+    setForm((f) => {
+      const extraParams = { ...f.extraParams };
+      if (checked) extraParams.srv = "true";
+      else delete extraParams.srv;
+      return { ...f, extraParams };
+    });
+  }
   const drivers = compatibleDrivers(driverCatalog.data ?? [], form.engine, form.provider);
   const activeDriver =
     drivers.find((driver) => driver.id === form.driverId) ??
@@ -405,12 +497,16 @@ export function ConnectionForm({
               // Keep a user-customized port; only swap when it still matches the
               // outgoing engine's default.
               port: f.port === DEFAULT_PORT[f.engine] ? DEFAULT_PORT[engine] : f.port,
+              // MongoDB hides the schema-group field (SQL-only diff feature) — a
+              // carried-over value would be invisible yet still block saving.
+              schemaGroup: engine === "mongodb" ? null : f.schemaGroup,
             }));
           }}
         >
           <option value="postgres">PostgreSQL</option>
           <option value="mysql">MySQL / MariaDB</option>
           <option value="sqlite">SQLite</option>
+          <option value="mongodb">MongoDB</option>
         </select>
       </label>
 
@@ -514,6 +610,7 @@ export function ConnectionForm({
               <input
                 type="number"
                 value={form.port}
+                disabled={isMongo && srv}
                 onChange={(e) => {
                   // Empty input keeps the previous port instead of silently becoming 0.
                   const v = e.target.value;
@@ -523,10 +620,25 @@ export function ConnectionForm({
             </label>
           </div>
 
+          {isMongo && (
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={srv}
+                onChange={(e) => setSrv(e.target.checked)}
+              />
+              {t("connections.srv")}
+            </label>
+          )}
+
           <label>
-            {t("connections.database")}
+            <span className="label-with-help">
+              {t("connections.database")}
+              {isMongo && <InfoTip label={t("connections.databaseRequiredHint")} />}
+            </span>
             <input
               value={form.database}
+              required={isMongo}
               onChange={(e) => set("database", e.target.value)}
             />
           </label>
@@ -554,18 +666,20 @@ export function ConnectionForm({
             </label>
           </div>
 
-          <label>
-            {t("connections.sslMode")}
-            <select
-              value={form.sslmode}
-              onChange={(e) => set("sslmode", e.target.value)}
-            >
-              <option value="disable">disable</option>
-              <option value="prefer">prefer</option>
-              <option value="require">require</option>
-              <option value="verify-full">verify-full</option>
-            </select>
-          </label>
+          {!isMongo && (
+            <label>
+              {t("connections.sslMode")}
+              <select
+                value={form.sslmode}
+                onChange={(e) => set("sslmode", e.target.value)}
+              >
+                <option value="disable">disable</option>
+                <option value="prefer">prefer</option>
+                <option value="require">require</option>
+                <option value="verify-full">verify-full</option>
+              </select>
+            </label>
+          )}
         </>
       )}
 
@@ -585,14 +699,16 @@ export function ConnectionForm({
         </select>
       </label>
 
-      <label>
-        {t("connections.schemaGroup")}
-        <input
-          value={form.schemaGroup ?? ""}
-          onChange={(e) => set("schemaGroup", e.target.value.trim() || null)}
-          placeholder={t("connections.schemaGroupPlaceholder")}
-        />
-      </label>
+      {!isMongo && (
+        <label>
+          {t("connections.schemaGroup")}
+          <input
+            value={form.schemaGroup ?? ""}
+            onChange={(e) => set("schemaGroup", e.target.value.trim() || null)}
+            placeholder={t("connections.schemaGroupPlaceholder")}
+          />
+        </label>
+      )}
 
       <InfoTip label={t("connections.writeAccessHint")} className="connection-write-help" />
 

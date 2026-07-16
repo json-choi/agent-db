@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use uuid::Uuid;
 
-use crate::connection::LiveConnection;
+use crate::connection::Live;
 use crate::error::AppResult;
 use crate::store::Store;
 
@@ -26,7 +26,7 @@ pub struct AppState {
     // app. Move to a per-connection lock only if concurrent queries contend.
     // Arc so the MCP listeners share THIS instance (evictions from upsert/delete
     // reach the MCP server's cached pools too — not a separate map).
-    pub connections: Arc<Mutex<HashMap<Uuid, LiveConnection>>>,
+    pub connections: Arc<Mutex<HashMap<Uuid, Live>>>,
     /// Bearer token guarding the local MCP server (persisted in mcp.json).
     pub mcp_token: String,
     /// Live status of the MCP HTTP + bridge listeners.
