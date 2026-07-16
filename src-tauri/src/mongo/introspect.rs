@@ -54,42 +54,26 @@ async fn table_for(
     let is_view = matches!(collection_type, CollectionType::View);
     let coll = db.collection::<Document>(&name);
 
-    // Field structure from a bounded sample. A per-collection failure (odd
-    // validators, missing read privileges) degrades to "no columns" rather than
-    // sinking the whole catalog.
-    let columns = match sample_columns(&coll).await {
-        Ok(columns) => columns,
-        Err(e) => {
-            tracing::warn!("sampling collection {name} failed: {e}");
-            Vec::new()
-        }
-    };
-
-    // Index metadata is exact (listIndexes), unlike the sampled columns.
-    let mut indexes = Vec::new();
-    if !is_view {
-        if let Ok(mut cursor) = coll.list_indexes().await {
-            while let Some(model) = cursor.try_next().await.unwrap_or(None) {
-                let options = model.options.as_ref();
-                let index_name = options.and_then(|o| o.name.clone()).unwrap_or_default();
-                // `_id_` is implicit — its PK-ness is already on the column.
-                if index_name == "_id_" {
-                    continue;
-                }
-                indexes.push(Index {
-                    name: index_name,
-                    columns: model.keys.keys().cloned().collect(),
-                    unique: options.and_then(|o| o.unique).unwrap_or(false),
-                });
+    // The three probes are independent reads — run them concurrently so a
+    // remote server pays one round-trip latency per collection, not three.
+    let (columns, indexes, row_estimate) = futures::join!(
+        sample_columns(&coll),
+        collection_indexes(&coll, is_view),
+        async {
+            if is_view {
+                None
+            } else {
+                coll.estimated_document_count().await.ok().map(|n| n as i64)
             }
-        }
-    }
+        },
+    );
 
-    let row_estimate = if is_view {
-        None
-    } else {
-        coll.estimated_document_count().await.ok().map(|n| n as i64)
-    };
+    // A per-collection sampling failure (odd validators, missing read
+    // privileges) degrades to "no columns" rather than sinking the catalog.
+    let columns = columns.unwrap_or_else(|e| {
+        tracing::warn!("sampling collection {name} failed: {e}");
+        Vec::new()
+    });
 
     Ok(Table {
         schema: None,
@@ -100,6 +84,32 @@ async fn table_for(
         indexes,
         row_estimate,
     })
+}
+
+/// Exact index metadata via `listIndexes` (unlike the sampled columns).
+/// Best-effort: views (and permission errors) yield an empty list.
+async fn collection_indexes(coll: &mongodb::Collection<Document>, is_view: bool) -> Vec<Index> {
+    if is_view {
+        return Vec::new();
+    }
+    let Ok(mut cursor) = coll.list_indexes().await else {
+        return Vec::new();
+    };
+    let mut indexes = Vec::new();
+    while let Some(model) = cursor.try_next().await.unwrap_or(None) {
+        let options = model.options.as_ref();
+        let index_name = options.and_then(|o| o.name.clone()).unwrap_or_default();
+        // `_id_` is implicit — its PK-ness is already on the column.
+        if index_name == "_id_" {
+            continue;
+        }
+        indexes.push(Index {
+            name: index_name,
+            columns: model.keys.keys().cloned().collect(),
+            unique: options.and_then(|o| o.unique).unwrap_or(false),
+        });
+    }
+    indexes
 }
 
 /// Union the top-level fields of up to [`SAMPLE_DOCS`] documents into columns.

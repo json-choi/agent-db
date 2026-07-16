@@ -243,20 +243,17 @@ async fn drain(
     Ok((documents, truncated))
 }
 
-/// JavaScript parses raw JSON numbers as f64, so an Int64 beyond ±(2^53 − 1)
-/// would silently corrupt at the Tauri IPC boundary. Render those as strings —
-/// the same precision rule the SQL executor applies to BIGINT/NUMERIC.
-const MAX_SAFE_INT: i64 = 9_007_199_254_740_991;
-
+/// JavaScript parses raw JSON numbers as f64, so a large Int64 would silently
+/// corrupt at the Tauri IPC boundary. Route every integer through the SQL
+/// executor's `int_json`/`uint_json` so both engines share one precision rule.
 fn stringify_unsafe_ints(value: serde_json::Value) -> serde_json::Value {
+    use crate::executor::read::{int_json, uint_json};
     match value {
         serde_json::Value::Number(n) => {
-            let unsafe_int = n
-                .as_i64()
-                .is_some_and(|v| !(-MAX_SAFE_INT..=MAX_SAFE_INT).contains(&v))
-                || n.as_u64().is_some_and(|v| v > MAX_SAFE_INT as u64);
-            if unsafe_int {
-                serde_json::Value::String(n.to_string())
+            if let Some(v) = n.as_i64() {
+                int_json(v)
+            } else if let Some(v) = n.as_u64() {
+                uint_json(v)
             } else {
                 serde_json::Value::Number(n)
             }
@@ -402,13 +399,16 @@ mod tests {
         let converted = stringify_unsafe_ints(json!({
             "big": 9_223_372_036_854_775_807i64,
             "min": -9_223_372_036_854_775_808i64,
-            "nested": [{ "alsoBig": 9_007_199_254_740_992i64 }],
+            "nested": [{ "alsoBig": 9_007_199_254_740_993i64 }],
+            // Exactly 2^53 is still exact in f64 — stays a number (same rule as SQL).
+            "edge": 9_007_199_254_740_992i64,
             "small": 42,
             "float": 1.5,
         }));
         assert_eq!(converted["big"], json!("9223372036854775807"));
         assert_eq!(converted["min"], json!("-9223372036854775808"));
-        assert_eq!(converted["nested"][0]["alsoBig"], json!("9007199254740992"));
+        assert_eq!(converted["nested"][0]["alsoBig"], json!("9007199254740993"));
+        assert_eq!(converted["edge"], json!(9_007_199_254_740_992i64));
         assert_eq!(converted["small"], json!(42));
         assert_eq!(converted["float"], json!(1.5));
     }

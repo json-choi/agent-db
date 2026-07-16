@@ -65,6 +65,29 @@ function firstSearchParam(params: URLSearchParams, keys: string[]): string | nul
   return null;
 }
 
+type UrlMetaParams = {
+  name: string;
+  env: string | null;
+  readonlyDefault: boolean | null;
+  allowWrites: boolean | null;
+};
+
+// name/env/readonlyDefault/allowWrites read the same DopeDB meta keys regardless of
+// engine — shared by parseMongoConnectionUrl and parseConnectionUrl. `nameFallback` is
+// the engine-specific fallback (database, then host) when no name param is present.
+function parseUrlMetaParams(params: URLSearchParams, nameFallback: string): UrlMetaParams {
+  return {
+    name: firstSearchParam(params, ["name", "connectionName", "connection_name"]) || nameFallback,
+    env: firstSearchParam(params, ["env", "environment"]),
+    readonlyDefault: parseOptionalBoolean(
+      firstSearchParam(params, ["readonly", "readOnly", "read_only"]),
+    ),
+    allowWrites: parseOptionalBoolean(
+      firstSearchParam(params, ["allowWrites", "allow_writes", "writes"]),
+    ),
+  };
+}
+
 function parseOptionalBoolean(value: string | null): boolean | null {
   if (value == null) return null;
   const normalized = value.trim().toLowerCase();
@@ -140,20 +163,9 @@ function parseMongoConnectionUrl(text: string): ParsedConnectionUrl | null {
     port = m?.[2] ? Number(m[2]) : DEFAULT_PORT.mongodb;
   }
 
-  const name =
-    firstSearchParam(params, ["name", "connectionName", "connection_name"]) ||
-    database ||
-    hosts[0] ||
-    "";
-  const env = firstSearchParam(params, ["env", "environment"]);
-  const readonlyDefault = parseOptionalBoolean(
-    firstSearchParam(params, ["readonly", "readOnly", "read_only"]),
-  );
-  const allowWrites = parseOptionalBoolean(
-    firstSearchParam(params, ["allowWrites", "allow_writes", "writes"]),
-  );
+  const meta = parseUrlMetaParams(params, database || hosts[0] || "");
   const update: Partial<ConnectionProfile> = {
-    name,
+    name: meta.name,
     engine: "mongodb",
     provider: "auto",
     driverId: null,
@@ -164,9 +176,9 @@ function parseMongoConnectionUrl(text: string): ParsedConnectionUrl | null {
     sslmode: "prefer",
     extraParams,
   };
-  if (env) update.env = env;
-  if (readonlyDefault != null) update.readonlyDefault = readonlyDefault;
-  if (allowWrites != null) update.allowWrites = allowWrites;
+  if (meta.env) update.env = meta.env;
+  if (meta.readonlyDefault != null) update.readonlyDefault = meta.readonlyDefault;
+  if (meta.allowWrites != null) update.allowWrites = meta.allowWrites;
 
   return {
     update,
@@ -214,19 +226,9 @@ function parseConnectionUrl(raw: string): ParsedConnectionUrl | null {
     engine === "sqlite"
       ? sqliteDatabaseFromUrl(url)
       : decodeUrlPart(url.pathname.replace(/^\/+/, ""));
-  const name =
-    firstSearchParam(url.searchParams, ["name", "connectionName", "connection_name"]) ||
-    database ||
-    url.hostname ||
-    "";
-  const readonlyDefault = parseOptionalBoolean(
-    firstSearchParam(url.searchParams, ["readonly", "readOnly", "read_only"]),
-  );
-  const allowWrites = parseOptionalBoolean(
-    firstSearchParam(url.searchParams, ["allowWrites", "allow_writes", "writes"]),
-  );
+  const meta = parseUrlMetaParams(url.searchParams, database || url.hostname || "");
   const update: Partial<ConnectionProfile> = {
-    name,
+    name: meta.name,
     engine,
     provider: "auto",
     driverId: null,
@@ -237,8 +239,7 @@ function parseConnectionUrl(raw: string): ParsedConnectionUrl | null {
     sslmode: sslmode ?? "prefer",
     extraParams,
   };
-  const env = firstSearchParam(url.searchParams, ["env", "environment"]);
-  if (env) update.env = env;
+  if (meta.env) update.env = meta.env;
   const schemaGroup = firstSearchParam(url.searchParams, [
     "schemaGroup",
     "schema_group",
@@ -246,8 +247,8 @@ function parseConnectionUrl(raw: string): ParsedConnectionUrl | null {
     "group",
   ]);
   if (schemaGroup) update.schemaGroup = schemaGroup;
-  if (readonlyDefault != null) update.readonlyDefault = readonlyDefault;
-  if (allowWrites != null) update.allowWrites = allowWrites;
+  if (meta.readonlyDefault != null) update.readonlyDefault = meta.readonlyDefault;
+  if (meta.allowWrites != null) update.allowWrites = meta.allowWrites;
 
   return {
     update,

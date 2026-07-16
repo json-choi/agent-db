@@ -27,7 +27,22 @@ function parseJsonField(text: string, label: string): unknown {
   }
 }
 
-export default function Documents({ connection }: { connection: ConnectionProfile }) {
+function isDocumentQueryShape(value: unknown): value is DocumentQuery {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "op" in value &&
+    "collection" in value
+  );
+}
+
+export default function Documents({
+  connection,
+  draft,
+}: {
+  connection: ConnectionProfile;
+  draft?: string | null;
+}) {
   const { t } = useI18n();
   const catalog = useQuery(catalogQuery(connection.id));
   const tables = catalog.data?.tables ?? [];
@@ -44,6 +59,38 @@ export default function Documents({ connection }: { connection: ConnectionProfil
   const [limit, setLimit] = useState(100);
   const [pipelineText, setPipelineText] = useState("[]");
   const [countFilterText, setCountFilterText] = useState("");
+
+  // Loads an Activity row's replayed query (JSON-serialized DocumentQuery, see
+  // App.tsx's loadSql) into the form. `draft` itself is the effect dependency, so a
+  // reapplied identical string never loops and there is no separate "consumed" flag.
+  useEffect(() => {
+    if (draft == null) return;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(draft);
+    } catch (e) {
+      console.warn("failed to parse document draft:", e);
+      return;
+    }
+    if (!isDocumentQueryShape(parsed)) {
+      console.warn("document draft is not a DocumentQuery:", parsed);
+      return;
+    }
+    setCollection(parsed.collection);
+    setOp(parsed.op);
+    if (parsed.op === "find") {
+      setFilterText(parsed.filter !== undefined ? JSON.stringify(parsed.filter, null, 2) : "");
+      setProjectionText(
+        parsed.projection !== undefined ? JSON.stringify(parsed.projection, null, 2) : "",
+      );
+      setSortText(parsed.sort !== undefined ? JSON.stringify(parsed.sort, null, 2) : "");
+      if (typeof parsed.limit === "number") setLimit(parsed.limit);
+    } else if (parsed.op === "aggregate") {
+      setPipelineText(JSON.stringify(parsed.pipeline, null, 2));
+    } else if (parsed.op === "count") {
+      setCountFilterText(parsed.filter !== undefined ? JSON.stringify(parsed.filter, null, 2) : "");
+    }
+  }, [draft]);
 
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<{ page: DocumentPage; at: string } | null>(null);

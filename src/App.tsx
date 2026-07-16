@@ -207,6 +207,9 @@ function Shell() {
     return (ALL_TABS as string[]).includes(saved ?? "") ? (saved as Tab) : "data";
   });
   const [sqlDraft, setSqlDraft] = useState("SELECT 1;");
+  // Mirrors sqlDraft for MongoDB connections, where an Activity row click routes here
+  // instead of the (absent) SQL tab — see loadSql below.
+  const [docDraft, setDocDraft] = useState<string | null>(null);
   const [dashboardFocusId, setDashboardFocusId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -441,8 +444,15 @@ function Shell() {
   };
 
   function loadSql(sql: string) {
-    setSqlDraft(sql);
-    setTab("sql");
+    // A mongo connection has no SQL tab (see visibleTabs) — route the same Activity
+    // "load" action to Documents instead so the row click isn't silently dropped.
+    if (supportsSql) {
+      setSqlDraft(sql);
+      setTab("sql");
+    } else {
+      setDocDraft(sql);
+      setTab("documents");
+    }
   }
 
   function openMcpSettings() {
@@ -685,7 +695,11 @@ function Shell() {
               safetyFallback
             ))}
           {tab === "documents" &&
-            (selected ? <Documents connection={selected} /> : needsConn)}
+            (selected ? (
+              <Documents key={selected.id} connection={selected} draft={docDraft} />
+            ) : (
+              needsConn
+            ))}
           {tab === "dashboard" &&
             (selected ? (
               <Dashboards

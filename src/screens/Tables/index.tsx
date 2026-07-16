@@ -4,7 +4,7 @@
 // same sqlBuild helpers. Row edits (insert/update/delete) are generated as SQL and
 // routed through ApprovalCard, so the full safety pipeline (classify/preview/approve/
 // audit) applies — reads still auto-run and never need approval.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import type {
   CatalogTable,
@@ -22,7 +22,7 @@ import ApprovalCard from "../../components/ApprovalCard";
 import Skeleton from "../../components/Skeleton";
 import { useToast } from "../../components/Toast";
 import { documentsToGrid } from "../../lib/documentGrid";
-import { documentRowsQuery, tableRowsQuery } from "../../lib/queries";
+import { documentCountQuery, documentRowsQuery, tableRowsQuery } from "../../lib/queries";
 import { tableKey, tableLabel } from "../../lib/tableRef";
 import { downloadCsv, downloadJson, stamp } from "../../lib/export";
 import { useI18n } from "../../lib/i18n";
@@ -43,6 +43,67 @@ function sameFilters(a: Record<string, string>, b: Record<string, string>) {
 }
 
 const PAGE = 100;
+
+// First/prev/page-indicator/next/last/refresh — identical in SqlTableData and
+// MongoTableData. `children` lets SqlTableData append its structure toggle after refresh.
+function Pager({
+  page,
+  pageSize,
+  total,
+  rows,
+  busy,
+  onPage,
+  onRefresh,
+  children,
+}: {
+  page: number;
+  pageSize: number;
+  total: number | null;
+  rows: number;
+  busy: boolean;
+  onPage: (page: number) => void;
+  onRefresh: () => void;
+  children?: ReactNode;
+}) {
+  const { t } = useI18n();
+  const lastPage = total != null ? Math.max(0, Math.ceil(total / pageSize) - 1) : null;
+  const hasPrev = page > 0;
+  const hasNext = total != null ? page < (lastPage ?? 0) : rows === pageSize;
+  return (
+    <div className="table-pager ds-command-group" aria-label={t("tables.pagination")}>
+      <button className="btn small" disabled={busy || !hasPrev} onClick={() => onPage(0)}>
+        « {t("common.first")}
+      </button>
+      <button className="btn small" disabled={busy || !hasPrev} onClick={() => onPage(page - 1)}>
+        ‹ {t("common.prev")}
+      </button>
+      <span className="muted page-ind">
+        {t("tables.page", { page: page + 1 })}
+        {lastPage != null && ` / ${lastPage + 1}`}
+      </span>
+      <button className="btn small" disabled={busy || !hasNext} onClick={() => onPage(page + 1)}>
+        {t("common.next")} ›
+      </button>
+      <button
+        className="btn small"
+        disabled={busy || lastPage == null || !hasNext}
+        onClick={() => lastPage != null && onPage(lastPage)}
+      >
+        {t("tables.last")} »
+      </button>
+      <button
+        className="btn small refresh"
+        disabled={busy}
+        aria-label={t("common.refresh")}
+        title={t("common.refresh")}
+        onClick={onRefresh}
+      >
+        {busy ? "…" : <Icon name="refresh" />}
+      </button>
+      {children}
+    </div>
+  );
+}
 
 type Editor = { mode: "insert" | "edit" | "duplicate"; initial: Record<string, string | null> };
 type CellSel = { value: unknown; column: string };
@@ -166,9 +227,6 @@ function SqlTableData({
   const rows = result?.rowCount ?? 0;
   const from = rows === 0 ? 0 : page * pageSize + 1;
   const to = page * pageSize + rows;
-  const lastPage = total != null ? Math.max(0, Math.ceil(total / pageSize) - 1) : null;
-  const hasPrev = page > 0;
-  const hasNext = total != null ? page < (lastPage ?? 0) : rows === pageSize;
 
   function cycleSort(col: string) {
     setSort((s) =>
@@ -289,44 +347,15 @@ function SqlTableData({
             )}
           </div>
         </div>
-        <div className="table-pager ds-command-group" aria-label={t("tables.pagination")}>
-          <button className="btn small" disabled={busy || !hasPrev} onClick={() => setPage(0)}>
-            « {t("common.first")}
-          </button>
-          <button
-            className="btn small"
-            disabled={busy || !hasPrev}
-            onClick={() => setPage(page - 1)}
-          >
-            ‹ {t("common.prev")}
-          </button>
-          <span className="muted page-ind">
-            {t("tables.page", { page: page + 1 })}
-            {lastPage != null && ` / ${lastPage + 1}`}
-          </span>
-          <button
-            className="btn small"
-            disabled={busy || !hasNext}
-            onClick={() => setPage(page + 1)}
-          >
-            {t("common.next")} ›
-          </button>
-          <button
-            className="btn small"
-            disabled={busy || lastPage == null || !hasNext}
-            onClick={() => lastPage != null && setPage(lastPage)}
-          >
-            {t("tables.last")} »
-          </button>
-          <button
-            className="btn small refresh"
-            disabled={busy}
-            aria-label={t("common.refresh")}
-            title={t("common.refresh")}
-            onClick={() => void rowsQuery.refetch()}
-          >
-            {busy ? "…" : <Icon name="refresh" />}
-          </button>
+        <Pager
+          page={page}
+          pageSize={pageSize}
+          total={total}
+          rows={rows}
+          busy={busy}
+          onPage={setPage}
+          onRefresh={() => void rowsQuery.refetch()}
+        >
           <button
             className="btn small"
             aria-expanded={structure}
@@ -335,7 +364,7 @@ function SqlTableData({
           >
             {t("tables.structure")}
           </button>
-        </div>
+        </Pager>
       </div>
 
       <div className="table-query-strip ds-filter-strip" aria-label={t("tables.querySurface")}>
@@ -603,10 +632,10 @@ function SqlTableData({
   );
 }
 
-// MongoDB read-only data view: pagination and totals only (documentRowsQuery), no
-// filters/sort/insert/edit/delete/duplicate/RowEditor — none of those are SQL concepts
-// here. Columns are the union of returned documents' top-level keys (_id first),
-// falling back to the catalog's sampled field names when the page has no documents.
+// MongoDB read-only data view: pagination and totals only (documentRowsQuery +
+// documentCountQuery), no filters/sort/insert/edit/delete/duplicate/RowEditor — none of
+// those are SQL concepts here. Columns are the union of returned documents' top-level keys
+// (_id first), falling back to the catalog's sampled field names when the page has no documents.
 function MongoTableData({
   connection,
   table,
@@ -634,9 +663,11 @@ function MongoTableData({
     }),
     placeholderData: keepPreviousData,
   });
+  // Cached per collection (not per page), so paging never re-runs count_documents.
+  const countQuery = useQuery(documentCountQuery(connection.id, table.name));
 
-  const docPage = rowsQuery.data?.page ?? null;
-  const total = rowsQuery.data?.total ?? null;
+  const docPage = rowsQuery.data ?? null;
+  const total = countQuery.data ?? null;
   const busy = rowsQuery.isFetching;
   const err = rowsQuery.error ? errMessage(rowsQuery.error) : null;
 
@@ -656,9 +687,6 @@ function MongoTableData({
   const rows = result.rows.length;
   const from = rows === 0 ? 0 : page * pageSize + 1;
   const to = page * pageSize + rows;
-  const lastPage = total != null ? Math.max(0, Math.ceil(total / pageSize) - 1) : null;
-  const hasPrev = page > 0;
-  const hasNext = total != null ? page < (lastPage ?? 0) : rows === pageSize;
 
   return (
     <div className="table-data">
@@ -688,45 +716,18 @@ function MongoTableData({
             )}
           </div>
         </div>
-        <div className="table-pager ds-command-group" aria-label={t("tables.pagination")}>
-          <button className="btn small" disabled={busy || !hasPrev} onClick={() => setPage(0)}>
-            « {t("common.first")}
-          </button>
-          <button
-            className="btn small"
-            disabled={busy || !hasPrev}
-            onClick={() => setPage(page - 1)}
-          >
-            ‹ {t("common.prev")}
-          </button>
-          <span className="muted page-ind">
-            {t("tables.page", { page: page + 1 })}
-            {lastPage != null && ` / ${lastPage + 1}`}
-          </span>
-          <button
-            className="btn small"
-            disabled={busy || !hasNext}
-            onClick={() => setPage(page + 1)}
-          >
-            {t("common.next")} ›
-          </button>
-          <button
-            className="btn small"
-            disabled={busy || lastPage == null || !hasNext}
-            onClick={() => lastPage != null && setPage(lastPage)}
-          >
-            {t("tables.last")} »
-          </button>
-          <button
-            className="btn small refresh"
-            disabled={busy}
-            aria-label={t("common.refresh")}
-            title={t("common.refresh")}
-            onClick={() => void rowsQuery.refetch()}
-          >
-            {busy ? "…" : <Icon name="refresh" />}
-          </button>
-        </div>
+        <Pager
+          page={page}
+          pageSize={pageSize}
+          total={total}
+          rows={rows}
+          busy={busy}
+          onPage={setPage}
+          onRefresh={() => {
+            void rowsQuery.refetch();
+            void countQuery.refetch();
+          }}
+        />
       </div>
 
       {err && <div className="error">{err}</div>}

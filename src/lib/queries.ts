@@ -17,7 +17,7 @@ import {
   runDocumentQuery,
   runSql,
 } from "../ipc/commands";
-import type { CatalogTable, DocumentPage, Engine, QueryResult } from "../ipc/types";
+import type { CatalogTable, Engine, QueryResult } from "../ipc/types";
 import { buildCountQuery, buildPageQuery, type GridSort } from "./sqlBuild";
 import { tableKey } from "./tableRef";
 
@@ -38,8 +38,6 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
 }
 
 export type TableRowsPage = { result: QueryResult | null; total: number | null };
-
-export type DocumentRowsPage = { page: DocumentPage | null; total: number | null };
 
 export type DocumentRowsArgs = {
   connectionId: string;
@@ -84,6 +82,8 @@ export const qk = {
       args.collection,
       { pageSize: args.pageSize, page: args.page },
     ] as const,
+  documentCount: (connectionId: string, collection: string) =>
+    ["documentCount", connectionId, collection] as const,
 };
 
 export function driversQuery() {
@@ -177,24 +177,33 @@ export function dashboardRunQuery(dashboardId: string | null) {
   });
 }
 
-// One page of documents plus the collection's exact total — the MongoDB sibling of
-// tableRowsQuery. Reads route through the typed document API instead of SQL builders.
+// One page of documents — the MongoDB sibling of tableRowsQuery's page half. The exact
+// total is cached separately (documentCountQuery) so paging through a large collection
+// doesn't re-run count_documents on every page.
 export function documentRowsQuery(args: DocumentRowsArgs) {
   const { connectionId, collection, pageSize, page } = args;
   return queryOptions({
     queryKey: qk.documentRows(args),
     staleTime: LOG_STALE_MS,
-    queryFn: async (): Promise<DocumentRowsPage> => {
-      const [pageOut, countOut] = await Promise.all([
-        runDocumentQuery(
-          connectionId,
-          { op: "find", collection, skip: page * pageSize, limit: pageSize },
-          true,
-        ),
-        runDocumentQuery(connectionId, { op: "count", collection }, true),
-      ]);
+    queryFn: () =>
+      runDocumentQuery(
+        connectionId,
+        { op: "find", collection, skip: page * pageSize, limit: pageSize },
+        true,
+      ),
+  });
+}
+
+// A collection's exact document count, cached independent of page/pageSize so every page
+// of the same collection shares one count_documents run.
+export function documentCountQuery(connectionId: string, collection: string) {
+  return queryOptions({
+    queryKey: qk.documentCount(connectionId, collection),
+    staleTime: LOG_STALE_MS,
+    queryFn: async (): Promise<number | null> => {
+      const countOut = await runDocumentQuery(connectionId, { op: "count", collection }, true);
       const count = (countOut.documents[0] as { count?: number } | undefined)?.count;
-      return { page: pageOut, total: count == null ? null : Number(count) };
+      return count == null ? null : Number(count);
     },
   });
 }
