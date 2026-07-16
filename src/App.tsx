@@ -16,7 +16,7 @@ import type {
 } from "./ipc/types";
 import { errMessage } from "./ipc/types";
 import { hasCapability, isDocumentEngine } from "./lib/capabilities";
-import { driversQuery } from "./lib/queries";
+import { driversQuery, isTransientDbError } from "./lib/queries";
 import { buildConnectionSections, type SchemaConnectionGroup } from "./lib/schemaDiff";
 import { tableKey, tableLabel } from "./lib/tableRef";
 import { ConnectionForm, DatabaseExplorer } from "./screens/Connections";
@@ -29,21 +29,24 @@ import Activity from "./screens/Activity";
 import SchemaDiff from "./screens/SchemaDiff";
 import Onboarding from "./screens/Onboarding";
 import Settings from "./screens/Settings";
+import AgentChat from "./screens/AgentChat";
 import AgentResultView from "./components/AgentResultView";
 import EngineMark from "./components/EngineMark";
 import { Icon } from "./components/Icon";
 import { ToastProvider, useToast } from "./components/Toast";
+import { AgentChatProvider } from "./lib/agentChat";
 import { AgentFeedProvider, useAgentFeed } from "./lib/agentFeed";
 import { useI18n, type I18nKey } from "./lib/i18n";
 
-// App-level tabs. Agent is a live feed/result surface, connection-independent; the rest
-// are per-connection data views. Settings lives behind the sidebar gear. SQL and
-// Documents are mutually exclusive: a connection's driver capabilities decide which one
-// shows (see visibleTabs in Shell), so both live in ALL_TABS but never render together.
-type Tab = "data" | "schema" | "sql" | "dashboard" | "documents" | "agent" | "activity";
-// Agent is last: it's connection-independent, so it sits apart from the per-connection
-// data tabs (the .agent-tab class pushes it right with a divider via shared CSS).
-const ALL_TABS: Tab[] = ["data", "schema", "sql", "dashboard", "documents", "activity", "agent"];
+// App-level tabs. Chat and Agent are connection-independent (a live chat panel and a
+// tool-call feed/result surface); the rest are per-connection data views. Settings lives
+// behind the sidebar gear. SQL and Documents are mutually exclusive: a connection's driver
+// capabilities decide which one shows (see visibleTabs in Shell), so both live in ALL_TABS
+// but never render together.
+type Tab = "data" | "schema" | "sql" | "dashboard" | "documents" | "activity" | "chat" | "agent";
+// Chat is first of the connection-independent pair, so it carries the divider that pushes
+// the pair right (the .agent-tab class name predates Chat but the CSS recipe is generic).
+const ALL_TABS: Tab[] = ["data", "schema", "sql", "dashboard", "documents", "activity", "chat", "agent"];
 const TAB_LABELS: Record<Tab, I18nKey> = {
   data: "tabs.data",
   schema: "tabs.schema",
@@ -51,6 +54,7 @@ const TAB_LABELS: Record<Tab, I18nKey> = {
   dashboard: "tabs.dashboard",
   documents: "tabs.documents",
   activity: "tabs.activity",
+  chat: "tabs.chat",
   agent: "tabs.agent",
 };
 
@@ -62,7 +66,9 @@ export default function App() {
   return (
     <ToastProvider>
       <AgentFeedProvider>
-        <Shell />
+        <AgentChatProvider>
+          <Shell />
+        </AgentChatProvider>
       </AgentFeedProvider>
     </ToastProvider>
   );
@@ -300,7 +306,10 @@ function Shell() {
     if (schemaDiffGroupKey && !activeSchemaGroup) setSchemaDiffGroupKey(null);
   }, [activeSchemaGroup, schemaDiffGroupKey]);
 
-  function refresh(): Promise<ConnectionProfile[]> {
+  // Transient (network-shaped) load failures retry themselves with backoff instead of
+  // parking on the error card until the user clicks retry; deterministic failures still
+  // surface immediately. Manual retry re-enters at attempt 0.
+  function refresh(attempt = 0): Promise<ConnectionProfile[]> {
     return listConnections()
       .then((cs) => {
         setConns(cs);
@@ -308,6 +317,11 @@ function Shell() {
         return cs;
       })
       .catch((e) => {
+        if (attempt < 3 && isTransientDbError(e)) {
+          return new Promise<void>((resolve) =>
+            window.setTimeout(resolve, Math.min(1000 * 2 ** attempt, 8_000)),
+          ).then(() => refresh(attempt + 1));
+        }
         setLoadError(errMessage(e));
         return [];
       });
@@ -578,7 +592,7 @@ function Shell() {
 
     return (
       <>
-        {selected && tab !== "agent" && (
+        {selected && tab !== "agent" && tab !== "chat" && (
           <header className="main-head ds-workbench-head" data-tauri-drag-region="deep">
             <div className="ds-workbench-title">
               <div className="ds-title-line app-title-line">
@@ -624,7 +638,7 @@ function Shell() {
               tabIndex={tabId === tab ? 0 : -1}
               className={
                 (tabId === tab ? "tab active" : "tab") +
-                (tabId === "agent" ? " agent-tab" : "")
+                (tabId === "chat" ? " agent-tab" : "")
               }
               onClick={() => setTab(tabId)}
               // Arrow keys move focus+selection across TABS, wrapping — mirrors the sidebar tree.
@@ -648,6 +662,7 @@ function Shell() {
 
         <section className="tab-body" role="tabpanel">
           {tab === "agent" && <AgentResultView onDashboardSaved={openDashboard} />}
+          {tab === "chat" && <AgentChat onOpenAgent={() => setTab("agent")} />}
           {tab === "data" &&
             (!selected ? (
               needsConn

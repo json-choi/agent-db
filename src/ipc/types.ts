@@ -257,6 +257,53 @@ export interface PlatformInfo {
   note: string;
 }
 
+// In-app agent chat: which subscription CLI a turn runs through, and its installed/
+// authenticated status. Mirrors src-tauri/src/agent/mod.rs.
+export type AgentProvider = "claude" | "codex";
+
+export interface CliInfo {
+  id: AgentProvider;
+  name: string;
+  installed: boolean;
+  authenticated: boolean;
+  authMethod: string | null;
+  note: string;
+}
+
+// One selectable model for a provider's chat composer (codex's own catalog, or a static
+// list for claude, which has none). Mirrors src-tauri/src/agent/mod.rs.
+export interface AgentModel {
+  id: string;
+  name: string;
+  efforts: string[];
+  defaultEffort: string | null;
+}
+
+// A persisted conversation (Store/SQLite `agent_chat_threads`). model/effort are the values
+// used by the thread's most recent turn, seeded back into the composer when it's reopened.
+// Mirrors src-tauri/src/agent/mod.rs.
+export interface ChatThread {
+  id: string;
+  provider: AgentProvider;
+  title: string;
+  cliSessionId: string | null;
+  model: string | null;
+  effort: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// One persisted message row (Store/SQLite `agent_chat_messages`). Mirrors
+// src-tauri/src/agent/mod.rs.
+export interface ChatMessageRecord {
+  id: string;
+  threadId: string;
+  role: "user" | "assistant";
+  text: string;
+  error: string | null;
+  createdAt: string;
+}
+
 // The `{ kind, message, position? }` object AppError serializes to.
 interface AppErrorShape {
   kind: string;

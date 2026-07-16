@@ -31,6 +31,8 @@ pub struct AppState {
     pub mcp_token: String,
     /// Live status of the MCP HTTP + bridge listeners.
     pub mcp_runtime: Arc<Mutex<McpRuntime>>,
+    /// In-app agent chat memory (resumable CLI session id + active-turn tracking).
+    pub chat: crate::agent::ChatState,
 }
 
 impl AppState {
@@ -40,6 +42,7 @@ impl AppState {
             connections: Arc::new(Mutex::new(HashMap::new())),
             mcp_token: crate::mcp::load_or_create_token(),
             mcp_runtime: Arc::new(Mutex::new(McpRuntime::default())),
+            chat: crate::agent::chat_state(),
         })
     }
 }

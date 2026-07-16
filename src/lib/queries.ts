@@ -7,8 +7,12 @@ import {
   auditSnapshot,
   auditVerify,
   cancelQuery,
+  detectAgentClis,
   getCatalog,
+  getChatMessages,
   getMonitoringStatus,
+  listAgentModels,
+  listChatThreads,
   listDashboards,
   listDrivers,
   listHistory,
@@ -17,7 +21,8 @@ import {
   runDocumentQuery,
   runSql,
 } from "../ipc/commands";
-import type { CatalogTable, Engine, QueryResult } from "../ipc/types";
+import { errMessage } from "../ipc/types";
+import type { AgentProvider, CatalogTable, Engine, QueryResult } from "../ipc/types";
 import { buildCountQuery, buildPageQuery, type GridSort } from "./sqlBuild";
 import { tableKey } from "./tableRef";
 
@@ -36,6 +41,26 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
   });
   return Promise.race([promise, timeout]).finally(() => window.clearTimeout(timer));
 }
+
+// Network-shaped failures (dropped Wi-Fi, DB briefly unreachable) heal on their own; a
+// stuck error card that needs a manual "retry" click after the network recovers is pure
+// friction. Everything else (bad credentials, invalid SQL, missing table) is deterministic
+// and must keep failing fast — retrying it only doubles the wait.
+const TRANSIENT_ERROR =
+  /pool timed out|timed out|timeout|connection (refused|reset|closed|aborted)|could not connect|unreachable|broken pipe|network|io error/i;
+
+export function isTransientDbError(e: unknown): boolean {
+  return TRANSIENT_ERROR.test(errMessage(e));
+}
+
+// Spread into read-only queries that hit a remote database. Deliberately NOT a global
+// default: runSql-backed queries (tableRows, dashboardRun) double-write query history on a
+// retried run — see the `retry: false` rationale in queryClient.tsx.
+const transientRetry = {
+  retry: (failureCount: number, error: unknown) =>
+    failureCount < 3 && isTransientDbError(error),
+  retryDelay: (attempt: number) => Math.min(1000 * 2 ** attempt, 8_000),
+} as const;
 
 export type TableRowsPage = { result: QueryResult | null; total: number | null };
 
@@ -68,6 +93,9 @@ export const qk = {
   dashboards: (connectionId: string) => ["dashboards", connectionId] as const,
   dashboardRun: (dashboardId: string) => ["dashboardRun", dashboardId] as const,
   drivers: () => ["drivers"] as const,
+  chatThreads: () => ["chatThreads"] as const,
+  chatMessages: (threadId: string) => ["chatMessages", threadId] as const,
+  agentModels: (provider: AgentProvider) => ["agentModels", provider] as const,
   tableRows: (args: TableRowsArgs) =>
     [
       "tableRows",
@@ -94,10 +122,53 @@ export function driversQuery() {
   });
 }
 
+// Agent chat CLI detection (installed/authenticated). Short staleTime so the gate's
+// "check again" (an explicit refetch) feels immediate, but a re-render doesn't re-spawn
+// `claude`/`codex` on every keystroke.
+export function agentCliDetectionQuery() {
+  return queryOptions({
+    queryKey: ["agentClis"] as const,
+    staleTime: 15_000,
+    queryFn: detectAgentClis,
+  });
+}
+
+// Sidebar thread list. Small and cheap to re-read, so a short staleTime is enough to make a
+// just-created thread (or a title set after the first turn) show up on the next paint.
+export function agentChatThreadsQuery() {
+  return queryOptions({
+    queryKey: qk.chatThreads(),
+    staleTime: 5_000,
+    queryFn: listChatThreads,
+  });
+}
+
+// One thread's message history. Disabled for a still-draft conversation (threadId null) —
+// there is nothing to read until create_chat_thread has run.
+export function agentChatMessagesQuery(threadId: string | null) {
+  return queryOptions({
+    queryKey: qk.chatMessages(threadId ?? ""),
+    enabled: threadId !== null,
+    staleTime: 5_000,
+    queryFn: () => getChatMessages(threadId!),
+  });
+}
+
+// Model catalog for the composer's picker. codex re-spawns its CLI to read this and claude's
+// list is static either way, so a several-minute staleTime avoids a re-spawn per keystroke.
+export function agentModelsQuery(provider: AgentProvider) {
+  return queryOptions({
+    queryKey: qk.agentModels(provider),
+    staleTime: 5 * 60_000,
+    queryFn: () => listAgentModels(provider),
+  });
+}
+
 export function catalogQuery(connectionId: string) {
   return queryOptions({
     queryKey: qk.catalog(connectionId),
     staleTime: CATALOG_STALE_MS,
+    ...transientRetry,
     queryFn: () =>
       withTimeout(
         getCatalog(connectionId),
@@ -130,6 +201,7 @@ export function monitoringStatusQuery(connectionId: string) {
   return queryOptions({
     queryKey: qk.monitoring(connectionId),
     staleTime: LOG_STALE_MS,
+    ...transientRetry,
     queryFn: () => getMonitoringStatus(connectionId),
   });
 }

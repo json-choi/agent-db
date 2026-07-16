@@ -1241,6 +1241,85 @@ pub fn open_agent_app(platform: String) -> AppResult<String> {
     crate::mcp::connect::open_app(&platform).map_err(AppError::Config)
 }
 
+// ── in-app agent chat ───────────────────────────────────────────────────────────
+
+/// Claude Code / Codex CLI installed + subscription-login status. Distinct from
+/// `mcp_platforms` (which asks whether dopedb is *registered* in a platform's MCP
+/// config) — conflating the two would couple this chat gate to the Settings > MCP
+/// screen's state.
+#[tauri::command]
+pub fn detect_agent_clis() -> Vec<crate::agent::CliInfo> {
+    crate::agent::detect_clis()
+}
+
+/// Models `provider`'s CLI can run a turn against (Codex: its own live catalog;
+/// Claude Code: a static fallback — see `agent::claude_models`).
+#[tauri::command]
+pub fn list_agent_models(provider: crate::agent::AgentProvider) -> AppResult<Vec<crate::agent::AgentModel>> {
+    crate::agent::list_models(provider)
+}
+
+/// Saved chat threads, most recently updated first.
+#[tauri::command]
+pub async fn list_chat_threads(state: State<'_, AppState>) -> AppResult<Vec<crate::agent::ChatThread>> {
+    state.store.list_chat_threads().await
+}
+
+/// One thread's messages, oldest first.
+#[tauri::command]
+pub async fn get_chat_messages(
+    state: State<'_, AppState>,
+    thread_id: Uuid,
+) -> AppResult<Vec<crate::agent::ChatMessageRecord>> {
+    state.store.list_chat_messages(thread_id).await
+}
+
+/// Create a new (empty) chat thread. The frontend calls this on a draft's first send,
+/// immediately before `send_chat_turn` — an unsent draft never reaches the store.
+#[tauri::command]
+pub async fn create_chat_thread(
+    state: State<'_, AppState>,
+    provider: crate::agent::AgentProvider,
+    model: Option<String>,
+    effort: Option<String>,
+) -> AppResult<crate::agent::ChatThread> {
+    state.store.create_chat_thread(provider, model, effort).await
+}
+
+/// Delete a thread; its messages cascade with it.
+#[tauri::command]
+pub async fn delete_chat_thread(state: State<'_, AppState>, thread_id: Uuid) -> AppResult<()> {
+    state.store.delete_chat_thread(thread_id).await
+}
+
+/// Run one chat turn against an existing thread. Progress streams as
+/// `agent:chat_event`/`agent:chat_done`; this call itself only resolves once the CLI
+/// process exits, so the frontend should treat its rejection as "failed to even
+/// start" (bad binary, etc.) and rely on `agent:chat_done` for the actual turn outcome.
+#[tauri::command]
+pub async fn send_chat_turn(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    thread_id: Uuid,
+    message: String,
+    turn_id: Uuid,
+    model: Option<String>,
+    effort: Option<String>,
+) -> AppResult<()> {
+    crate::agent::send_turn(
+        app,
+        state.chat.clone(),
+        state.store.clone(),
+        state.mcp_token.clone(),
+        thread_id,
+        message,
+        turn_id,
+        model,
+        effort,
+    )
+    .await
+}
+
 // ── native picker ─────────────────────────────────────────────────────────────
 
 /// Native file picker for a SQLite database path. None means the user cancelled.

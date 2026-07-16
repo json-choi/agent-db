@@ -19,6 +19,7 @@ use sqlx::{Row, SqlitePool};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+use crate::agent::{AgentProvider, ChatMessageRecord, ChatThread};
 use crate::error::{AppError, AppResult};
 use crate::model::{
     ConnectionProfile, Dashboard, DashboardDraft, Engine, HistoryEntry, Provider, QueryKind,
@@ -417,6 +418,142 @@ impl Store {
             .await?;
         Ok(())
     }
+
+    // ── agent chat threads & messages ───────────────────────────────────────
+
+    /// Create a new chat thread (the store side of the frontend's "draft" turning
+    /// real). Title starts empty — [`Store::finish_chat_turn`] sets it from the first
+    /// user message once that turn completes.
+    pub async fn create_chat_thread(
+        &self,
+        provider: AgentProvider,
+        model: Option<String>,
+        effort: Option<String>,
+    ) -> AppResult<ChatThread> {
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+        sqlx::query(
+            r#"INSERT INTO agent_chat_threads
+                (id, provider, title, cli_session_id, model, effort, created_at, updated_at)
+               VALUES (?1,?2,'',NULL,?3,?4,?5,?5)"#,
+        )
+        .bind(id.to_string())
+        .bind(agent_provider_str(provider))
+        .bind(&model)
+        .bind(&effort)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(ChatThread {
+            id,
+            provider,
+            title: String::new(),
+            cli_session_id: None,
+            model,
+            effort,
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    pub async fn list_chat_threads(&self) -> AppResult<Vec<ChatThread>> {
+        let rows = sqlx::query("SELECT * FROM agent_chat_threads ORDER BY updated_at DESC")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter().map(row_to_chat_thread).collect()
+    }
+
+    pub async fn get_chat_thread(&self, id: Uuid) -> AppResult<ChatThread> {
+        let row = sqlx::query("SELECT * FROM agent_chat_threads WHERE id = ?1")
+            .bind(id.to_string())
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("chat thread {id}")))?;
+        row_to_chat_thread(&row)
+    }
+
+    /// Deletes the thread; `agent_chat_messages` cascades via its FK.
+    pub async fn delete_chat_thread(&self, id: Uuid) -> AppResult<()> {
+        let result = sqlx::query("DELETE FROM agent_chat_threads WHERE id = ?1")
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?;
+        if result.rows_affected() == 0 {
+            return Err(AppError::NotFound(format!("chat thread {id}")));
+        }
+        Ok(())
+    }
+
+    /// Update the thread's session/model/effort after a turn ends (success OR
+    /// failure — a failed turn still advances the resumable session and the title),
+    /// and set the title IFF it is still empty (a `CASE` in the same statement, so a
+    /// second turn can never clobber the title the first one set).
+    pub async fn finish_chat_turn(
+        &self,
+        thread_id: Uuid,
+        cli_session_id: Option<String>,
+        model: Option<String>,
+        effort: Option<String>,
+        title_if_empty: &str,
+    ) -> AppResult<()> {
+        sqlx::query(
+            r#"UPDATE agent_chat_threads
+               SET cli_session_id = ?2, model = ?3, effort = ?4, updated_at = ?5,
+                   title = CASE WHEN title = '' THEN ?6 ELSE title END
+               WHERE id = ?1"#,
+        )
+        .bind(thread_id.to_string())
+        .bind(cli_session_id)
+        .bind(model)
+        .bind(effort)
+        .bind(Utc::now())
+        .bind(title_if_empty)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn insert_chat_message(
+        &self,
+        thread_id: Uuid,
+        role: &str,
+        text: &str,
+        error: Option<&str>,
+    ) -> AppResult<ChatMessageRecord> {
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+        sqlx::query(
+            r#"INSERT INTO agent_chat_messages (id, thread_id, role, text, error, created_at)
+               VALUES (?1,?2,?3,?4,?5,?6)"#,
+        )
+        .bind(id.to_string())
+        .bind(thread_id.to_string())
+        .bind(role)
+        .bind(text)
+        .bind(error)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        Ok(ChatMessageRecord {
+            id,
+            thread_id,
+            role: role.to_string(),
+            text: text.to_string(),
+            error: error.map(str::to_string),
+            created_at: now,
+        })
+    }
+
+    pub async fn list_chat_messages(&self, thread_id: Uuid) -> AppResult<Vec<ChatMessageRecord>> {
+        let rows = sqlx::query(
+            "SELECT * FROM agent_chat_messages WHERE thread_id = ?1 ORDER BY created_at ASC",
+        )
+        .bind(thread_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(row_to_chat_message).collect()
+    }
 }
 
 /// Startup migration: rebuild `audit_log` WITHOUT the old `ON DELETE CASCADE` so a
@@ -530,6 +667,30 @@ fn row_to_dashboard(r: &sqlx::sqlite::SqliteRow) -> AppResult<Dashboard> {
     })
 }
 
+fn row_to_chat_thread(r: &sqlx::sqlite::SqliteRow) -> AppResult<ChatThread> {
+    Ok(ChatThread {
+        id: parse_uuid(r.try_get("id")?)?,
+        provider: parse_agent_provider(r.try_get("provider")?)?,
+        title: r.try_get("title")?,
+        cli_session_id: r.try_get("cli_session_id")?,
+        model: r.try_get("model")?,
+        effort: r.try_get("effort")?,
+        created_at: r.try_get("created_at")?,
+        updated_at: r.try_get("updated_at")?,
+    })
+}
+
+fn row_to_chat_message(r: &sqlx::sqlite::SqliteRow) -> AppResult<ChatMessageRecord> {
+    Ok(ChatMessageRecord {
+        id: parse_uuid(r.try_get("id")?)?,
+        thread_id: parse_uuid(r.try_get("thread_id")?)?,
+        role: r.try_get("role")?,
+        text: r.try_get("text")?,
+        error: r.try_get("error")?,
+        created_at: r.try_get("created_at")?,
+    })
+}
+
 // ── enum ⇄ text (kept in sync with model.rs serde `camelCase`) ──────────────
 
 pub(crate) fn engine_str(e: Engine) -> &'static str {
@@ -593,9 +754,25 @@ pub(crate) fn parse_uuid(s: String) -> AppResult<Uuid> {
     Uuid::from_str(&s).map_err(|e| AppError::Config(format!("bad uuid '{s}': {e}")))
 }
 
+pub(crate) fn agent_provider_str(p: AgentProvider) -> &'static str {
+    match p {
+        AgentProvider::Claude => "claude",
+        AgentProvider::Codex => "codex",
+    }
+}
+
+pub(crate) fn parse_agent_provider(s: String) -> AppResult<AgentProvider> {
+    match s.as_str() {
+        "claude" => Ok(AgentProvider::Claude),
+        "codex" => Ok(AgentProvider::Codex),
+        other => Err(AppError::Config(format!("unknown agent provider '{other}'"))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{engine_str, migrate_audit_no_cascade, migrations, parse_engine, Store};
+    use crate::agent::AgentProvider;
     use crate::error::AppError;
     use crate::model::{
         ConnectionProfile, DashboardDraft, DashboardKind, DashboardVisualization, Engine,
@@ -877,5 +1054,82 @@ mod tests {
     fn mongodb_engine_text_round_trips() {
         assert_eq!(engine_str(Engine::Mongodb), "mongodb");
         assert_eq!(parse_engine("mongodb".into()).unwrap(), Engine::Mongodb);
+    }
+
+    #[tokio::test]
+    async fn chat_thread_and_messages_round_trip_delete_cascades() {
+        let opts = SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::raw_sql(migrations::SCHEMA)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let store = Store::from_pool_for_test(pool);
+
+        let thread = store
+            .create_chat_thread(AgentProvider::Codex, None, None)
+            .await
+            .unwrap();
+        assert_eq!(thread.title, "");
+        assert!(thread.cli_session_id.is_none());
+
+        store
+            .insert_chat_message(thread.id, "user", "hello there", None)
+            .await
+            .unwrap();
+        store
+            .insert_chat_message(thread.id, "assistant", "hi!", None)
+            .await
+            .unwrap();
+
+        store
+            .finish_chat_turn(
+                thread.id,
+                Some("thr-123".into()),
+                Some("gpt-5.6-sol".into()),
+                Some("high".into()),
+                "hello there",
+            )
+            .await
+            .unwrap();
+
+        let reloaded = store.get_chat_thread(thread.id).await.unwrap();
+        assert_eq!(reloaded.title, "hello there");
+        assert_eq!(reloaded.cli_session_id.as_deref(), Some("thr-123"));
+        assert_eq!(reloaded.model.as_deref(), Some("gpt-5.6-sol"));
+        assert_eq!(reloaded.effort.as_deref(), Some("high"));
+
+        // A second turn must NOT clobber the title the first one set.
+        store
+            .finish_chat_turn(thread.id, Some("thr-124".into()), None, None, "ignored title")
+            .await
+            .unwrap();
+        assert_eq!(store.get_chat_thread(thread.id).await.unwrap().title, "hello there");
+
+        let messages = store.list_chat_messages(thread.id).await.unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, "user");
+        assert_eq!(messages[1].role, "assistant");
+
+        let listed = store.list_chat_threads().await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, thread.id);
+
+        store.delete_chat_thread(thread.id).await.unwrap();
+        assert!(store.list_chat_messages(thread.id).await.unwrap().is_empty());
+        assert!(matches!(
+            store.get_chat_thread(thread.id).await,
+            Err(AppError::NotFound(_))
+        ));
+        assert!(matches!(
+            store.delete_chat_thread(thread.id).await,
+            Err(AppError::NotFound(_))
+        ));
     }
 }

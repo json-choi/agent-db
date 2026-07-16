@@ -1,6 +1,7 @@
 //! dopedb — Rust core entrypoint. Wires modules, state, and the Tauri command
 //! surface. Agents drive the DB through the local MCP server (see the `mcp` module).
 
+mod agent;
 mod audit;
 mod commands;
 mod connection;
@@ -19,6 +20,8 @@ mod state;
 mod store;
 
 pub use error::{AppError, AppResult};
+
+use std::time::Duration;
 
 use tauri::Manager;
 
@@ -115,9 +118,31 @@ pub fn run() {
             commands::disconnect_platform,
             commands::open_agent_app,
             commands::pick_file,
+            commands::detect_agent_clis,
+            commands::list_agent_models,
+            commands::list_chat_threads,
+            commands::get_chat_messages,
+            commands::create_chat_thread,
+            commands::delete_chat_thread,
+            commands::send_chat_turn,
             executor::cancel::cancel_query,
             mcp::mcp_runtime_status,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            // A chat turn's CLI child is `kill_on_drop`, but that only fires once its
+            // future is actually dropped by the tokio task polling it — not the instant
+            // `cancel()` sends the signal. Sending the signal and returning immediately
+            // races the process's own exit (this callback runs right before the process
+            // is torn down), so the child can be orphaned. Block here (bounded) until
+            // the turn has actually wound down, so the child is reaped first.
+            if let tauri::RunEvent::Exit = event {
+                let chat = app_handle.state::<state::AppState>().chat.clone();
+                if let Some(turn_id) = chat.active_turn() {
+                    executor::cancel::cancel(turn_id);
+                    tauri::async_runtime::block_on(chat.wait_idle(Duration::from_secs(5)));
+                }
+            }
+        });
 }

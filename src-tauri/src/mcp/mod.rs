@@ -138,7 +138,7 @@ pub fn load_or_create_token() -> String {
 /// we force 0600; on Windows we strip ACL inheritance and grant only the current
 /// user (the same shape OpenSSH requires for private keys on Windows).
 #[cfg(unix)]
-fn write_private(path: &std::path::Path, bytes: &[u8]) {
+pub(crate) fn write_private(path: &std::path::Path, bytes: &[u8]) {
     use std::io::Write;
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     match std::fs::OpenOptions::new()
@@ -271,7 +271,7 @@ where
 }
 
 #[cfg(windows)]
-fn write_private(path: &std::path::Path, bytes: &[u8]) {
+pub(crate) fn write_private(path: &std::path::Path, bytes: &[u8]) {
     let sid = match current_user_sid() {
         Ok(sid) => sid,
         Err(e) => {

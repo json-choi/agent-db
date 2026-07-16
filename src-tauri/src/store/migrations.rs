@@ -99,4 +99,30 @@ CREATE TABLE IF NOT EXISTS schema_cache (
     introspected_at TEXT NOT NULL,
     catalog_json    TEXT NOT NULL
 );
+
+-- In-app agent chat: one row per conversation thread. `cli_session_id` is the
+-- underlying CLI's own resume token (Claude Code `--resume` / Codex `resume <id>`),
+-- persisted here so a conversation survives across app restarts. `model`/`effort`
+-- hold the values used by the most recent turn, seeding the picker on thread switch.
+CREATE TABLE IF NOT EXISTS agent_chat_threads (
+    id             TEXT PRIMARY KEY,
+    provider       TEXT NOT NULL,
+    title          TEXT NOT NULL DEFAULT '',
+    cli_session_id TEXT,
+    model          TEXT,
+    effort         TEXT,
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_chat_threads_updated ON agent_chat_threads(updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS agent_chat_messages (
+    id         TEXT PRIMARY KEY,
+    thread_id  TEXT NOT NULL REFERENCES agent_chat_threads(id) ON DELETE CASCADE,
+    role       TEXT NOT NULL,      -- user|assistant
+    text       TEXT NOT NULL,
+    error      TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_chat_messages_thread ON agent_chat_messages(thread_id, created_at);
 "#;
