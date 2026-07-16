@@ -3,7 +3,12 @@
 // A stale/unknown driverId falls back the same way ConnectionForm's activeDriver does
 // (recommended driver for the engine, then the engine's first driver) so the two never
 // disagree; only no driver at all for the engine fails closed to an empty set.
-import type { ConnectionProfile, DriverCapability, DriverDescriptor } from "../ipc/types";
+import type {
+  ConnectionProfile,
+  DriverCapability,
+  DriverDescriptor,
+  Engine,
+} from "../ipc/types";
 
 export function connectionCapabilities(
   drivers: DriverDescriptor[],
@@ -22,4 +27,12 @@ export function hasCapability(
   cap: DriverCapability,
 ): boolean {
   return connectionCapabilities(drivers, conn).has(cap);
+}
+
+// Document-family engines: no SQL surface, queried through the typed document API.
+// The single place a future document engine gets added — screens branch on this
+// instead of comparing engine literals (mirrors Engine::is_document in model.rs).
+// `undefined` (no connection in scope) counts as not-document.
+export function isDocumentEngine(engine: Engine | undefined): boolean {
+  return engine === "mongodb";
 }

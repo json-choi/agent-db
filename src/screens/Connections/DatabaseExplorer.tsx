@@ -10,6 +10,7 @@ import {
 } from "../../ipc/commands";
 import type { Catalog, CatalogTable, ConnectionProfile } from "../../ipc/types";
 import { errMessage } from "../../ipc/types";
+import { isDocumentEngine } from "../../lib/capabilities";
 import { catalogQuery, fetchFreshCatalog, qk } from "../../lib/queries";
 import {
   buildConnectionSections,
@@ -355,7 +356,7 @@ export function DatabaseExplorer({
       !!dragged &&
       dragged.id !== target.id &&
       dragged.engine === target.engine &&
-      dragged.engine !== "mongodb"
+      !isDocumentEngine(dragged.engine)
     );
   }
 
@@ -366,7 +367,7 @@ export function DatabaseExplorer({
       !!dragged &&
       !!engine &&
       dragged.engine === engine &&
-      dragged.engine !== "mongodb" &&
+      !isDocumentEngine(dragged.engine) &&
       !group.connections.some((conn) => conn.id === dragged.id)
     );
   }
@@ -824,7 +825,7 @@ export function DatabaseExplorer({
                     </span>
                   )}
                   {/* CREATE-TABLE DDL is a SQL-only concept; MongoDB collections have none. */}
-                  {c.engine !== "mongodb" && (
+                  {!isDocumentEngine(c.engine) && (
                     <button
                       className="ddl-btn"
                       title={t("connections.showDdl")}

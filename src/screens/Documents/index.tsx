@@ -1,9 +1,9 @@
 // Ad-hoc read-only document query console for MongoDB connections (the "documents"
 // tab's counterpart to the SQL console). find/aggregate/count are built from JSON
 // textareas, parsed client-side, then run through the same approved read-only path SQL uses.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { cancelQuery, runDocumentQuery } from "../../ipc/commands";
+import { runDocumentQuery } from "../../ipc/commands";
 import type { ConnectionProfile, DocumentPage, DocumentQuery, QueryResult } from "../../ipc/types";
 import { errMessage } from "../../ipc/types";
 import DataGrid from "../../components/DataGrid";
@@ -13,6 +13,7 @@ import { catalogQuery } from "../../lib/queries";
 import { documentsToGrid } from "../../lib/documentGrid";
 import { stamp } from "../../lib/export";
 import { useI18n } from "../../lib/i18n";
+import { useQueryRun } from "../../lib/useQueryRun";
 import "./documents.css";
 
 type Op = "find" | "aggregate" | "count";
@@ -92,13 +93,10 @@ export default function Documents({
     }
   }, [draft]);
 
-  const [running, setRunning] = useState(false);
+  const { running, cancelled, execute: runQuery, cancel } = useQueryRun();
   const [result, setResult] = useState<{ page: DocumentPage; at: string } | null>(null);
   const [parseErr, setParseErr] = useState<string | null>(null);
   const [runErr, setRunErr] = useState<string | null>(null);
-  const [cancelled, setCancelled] = useState(false);
-  const queryIdRef = useRef<string | null>(null);
-  const cancelledRef = useRef(false);
 
   function buildQuery(): DocumentQuery | null {
     try {
@@ -131,30 +129,14 @@ export default function Documents({
     const query = buildQuery();
     if (!query) return;
 
-    const id = crypto.randomUUID();
-    queryIdRef.current = id;
-    cancelledRef.current = false;
-    setRunning(true);
-    setCancelled(false);
     try {
-      const page = await runDocumentQuery(connection.id, query, true, id);
-      setResult({ page, at: new Date().toLocaleTimeString() });
+      await runQuery(async (id) => {
+        const page = await runDocumentQuery(connection.id, query, true, id);
+        setResult({ page, at: new Date().toLocaleTimeString() });
+      });
     } catch (e) {
-      if (cancelledRef.current) setCancelled(true);
-      else {
-        setRunErr(errMessage(e));
-        setResult(null);
-      }
-    } finally {
-      queryIdRef.current = null;
-      setRunning(false);
-    }
-  }
-
-  function cancel() {
-    if (queryIdRef.current) {
-      cancelledRef.current = true;
-      void cancelQuery(queryIdRef.current);
+      setRunErr(errMessage(e));
+      setResult(null);
     }
   }
 

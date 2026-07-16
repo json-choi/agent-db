@@ -15,7 +15,7 @@ import type {
   SafetySettings,
 } from "./ipc/types";
 import { errMessage } from "./ipc/types";
-import { hasCapability } from "./lib/capabilities";
+import { hasCapability, isDocumentEngine } from "./lib/capabilities";
 import { driversQuery } from "./lib/queries";
 import { buildConnectionSections, type SchemaConnectionGroup } from "./lib/schemaDiff";
 import { tableKey, tableLabel } from "./lib/tableRef";
@@ -261,7 +261,7 @@ function Shell() {
   const schemaGroups = useMemo(
     () =>
       buildConnectionSections(conns).flatMap((section) =>
-        section.kind === "group" && section.group.connections[0]?.engine !== "mongodb"
+        section.kind === "group" && !isDocumentEngine(section.group.connections[0]?.engine)
           ? [section.group]
           : [],
       ),

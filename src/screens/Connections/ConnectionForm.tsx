@@ -19,6 +19,7 @@ import { errMessage } from "../../ipc/types";
 import { Icon } from "../../components/Icon";
 import InfoTip from "../../components/InfoTip";
 import { useToast } from "../../components/Toast";
+import { isDocumentEngine } from "../../lib/capabilities";
 import { useI18n } from "../../lib/i18n";
 import { driversQuery } from "../../lib/queries";
 import "./connections.css";
@@ -381,7 +382,7 @@ export function ConnectionForm({
   }
 
   const isSqlite = form.engine === "sqlite";
-  const isMongo = form.engine === "mongodb";
+  const isMongo = form.engine === "mongodb"; // SRV 등 MongoDB URI 고유 폼 필드용 — 문서엔진 일반 분기는 isDocumentEngine
   const srv = form.extraParams.srv === "true";
   function setSrv(checked: boolean) {
     setForm((f) => {
@@ -500,7 +501,7 @@ export function ConnectionForm({
               port: f.port === DEFAULT_PORT[f.engine] ? DEFAULT_PORT[engine] : f.port,
               // MongoDB hides the schema-group field (SQL-only diff feature) — a
               // carried-over value would be invisible yet still block saving.
-              schemaGroup: engine === "mongodb" ? null : f.schemaGroup,
+              schemaGroup: isDocumentEngine(engine) ? null : f.schemaGroup,
             }));
           }}
         >
