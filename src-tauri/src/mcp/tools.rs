@@ -413,7 +413,7 @@ impl DbTools {
         self.audit(profile.id, profile.engine, "(describe_table)", QueryKind::Read, "mcp:describe_table", None)
             .await;
         // Sampled document structure is a hint, not a schema guarantee.
-        let note = matches!(profile.engine, Engine::Mongodb).then_some(
+        let note = profile.engine.is_document().then_some(
             "MongoDB columns are inferred from a bounded document sample — fields not seen in the sample may exist",
         );
         let out = json!({
@@ -463,7 +463,7 @@ impl DbTools {
         );
         // MongoDB has no SQL surface — point the agent at the typed document tool
         // instead of letting the fail-safe classifier return a misleading verdict.
-        if matches!(profile.engine, Engine::Mongodb) {
+        if profile.engine.is_document() {
             return Err(McpError::invalid_params(
                 "this is a MongoDB connection — SQL planning does not apply; call \
                  run_document_query with a typed find/aggregate/countDocuments request",
@@ -802,7 +802,7 @@ impl DbTools {
                 "sql": query_text,
             }),
         );
-        if !matches!(profile.engine, Engine::Mongodb) {
+        if !profile.engine.is_document() {
             return Err(McpError::invalid_params(
                 "run_document_query only works on MongoDB connections — use plan_query/run_query for SQL engines",
                 None,

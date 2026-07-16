@@ -19,6 +19,15 @@ pub enum Engine {
     Mongodb,
 }
 
+impl Engine {
+    /// Document-family engines: no SQL surface, queried through the typed
+    /// document API. THE single place a future document engine gets added —
+    /// every SQL-vs-document branch asks this instead of matching variants.
+    pub fn is_document(self) -> bool {
+        matches!(self, Engine::Mongodb)
+    }
+}
+
 /// Hosting/control-plane provider. `Auto` preserves connection-URL convenience while
 /// keeping provider-specific behavior separate from the database wire protocol.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

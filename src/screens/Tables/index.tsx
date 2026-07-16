@@ -21,6 +21,7 @@ import RowEditor, { type RowEditorSubmission } from "../../components/RowEditor"
 import ApprovalCard from "../../components/ApprovalCard";
 import Skeleton from "../../components/Skeleton";
 import { useToast } from "../../components/Toast";
+import { isDocumentEngine } from "../../lib/capabilities";
 import { documentsToGrid } from "../../lib/documentGrid";
 import { documentCountQuery, documentRowsQuery, tableRowsQuery } from "../../lib/queries";
 import { tableKey, tableLabel } from "../../lib/tableRef";
@@ -124,7 +125,7 @@ export default function TableData({
 }) {
   // MongoDB has no SQL path at all — read-only paging over documentRowsQuery, no
   // filters/sort/row-editing. Branch only; the SQL implementation below is unchanged.
-  if (connection.engine === "mongodb") {
+  if (isDocumentEngine(connection.engine)) {
     return <MongoTableData connection={connection} table={table} />;
   }
   return <SqlTableData connection={connection} table={table} safety={safety} />;

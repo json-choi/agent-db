@@ -641,7 +641,7 @@ pub async fn run_document_query(
     origin: Option<String>,
 ) -> AppResult<DocumentPage> {
     let profile = state.store.get_connection(id).await?;
-    if !matches!(profile.engine, Engine::Mongodb) {
+    if !profile.engine.is_document() {
         return Err(AppError::Config(
             "document queries are only available on MongoDB connections".into(),
         ));
@@ -1014,7 +1014,7 @@ pub async fn get_monitoring_status(
     id: Uuid,
 ) -> AppResult<MonitoringStatus> {
     let profile = state.store.get_connection(id).await?;
-    if matches!(profile.engine, Engine::Mongodb) {
+    if profile.engine.is_document() {
         // No PostgreSQL-style predefined roles — the basic collector, no probe needed.
         return Ok(MonitoringStatus {
             engine: profile.engine,
