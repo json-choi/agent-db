@@ -2,7 +2,7 @@
 // manual SQL, so execution stays in-place: action bar status first, results below.
 // Multi-statement scripts execute through the backend script runner and return
 // per-statement results. ⌘↩ runs the current draft or selected SQL.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type {
   ConnectionProfile,
@@ -13,7 +13,6 @@ import type {
 } from "../../ipc/types";
 import { errDetails, errMessage, type AppErrorDetails } from "../../ipc/types";
 import {
-  cancelQuery,
   classifySql,
   mcpPlatforms,
   openAgentApp,
@@ -31,6 +30,7 @@ import DataGrid from "../../components/DataGrid";
 import ResultToolbar from "../../components/ResultToolbar";
 import { stamp } from "../../lib/export";
 import { useI18n } from "../../lib/i18n";
+import { useQueryRun } from "../../lib/useQueryRun";
 import { useToast } from "../../components/Toast";
 import "./sql.css";
 
@@ -245,13 +245,10 @@ export default function Sql({
   const [run, setRun] = useState<Run | null>(null);
   const [limit, setLimit] = useState(STEP);
   const [scriptOut, setScriptOut] = useState<{ outcome: ScriptOutcome; at: string } | null>(null);
-  const [running, setRunning] = useState(false);
+  const { running, cancelled, execute, cancel } = useQueryRun();
   const [runErr, setRunErr] = useState<QueryErrorInfo | null>(null);
   const [lastAttempt, setLastAttempt] = useState<LastAttempt | null>(null);
-  const [cancelled, setCancelled] = useState(false);
   const [elapsed, setElapsed] = useState(0);
-  const queryId = useRef<string | null>(null);
-  const cancelledRef = useRef(false);
   const [agentPlatforms, setAgentPlatforms] = useState<PlatformInfo[]>([]);
   const [agentErr, setAgentErr] = useState<string | null>(null);
   const [askingAgent, setAskingAgent] = useState<string | null>(null);
@@ -267,45 +264,29 @@ export default function Sql({
 
     const statements = splitStatements(sql);
     const script = statements.length > 1;
-    const id = crypto.randomUUID();
     const at = new Date().toLocaleTimeString();
-    queryId.current = id;
-    cancelledRef.current = false;
-    setRunning(true);
     setRunErr(null);
-    setCancelled(false);
     setLimit(STEP);
     setResultKind(script ? "script" : "single");
     setLastAttempt({ sql, at });
 
     try {
-      if (script) {
-        const outcome = await runScript(connection.id, sql, true, id);
-        setScriptOut({ outcome, at });
-      } else {
-        const outcome = await runSql(connection.id, sql, true, id);
-        setRun({ sql, outcome, at });
-      }
+      await execute(async (id) => {
+        if (script) {
+          const outcome = await runScript(connection.id, sql, true, id);
+          setScriptOut({ outcome, at });
+        } else {
+          const outcome = await runSql(connection.id, sql, true, id);
+          setRun({ sql, outcome, at });
+        }
+      });
     } catch (e) {
-      if (cancelledRef.current) setCancelled(true);
-      else {
-        const details = errDetails(e);
-        setRunErr({ ...details, sql, at: new Date().toLocaleTimeString() });
-        // Clear the attempted kind so a failed run can't leave the previous
-        // result sitting under the error card looking current.
-        if (script) setScriptOut(null);
-        else setRun(null);
-      }
-    } finally {
-      queryId.current = null;
-      setRunning(false);
-    }
-  }
-
-  function cancelRun() {
-    if (queryId.current) {
-      cancelledRef.current = true;
-      void cancelQuery(queryId.current);
+      const details = errDetails(e);
+      setRunErr({ ...details, sql, at: new Date().toLocaleTimeString() });
+      // Clear the attempted kind so a failed run can't leave the previous
+      // result sitting under the error card looking current.
+      if (script) setScriptOut(null);
+      else setRun(null);
     }
   }
 
@@ -463,7 +444,7 @@ export default function Sql({
             >
               <Icon name="refresh" />
             </span>
-            <button className="btn" onClick={cancelRun}>
+            <button className="btn" onClick={cancel}>
               {t("sql.cancel")}
             </button>
           </>
