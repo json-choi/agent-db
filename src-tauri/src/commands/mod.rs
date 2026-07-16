@@ -1246,17 +1246,19 @@ pub fn open_agent_app(platform: String) -> AppResult<String> {
 /// Claude Code / Codex CLI installed + subscription-login status. Distinct from
 /// `mcp_platforms` (which asks whether dopedb is *registered* in a platform's MCP
 /// config) — conflating the two would couple this chat gate to the Settings > MCP
-/// screen's state.
+/// screen's state. Async + internally timeout-bounded (see `agent::AGENT_PROBE_TIMEOUT`)
+/// so a hung `claude`/`codex` subprocess can't freeze the app.
 #[tauri::command]
-pub fn detect_agent_clis() -> Vec<crate::agent::CliInfo> {
-    crate::agent::detect_clis()
+pub async fn detect_agent_clis() -> Vec<crate::agent::CliInfo> {
+    crate::agent::detect_clis_async().await
 }
 
 /// Models `provider`'s CLI can run a turn against (Codex: its own live catalog;
-/// Claude Code: a static fallback — see `agent::claude_models`).
+/// Claude Code: a static fallback — see `agent::claude_models`). Async + internally
+/// timeout-bounded, same as `detect_agent_clis`.
 #[tauri::command]
-pub fn list_agent_models(provider: crate::agent::AgentProvider) -> AppResult<Vec<crate::agent::AgentModel>> {
-    crate::agent::list_models(provider)
+pub async fn list_agent_models(provider: crate::agent::AgentProvider) -> AppResult<Vec<crate::agent::AgentModel>> {
+    crate::agent::list_models_async(provider).await
 }
 
 /// Saved chat threads, most recently updated first.
@@ -1276,14 +1278,17 @@ pub async fn get_chat_messages(
 
 /// Create a new (empty) chat thread. The frontend calls this on a draft's first send,
 /// immediately before `send_chat_turn` — an unsent draft never reaches the store.
+/// `connection_id` binds the thread to one DopeDB connection for context injection
+/// (`None` = unscoped); it is fixed at creation and cannot change for this thread.
 #[tauri::command]
 pub async fn create_chat_thread(
     state: State<'_, AppState>,
     provider: crate::agent::AgentProvider,
+    connection_id: Option<Uuid>,
     model: Option<String>,
     effort: Option<String>,
 ) -> AppResult<crate::agent::ChatThread> {
-    state.store.create_chat_thread(provider, model, effort).await
+    state.store.create_chat_thread(provider, connection_id, model, effort).await
 }
 
 /// Delete a thread; its messages cascade with it.

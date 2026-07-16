@@ -146,6 +146,21 @@
   border-color: transparent;
 }
 
+/* Connection scope indicator next to the provider tabs — same chip shape as a thread row's,
+   dimmed instead of colored when the thread's connection has since been deleted. */
+.agent-chat-connection-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-1);
+  margin-left: auto;
+  color: var(--ds-text-muted);
+  font-size: var(--ds-font-size-sm);
+}
+
+.agent-chat-connection-chip.agent-chat-connection-missing {
+  opacity: 0.6;
+}
+
 .agent-chat-command {
   margin: 0;
   padding: var(--ds-space-2) var(--ds-space-3);

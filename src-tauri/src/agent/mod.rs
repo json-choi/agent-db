@@ -21,7 +21,9 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::executor::cancel;
+use crate::introspect::Catalog;
 use crate::mcp::connect;
+use crate::model::ConnectionProfile;
 use crate::store::Store;
 
 /// Which CLI a chat turn runs through. Kebab-case on the wire (`"claude"`/`"codex"`)
@@ -52,11 +54,14 @@ pub struct CliInfo {
 /// One persisted chat thread (mirrors `agent_chat_threads`). `cli_session_id` is the
 /// underlying CLI's own resume token; `model`/`effort` are the values USED by the most
 /// recent turn, so the frontend picker can seed itself from them on thread switch.
+/// `connection_id` binds the thread to one DopeDB connection for context injection
+/// (`None` = unscoped) — see `send_turn`'s first-turn context block.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatThread {
     pub id: Uuid,
     pub provider: AgentProvider,
+    pub connection_id: Option<Uuid>,
     pub title: String,
     pub cli_session_id: Option<String>,
     pub model: Option<String>,
@@ -226,6 +231,78 @@ async fn read_tail(stderr: tokio::process::ChildStderr) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
+/// What a turn's streaming loop has captured so far. Lives in an `Arc<Mutex<_>>`
+/// created BEFORE the `run` future below (see `send_turn`) rather than as that
+/// future's own locals, so a cancel/timeout — which drops `run` mid-flight via
+/// `cancel::guard`'s `select!` — still leaves whatever was captured readable: a
+/// dropped future can no longer write here, but nothing erases what it already wrote.
+#[derive(Default)]
+struct TurnProgress {
+    session_id: Option<String>,
+    text: String,
+    error: Option<String>,
+}
+
+/// Max tables rendered in a connection-scoped thread's context block before
+/// truncating — keeps the block bounded for a database with thousands of tables.
+const CONTEXT_MAX_TABLES: usize = 150;
+
+/// Renders the `<dopedb-context>` block prepended to the CLI-bound message on a
+/// connection-scoped thread's first turn (see `send_turn`). Pure so the cache-present /
+/// cache-absent / truncation cases are unit-testable without a live DB connection.
+/// Deliberately omits host/port/credentials — name, engine, env, and db name are the
+/// only connection details safe to hand an LLM-controlled subprocess. Written in
+/// English regardless of app locale: this text is model input, not UI copy.
+fn build_context_block(profile: &ConnectionProfile, catalog_json: Option<&str>) -> String {
+    let schema_summary = catalog_json
+        .and_then(|j| serde_json::from_str::<Catalog>(j).ok())
+        .filter(|cat| !cat.tables.is_empty())
+        .map(|cat| {
+            let total = cat.tables.len();
+            let mut lines: Vec<String> = cat
+                .tables
+                .iter()
+                .take(CONTEXT_MAX_TABLES)
+                .map(|t| {
+                    let qualified = match &t.schema {
+                        Some(s) => format!("{s}.{}", t.name),
+                        None => t.name.clone(),
+                    };
+                    match t.row_estimate {
+                        Some(rows) => format!("{qualified}({} cols, ~{rows} rows)", t.columns.len()),
+                        None => format!("{qualified}({} cols, rows unknown)", t.columns.len()),
+                    }
+                })
+                .collect();
+            if total > CONTEXT_MAX_TABLES {
+                lines.push(format!("...and {} more", total - CONTEXT_MAX_TABLES));
+            }
+            lines.join("\n")
+        })
+        .unwrap_or_else(|| "No schema cache available — call list_tables to look it up.".to_string());
+
+    let env_label = profile.env.as_deref().unwrap_or("unlabeled");
+    format!(
+        "<dopedb-context>\n\
+Connection: {name}\n\
+Engine: {engine}\n\
+Environment: {env_label}\n\
+Database: {database}\n\
+\n\
+Schema:\n\
+{schema_summary}\n\
+\n\
+This conversation is scoped to DopeDB connection '{name}' ({env_label}). Always pass \
+connection: '{name}' on every mcp__dopedb__* tool call. Only mention other connections \
+if the user explicitly asks for them. If a query result looks useful, ask the user for \
+consent before proposing to save it with create_dashboard.\n\
+</dopedb-context>",
+        name = profile.name,
+        engine = crate::store::engine_str(profile.engine),
+        database = profile.database,
+    )
+}
+
 /// Run one chat turn against `thread_id`: load the thread's provider + resumable CLI
 /// session, insert the user message immediately, spawn the CLI, stream its stdout as
 /// `agent:chat_event`s, and on completion (success, error, cancel, or timeout) persist
@@ -255,24 +332,53 @@ pub async fn send_turn(
     let resume = thread.cli_session_id.clone();
 
     // Persisted before the CLI ever spawns, so the message survives even a turn that
-    // fails to start (bad binary, etc.).
+    // fails to start (bad binary, etc.). Kept as the user typed it — any context block
+    // below is added only to the copy handed to the CLI.
     store.insert_chat_message(thread_id, "user", &message, None).await?;
+
+    // A connection-scoped thread's very first turn (no CLI session to resume yet) gets
+    // a context block (connection profile + compact schema summary) prepended to the
+    // CLI-bound message. A deleted/unreadable connection just skips the block instead
+    // of failing the turn — the frontend is expected to warn before this is ever hit.
+    let cli_message = match (thread.connection_id, resume.is_none()) {
+        (Some(conn_id), true) => match store.get_connection(conn_id).await {
+            Ok(profile) => {
+                let catalog_json = store.get_schema_cache(conn_id).await.unwrap_or(None);
+                format!("{}\n\n{message}", build_context_block(&profile, catalog_json.as_deref()))
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "chat: connection {conn_id} for thread {thread_id} unavailable, sending turn without context: {e}"
+                );
+                message.clone()
+            }
+        },
+        _ => message.clone(),
+    };
 
     let cmd_result = match provider {
         AgentProvider::Claude => {
-            claude::command(&message, resume.as_deref(), &mcp_token, model.as_deref(), effort.as_deref())
+            claude::command(&cli_message, resume.as_deref(), &mcp_token, model.as_deref(), effort.as_deref())
         }
         AgentProvider::Codex => {
-            codex::command(&message, resume.as_deref(), &mcp_token, model.as_deref(), effort.as_deref())
+            codex::command(&cli_message, resume.as_deref(), &mcp_token, model.as_deref(), effort.as_deref())
         }
     };
+
+    // Captured outside `run` so cancel/timeout (which drops `run` mid-flight) can't
+    // erase it — see `TurnProgress`. Seeded with the thread's existing session id so a
+    // cancelled-before-any-signal turn still round-trips whatever was already resumable.
+    let progress = Arc::new(std::sync::Mutex::new(TurnProgress {
+        session_id: resume.clone(),
+        ..Default::default()
+    }));
 
     // `cmd_result`'s Err (bad binary, config dir unwritable, etc.) is folded into
     // `outcome` below rather than `?`-propagated here, so a turn that fails before it
     // ever spawns still reaches the outcome-handling block: the already-persisted user
     // message gets a matching assistant/error row and the thread's title/updated_at
     // are still set, instead of the turn silently vanishing from the transcript.
-    let outcome: AppResult<(Option<String>, bool, Option<String>, String)> = match cmd_result {
+    let outcome: AppResult<bool> = match cmd_result {
         Ok(mut cmd) => {
             cmd.current_dir(agent_workdir())
                 .kill_on_drop(true) // a cancelled/timed-out/dropped future kills the real child too
@@ -285,9 +391,6 @@ pub async fn send_turn(
                 let stdout = child.stdout.take().expect("piped");
                 let stderr = child.stderr.take().expect("piped");
                 let mut out_lines = tokio::io::BufReader::new(stdout).lines();
-                let mut new_session_id = resume.clone();
-                let mut assembled_error: Option<String> = None;
-                let mut assembled_text = String::new();
 
                 while let Some(line) = out_lines.next_line().await.map_err(AppError::Io)? {
                     if line.trim().is_empty() {
@@ -311,10 +414,10 @@ pub async fn send_turn(
                         match signal {
                             ChatSignal::Text(chunk) => {
                                 emit_event(&app, turn_id, thread_id, &chunk);
-                                assembled_text.push_str(&chunk);
+                                progress.lock().unwrap().text.push_str(&chunk);
                             }
-                            ChatSignal::SessionId(id) => new_session_id = Some(id),
-                            ChatSignal::TurnFailed(msg) => assembled_error = Some(msg),
+                            ChatSignal::SessionId(id) => progress.lock().unwrap().session_id = Some(id),
+                            ChatSignal::TurnFailed(msg) => progress.lock().unwrap().error = Some(msg),
                         }
                     }
                 }
@@ -322,21 +425,38 @@ pub async fn send_turn(
                 let status = child.wait().await.map_err(AppError::Io)?;
                 // A CLI can report a turn failure via structured JSONL (`TurnFailed`) while
                 // still exiting 0 — the exit code alone isn't a reliable success signal, so an
-                // explicit failure signal always overrides it.
-                let ok = status.success() && assembled_error.is_none();
-                Ok::<_, AppError>((new_session_id, ok, assembled_error.or(stderr_tail), assembled_text))
+                // explicit failure signal always overrides it. `ok` is decided before the
+                // stderr-tail fallback is folded in below (matching the pre-refactor
+                // behavior exactly), so it reflects only the structured signal + exit code.
+                let mut p = progress.lock().unwrap();
+                let ok = status.success() && p.error.is_none();
+                if p.error.is_none() {
+                    p.error = stderr_tail;
+                }
+                drop(p);
+                Ok::<_, AppError>(ok)
             };
 
             cancel::guard(Some(turn_id), CHAT_TURN_TIMEOUT, run).await
         }
         Err(e) => Err(e),
     };
+
+    // Read whatever the streaming loop captured before `outcome` resolved. Safe even on
+    // cancel/timeout: by the time `cancel::guard` returns, `run` has either finished
+    // normally or been dropped by its `select!` — either way nothing writes to
+    // `progress` again, so a cancelled/timed-out turn still keeps its streamed text and
+    // any session id the CLI had already emitted, instead of reverting to empty/`None`.
+    let (progress_session_id, assembled_text, progress_error) = {
+        let p = progress.lock().unwrap();
+        (p.session_id.clone(), p.text.clone(), p.error.clone())
+    };
     // Even a cancelled/errored-before-any-signal turn still gets an assistant row +
     // thread update — a failed turn should never vanish from the transcript, and the
     // (possibly still-`None`) session id must round-trip so a later retry can resume.
-    let (session_id, ok, error, assembled_text) = match &outcome {
-        Ok((session_id, ok, error, text)) => (session_id.clone(), *ok, error.clone(), text.clone()),
-        Err(e) => (resume.clone(), false, Some(e.to_string()), String::new()),
+    let (session_id, ok, error) = match &outcome {
+        Ok(ok_flag) => (progress_session_id, *ok_flag, progress_error),
+        Err(e) => (progress_session_id, false, progress_error.or_else(|| Some(e.to_string()))),
     };
 
     if let Err(e) = store
@@ -354,8 +474,8 @@ pub async fn send_turn(
 
     emit_done(&app, turn_id, thread_id, ok, error.as_deref());
     match outcome {
-        Ok((_, true, _, _)) => Ok(()),
-        Ok((_, false, error, _)) => Err(AppError::Agent(
+        Ok(true) => Ok(()),
+        Ok(false) => Err(AppError::Agent(
             error.unwrap_or_else(|| format!("{provider:?} exited with a non-zero status")),
         )),
         Err(e) => Err(e),
@@ -436,12 +556,65 @@ pub fn list_models(provider: AgentProvider) -> AppResult<Vec<AgentModel>> {
     }
 }
 
+/// Ceiling for one CLI-detection/model-catalog probe sweep, run on a blocking thread
+/// (see `detect_clis_async`/`list_models_async`) — well under the UI's own patience
+/// (opening the chat tab or the model picker), so a hung `claude`/`codex` child (dead
+/// network call, a first-run Gatekeeper prompt, a broken PATH shim) can no longer
+/// freeze the whole app the way calling `detect_clis`/`list_models` directly from a
+/// synchronous Tauri command used to.
+const AGENT_PROBE_TIMEOUT: Duration = Duration::from_secs(8);
+
 /// Installed + subscription-login status for both supported CLIs. Deliberately
 /// separate from `mcp::connect::detect()` (which asks "is dopedb registered in this
 /// platform's MCP config") — this answers a different question, so the chat gate and
 /// the Settings > MCP screen never move each other's state around.
 pub fn detect_clis() -> Vec<CliInfo> {
     vec![detect_claude(), detect_codex()]
+}
+
+/// A stand-in `CliInfo` used when the detection sweep didn't finish within
+/// `AGENT_PROBE_TIMEOUT` — reported as "not installed" since the real answer is unknown.
+fn probe_timed_out(id: AgentProvider, name: &str) -> CliInfo {
+    CliInfo {
+        id,
+        name: name.into(),
+        installed: false,
+        authenticated: false,
+        auth_method: None,
+        note: "Detection timed out; try again.".into(),
+    }
+}
+
+/// Async, timeout-bounded wrapper around [`detect_clis`] for the Tauri command: runs
+/// the blocking subprocess probes off the async runtime's IPC-handling thread and
+/// gives up after `AGENT_PROBE_TIMEOUT` rather than hanging the app indefinitely. The
+/// blocking task itself isn't cancelled on timeout (there's no cooperative way to stop
+/// a `Command::output()` already in flight) — it's just no longer awaited.
+pub async fn detect_clis_async() -> Vec<CliInfo> {
+    tokio::time::timeout(AGENT_PROBE_TIMEOUT, tokio::task::spawn_blocking(detect_clis))
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or_else(|| {
+            vec![
+                probe_timed_out(AgentProvider::Claude, "Claude Code"),
+                probe_timed_out(AgentProvider::Codex, "Codex CLI"),
+            ]
+        })
+}
+
+/// Async, timeout-bounded wrapper around [`list_models`] — see `AGENT_PROBE_TIMEOUT`.
+pub async fn list_models_async(provider: AgentProvider) -> AppResult<Vec<AgentModel>> {
+    match tokio::time::timeout(
+        AGENT_PROBE_TIMEOUT,
+        tokio::task::spawn_blocking(move || list_models(provider)),
+    )
+    .await
+    {
+        Ok(Ok(result)) => result,
+        Ok(Err(_)) => Err(AppError::Agent(format!("{provider:?} model list probe panicked"))),
+        Err(_) => Err(AppError::Agent(format!("{provider:?} model list timed out"))),
+    }
 }
 
 fn detect_claude() -> CliInfo {
@@ -522,5 +695,96 @@ mod tests {
         slot.wait_idle(Duration::from_millis(50)).await;
         assert!(start.elapsed() >= Duration::from_millis(50));
         assert!(slot.active_turn().is_some(), "bounded wait must not block forever");
+    }
+
+    // ── build_context_block ──────────────────────────────────────────────────────
+
+    use crate::introspect::{Column, ForeignKey, Table};
+    use crate::model::{Engine, Provider};
+
+    fn profile(env: Option<&str>) -> ConnectionProfile {
+        ConnectionProfile {
+            id: Uuid::new_v4(),
+            name: "analytics".into(),
+            engine: Engine::Postgres,
+            provider: Provider::Auto,
+            driver_id: None,
+            host: "db.internal.example".into(),
+            port: 5432,
+            database: "app".into(),
+            username: "reader".into(),
+            sslmode: "prefer".into(),
+            extra_params: Default::default(),
+            readonly_default: true,
+            allow_writes: false,
+            secret_ref: None,
+            env: env.map(str::to_string),
+            schema_group: None,
+        }
+    }
+
+    fn table(schema: Option<&str>, name: &str, cols: usize, rows: Option<i64>) -> Table {
+        Table {
+            schema: schema.map(str::to_string),
+            name: name.into(),
+            kind: "table".into(),
+            columns: (0..cols)
+                .map(|i| Column {
+                    name: format!("c{i}"),
+                    data_type: "text".into(),
+                    nullable: true,
+                    pk: i == 0,
+                })
+                .collect(),
+            foreign_keys: Vec::<ForeignKey>::new(),
+            indexes: Vec::new(),
+            row_estimate: rows,
+        }
+    }
+
+    #[test]
+    fn no_cache_reports_the_fallback_line_and_never_leaks_host() {
+        let block = build_context_block(&profile(Some("prod")), None);
+        assert!(block.contains("No schema cache available"));
+        assert!(block.contains("Connection: analytics"));
+        assert!(block.contains("Environment: prod"));
+        assert!(block.starts_with("<dopedb-context>"));
+        assert!(block.trim_end().ends_with("</dopedb-context>"));
+        assert!(!block.contains("db.internal.example"), "host must never reach the model");
+        assert!(!block.contains("5432"), "port must never reach the model");
+    }
+
+    #[test]
+    fn no_env_label_falls_back_to_unlabeled() {
+        let block = build_context_block(&profile(None), None);
+        assert!(block.contains("Environment: unlabeled"));
+    }
+
+    #[test]
+    fn cache_present_lists_tables_compactly() {
+        let catalog = Catalog { tables: vec![table(Some("public"), "users", 4, Some(120))] };
+        let json = serde_json::to_string(&catalog).unwrap();
+        let block = build_context_block(&profile(None), Some(&json));
+        assert!(block.contains("public.users(4 cols, ~120 rows)"));
+    }
+
+    #[test]
+    fn cache_present_without_a_row_estimate_says_so() {
+        let catalog = Catalog { tables: vec![table(None, "events", 2, None)] };
+        let json = serde_json::to_string(&catalog).unwrap();
+        let block = build_context_block(&profile(None), Some(&json));
+        assert!(block.contains("events(2 cols, rows unknown)"));
+    }
+
+    #[test]
+    fn more_than_max_tables_are_truncated_with_a_count() {
+        let tables: Vec<Table> =
+            (0..(CONTEXT_MAX_TABLES + 10)).map(|i| table(None, &format!("t{i}"), 1, Some(1))).collect();
+        let catalog = Catalog { tables };
+        let json = serde_json::to_string(&catalog).unwrap();
+        let block = build_context_block(&profile(None), Some(&json));
+        assert!(block.contains("...and 10 more"));
+        assert!(block.contains(&format!("t{}", CONTEXT_MAX_TABLES - 1)), "last kept table must render");
+        assert!(!block.contains(&format!("t{}(", CONTEXT_MAX_TABLES)), "table beyond the cut must not render");
     }
 }

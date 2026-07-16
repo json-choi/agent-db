@@ -267,6 +267,9 @@ export interface CliInfo {
   installed: boolean;
   authenticated: boolean;
   authMethod: string | null;
+  // Present on the wire but deliberately unused for display — the onboarding card renders
+  // a per-provider i18n string instead (src/screens/AgentChat/index.tsx PROVIDER_NOTE_KEYS)
+  // so the subscription-login disclosure follows the app's language, not the backend's.
   note: string;
 }
 
@@ -281,10 +284,13 @@ export interface AgentModel {
 
 // A persisted conversation (Store/SQLite `agent_chat_threads`). model/effort are the values
 // used by the thread's most recent turn, seeded back into the composer when it's reopened.
+// connectionId is null for an unscoped thread (pre-dating connection scoping, or explicitly
+// started without one) — never used to pre-fill send_turn's context block in that case.
 // Mirrors src-tauri/src/agent/mod.rs.
 export interface ChatThread {
   id: string;
   provider: AgentProvider;
+  connectionId: string | null;
   title: string;
   cliSessionId: string | null;
   model: string | null;

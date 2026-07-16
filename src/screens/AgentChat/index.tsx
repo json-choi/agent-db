@@ -1,11 +1,20 @@
 // In-app agent chat, Codex-desktop-style: a thread rail on the left, a centered
 // conversation column, and an onboarding gate (install/auth/consent for the claude/codex
 // CLI) that still runs before the composer appears. The subscription/read-only disclosures
-// live in the onboarding cards (CliInfo.note, consent card) rather than a permanent banner.
+// live in the onboarding cards (per-provider i18n note, consent card) rather than a
+// permanent banner. A thread can optionally be scoped to one DB connection (chosen in the
+// draft composer, fixed once the thread is created) — App.tsx passes down the live
+// connection list and the app's currently-selected connection as the draft's default.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { deleteChatThread } from "../../ipc/commands";
-import type { AgentModel, AgentProvider, ChatThread, CliInfo } from "../../ipc/types";
+import type {
+  AgentModel,
+  AgentProvider,
+  ChatThread,
+  CliInfo,
+  ConnectionProfile,
+} from "../../ipc/types";
 import { errMessage } from "../../ipc/types";
 import { Icon } from "../../components/Icon";
 import Skeleton from "../../components/Skeleton";
@@ -16,6 +25,7 @@ import {
   useAgentChat,
 } from "../../lib/agentChat";
 import { useAgentFeed, type AgentActivity } from "../../lib/agentFeed";
+import { isNearBottom } from "../../lib/autoScroll";
 import {
   agentChatMessagesQuery,
   agentChatThreadsQuery,
@@ -23,12 +33,15 @@ import {
   agentModelsQuery,
   qk,
 } from "../../lib/queries";
-import { useI18n } from "../../lib/i18n";
+import { useI18n, type I18nKey } from "../../lib/i18n";
 import { fullTime, relTime } from "../../lib/relTime";
 import "./agentChat.css";
 
 const CODEX_CONSENT_KEY = "dopedb:agentChat:codexConsent";
 const RAIL_OPEN_KEY = "dopedb:agentChat:railOpen";
+// Distance (px) from the bottom of the message list within which a streaming chunk still
+// auto-scrolls the view — beyond this, the user has deliberately scrolled up to read back.
+const AUTO_SCROLL_THRESHOLD = 80;
 
 // ponytail: one literal command per platform, no OS branching — the design docs only
 // greenlit these two; add Windows-specific variants once they're actually verified.
@@ -39,6 +52,12 @@ const INSTALL_COMMANDS: Record<AgentProvider, string> = {
 const LOGIN_COMMANDS: Record<AgentProvider, string> = {
   claude: "claude",
   codex: "codex login",
+};
+// CliInfo carries no user-facing text (see ipc/types.ts) — the subscription-login
+// disclosure is a frontend i18n string keyed by provider instead.
+const PROVIDER_NOTE_KEYS: Record<AgentProvider, I18nKey> = {
+  claude: "agentChat.claudeNote",
+  codex: "agentChat.codexNote",
 };
 
 // One row in the message list: either a persisted ChatMessageRecord (verbatim) or the live
@@ -82,7 +101,7 @@ function ProviderOnboardCard({
             : t("agentChat.installTitle", { name: info.name })}
         </strong>
       </div>
-      <p className="muted">{info.note}</p>
+      <p className="muted">{t(PROVIDER_NOTE_KEYS[info.id])}</p>
       <pre className="agent-chat-command" onClick={() => onCopy(command)}>
         {command}
       </pre>
@@ -107,6 +126,8 @@ function ThreadRow({
   busy,
   deleting,
   providerLabel,
+  connection,
+  connectionMissing,
   onOpen,
   onDelete,
 }: {
@@ -115,6 +136,8 @@ function ThreadRow({
   busy: boolean;
   deleting: boolean;
   providerLabel: string;
+  connection: ConnectionProfile | null;
+  connectionMissing: boolean;
   onOpen: () => void;
   onDelete: () => void;
 }) {
@@ -140,6 +163,22 @@ function ThreadRow({
         </span>
         <span className="agent-chat-thread-sub">
           <span>{providerLabel}</span>
+          {thread.connectionId !== null && (
+            <>
+              <span className="ds-meta-dot" />
+              <span
+                className={connectionMissing ? "muted" : undefined}
+                title={connectionMissing ? t("agentChat.connectionMissing") : undefined}
+              >
+                {connectionMissing
+                  ? t("agentChat.connectionMissing")
+                  : connection?.name || t("app.unnamed")}
+              </span>
+              {connection?.env && (
+                <span className={`env-chip env-${connection.env}`}>{connection.env}</span>
+              )}
+            </>
+          )}
           <span className="ds-meta-dot" />
           <span title={fullTime(thread.updatedAt)}>{relTime(thread.updatedAt)}</span>
         </span>
@@ -161,7 +200,15 @@ function ThreadRow({
   );
 }
 
-export default function AgentChat({ onOpenAgent }: { onOpenAgent: () => void }) {
+export default function AgentChat({
+  onOpenAgent,
+  connections,
+  selectedConnectionId,
+}: {
+  onOpenAgent: () => void;
+  connections: ConnectionProfile[];
+  selectedConnectionId: string | null;
+}) {
   const { t } = useI18n();
   const toast = useToast();
   const queryClient = useQueryClient();
@@ -186,6 +233,24 @@ export default function AgentChat({ onOpenAgent }: { onOpenAgent: () => void }) 
 
   const selected = clis.find((c) => c.id === provider) ?? null;
   const selectedReady = !!selected?.installed && !!selected?.authenticated;
+
+  // A draft's connection is user-editable (defaults to the app's current selection); once
+  // the thread is created its connectionId is fixed, so an existing thread's scope always
+  // comes from its own row instead.
+  const [draftConnectionId, setDraftConnectionId] = useState<string | null>(
+    selectedConnectionId,
+  );
+  useEffect(() => {
+    if (threadId === null) setDraftConnectionId(selectedConnectionId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threadId]);
+  const scopedConnectionId = activeThread ? activeThread.connectionId : draftConnectionId;
+  const scopedConnection = scopedConnectionId
+    ? (connections.find((c) => c.id === scopedConnectionId) ?? null)
+    : null;
+  // Only an existing thread can point at a connection that's since been deleted — a fresh
+  // draft's picker options come from the live connections list, so it can't select one.
+  const connectionMissing = !!scopedConnectionId && !scopedConnection;
 
   const [codexConsent, setCodexConsent] = useState(
     () => localStorage.getItem(CODEX_CONSENT_KEY) === "1",
@@ -284,8 +349,19 @@ export default function AgentChat({ onOpenAgent }: { onOpenAgent: () => void }) 
     return list;
   }, [persisted, pendingTurn, threadId]);
 
+  // Opening a (different) conversation always starts at its latest message, regardless of
+  // where the list happened to be scrolled to before.
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
+  }, [threadId]);
+
+  // Within the same conversation (streamed text growing the last bubble), only follow the
+  // tail if the user was already reading near the bottom — otherwise a token arriving while
+  // they've scrolled up to reread history would yank the view back down.
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    if (isNearBottom(el, AUTO_SCROLL_THRESHOLD)) el.scrollTo({ top: el.scrollHeight });
   }, [messages]);
 
   function copy(text: string) {
@@ -315,14 +391,23 @@ export default function AgentChat({ onOpenAgent }: { onOpenAgent: () => void }) 
   function submit() {
     const text = draft.trim();
     if (!text || busy) return;
-    send(text, provider, model || undefined, effort || undefined);
+    // Guards both an existing thread's turn and a draft's first send — a draft can pick
+    // any connection (not just the app's active one), and that connection can be deleted
+    // out from under the draft before Send is clicked.
+    if (connectionMissing) {
+      toast(t("agentChat.connectionMissing"), "error");
+      return;
+    }
+    send(text, provider, draftConnectionId, model || undefined, effort || undefined);
     setDraft("");
   }
 
   const needsConsent = provider === "codex" && selectedReady && !codexConsent;
   const showsAuthWarning = provider === "claude" && selected?.authMethod === "claude.ai";
   const chatReady = selectedReady && !needsConsent;
-  const showCancel = busy && pendingTurn?.threadId === threadId;
+  // Independent of `busy` (which also covers the post-done cache flush): Cancel is only
+  // meaningful while a turn is actually still streaming.
+  const showCancel = !!pendingTurn && !pendingTurn.done && pendingTurn.threadId === threadId;
 
   return (
     <div className="agent-chat-screen screen">
@@ -348,18 +433,25 @@ export default function AgentChat({ onOpenAgent }: { onOpenAgent: () => void }) 
                 {t("agentChat.threadListEmpty")}
               </div>
             ) : (
-              threads.map((th) => (
-                <ThreadRow
-                  key={th.id}
-                  thread={th}
-                  active={th.id === threadId}
-                  busy={!!pendingTurn && pendingTurn.threadId === th.id && !pendingTurn.done}
-                  deleting={deletingId === th.id}
-                  providerLabel={providerLabel(th.provider)}
-                  onOpen={() => openThread(th.id)}
-                  onDelete={() => void handleDeleteThread(th)}
-                />
-              ))
+              threads.map((th) => {
+                const conn = th.connectionId
+                  ? (connections.find((c) => c.id === th.connectionId) ?? null)
+                  : null;
+                return (
+                  <ThreadRow
+                    key={th.id}
+                    thread={th}
+                    active={th.id === threadId}
+                    busy={!!pendingTurn && pendingTurn.threadId === th.id && !pendingTurn.done}
+                    deleting={deletingId === th.id}
+                    providerLabel={providerLabel(th.provider)}
+                    connection={conn}
+                    connectionMissing={!!th.connectionId && !conn}
+                    onOpen={() => openThread(th.id)}
+                    onDelete={() => void handleDeleteThread(th)}
+                  />
+                );
+              })
             )}
           </div>
         </aside>
@@ -405,8 +497,10 @@ export default function AgentChat({ onOpenAgent }: { onOpenAgent: () => void }) 
                   }
                   onClick={() => {
                     // A thread's provider is fixed (its CLI session can't move), so
-                    // clicking a tab mid-conversation starts a fresh draft instead.
-                    if (threadId === null && info.id === draftProvider) return;
+                    // clicking a tab mid-conversation starts a fresh draft instead — but
+                    // clicking the tab that already matches what's on screen (a real
+                    // thread's provider, or the draft's) is a no-op either way.
+                    if (info.id === provider) return;
                     openThread(null);
                     setDraftProvider(info.id);
                   }}
@@ -415,6 +509,24 @@ export default function AgentChat({ onOpenAgent }: { onOpenAgent: () => void }) 
                 </button>
               ))}
             </div>
+            )}
+            {scopedConnectionId && (
+              <span
+                className={
+                  "agent-chat-connection-chip" +
+                  (connectionMissing ? " agent-chat-connection-missing" : "")
+                }
+                title={connectionMissing ? t("agentChat.connectionMissing") : undefined}
+              >
+                {connectionMissing
+                  ? t("agentChat.connectionMissing")
+                  : scopedConnection?.name || t("app.unnamed")}
+                {scopedConnection?.env && (
+                  <span className={`env-chip env-${scopedConnection.env}`}>
+                    {scopedConnection.env}
+                  </span>
+                )}
+              </span>
             )}
           </div>
 
@@ -525,6 +637,20 @@ export default function AgentChat({ onOpenAgent }: { onOpenAgent: () => void }) 
                   disabled={busy}
                 />
                 <div className="agent-chat-composer-controls">
+                  {!activeThread && (
+                    <select
+                      aria-label={t("agentChat.connectionLabel")}
+                      value={draftConnectionId ?? ""}
+                      onChange={(e) => setDraftConnectionId(e.target.value || null)}
+                    >
+                      <option value="">{t("agentChat.connectionNone")}</option>
+                      {connections.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {(c.name || t("app.unnamed")) + (c.env ? ` (${c.env})` : "")}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                   <select
                     aria-label={t("agentChat.modelLabel")}
                     value={model}

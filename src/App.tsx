@@ -662,7 +662,13 @@ function Shell() {
 
         <section className="tab-body" role="tabpanel">
           {tab === "agent" && <AgentResultView onDashboardSaved={openDashboard} />}
-          {tab === "chat" && <AgentChat onOpenAgent={() => setTab("agent")} />}
+          {tab === "chat" && (
+            <AgentChat
+              onOpenAgent={() => setTab("agent")}
+              connections={conns}
+              selectedConnectionId={selectedId}
+            />
+          )}
           {tab === "data" &&
             (!selected ? (
               needsConn

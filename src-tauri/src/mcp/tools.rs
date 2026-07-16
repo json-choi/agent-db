@@ -1108,6 +1108,26 @@ mod tests {
         assert!(suggestions.iter().any(|n| n.contains("pg_monitor")));
     }
 
+    /// Regression guard for the exact bug that shipped once: `claude::ALLOWED_TOOLS`
+    /// silently drifting behind the actual MCP tool catalog (missing
+    /// `run_document_query` after MongoDB support landed) so Claude Code chat rejects
+    /// a tool call the server itself advertises. Derives the expected set from
+    /// `DbTools`'s own `tool_router` rather than hand-maintaining a second list here.
+    #[test]
+    fn claude_allowed_tools_matches_the_mcp_tool_catalog() {
+        let from_router: std::collections::BTreeSet<String> = DbTools::tool_router()
+            .list_all()
+            .into_iter()
+            .map(|t| format!("mcp__dopedb__{}", t.name))
+            .collect();
+        let allowed: std::collections::BTreeSet<String> =
+            crate::agent::claude::ALLOWED_TOOLS.iter().map(|s| s.to_string()).collect();
+        assert_eq!(
+            from_router, allowed,
+            "claude::ALLOWED_TOOLS must list exactly the tools mcp::tools::DbTools registers"
+        );
+    }
+
     #[test]
     fn planned_query_is_single_use_in_the_shared_store() {
         let store = query_plan_store();

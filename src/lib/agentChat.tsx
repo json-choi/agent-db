@@ -39,7 +39,13 @@ interface AgentChatValue {
   setDraftProvider: (p: AgentProvider) => void;
   pendingTurn: PendingTurn | null;
   busy: boolean;
-  send: (text: string, provider: AgentProvider, model?: string, effort?: string) => void;
+  send: (
+    text: string,
+    provider: AgentProvider,
+    connectionId: string | null,
+    model?: string,
+    effort?: string,
+  ) => void;
   cancelActive: () => void;
 }
 
@@ -78,7 +84,10 @@ export function AgentChatProvider({ children }: { children: ReactNode }) {
   const [draftProvider, setDraftProvider] = useState<AgentProvider>("claude");
   const [pendingTurn, setPendingTurn] = useState<PendingTurn | null>(null);
 
-  const busy = !!pendingTurn && !pendingTurn.done;
+  // Stays true through the post-done invalidate+clear flush (pendingTurn is only cleared to
+  // null once the persisted rows are confirmed in cache below) — not just while streaming —
+  // so a second send can't race the just-finished turn's rows into the messages cache.
+  const busy = pendingTurn !== null;
 
   useEffect(() => {
     const p1 = listen<{ turnId: string; threadId: string; textChunk: string }>(
@@ -126,19 +135,30 @@ export function AgentChatProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const send = useCallback(
-    (text: string, provider: AgentProvider, model?: string, effort?: string) => {
+    (
+      text: string,
+      provider: AgentProvider,
+      connectionId: string | null,
+      model?: string,
+      effort?: string,
+    ) => {
       if (busy || !text.trim()) return;
       const turnId = window.crypto.randomUUID();
       const turnStartIso = new Date().toISOString();
+      // Captured once at call time: if the user navigates to a different thread while
+      // createChatThread is still in flight below, this stays the draft's original (null)
+      // value so the late setThreadId doesn't snap the view back to the new draft thread.
+      const initialThreadId = threadId;
 
       async function run() {
         // A draft conversation gets its DB row only now, on its first message, so an
         // abandoned draft never leaves an empty thread in the sidebar.
-        let tid = threadId;
+        let tid = initialThreadId;
         if (!tid) {
-          const thread = await createChatThread(provider, model, effort);
+          const thread = await createChatThread(provider, connectionId, model, effort);
           tid = thread.id;
-          setThreadId(tid);
+          const createdTid = tid;
+          setThreadId((current) => (current === initialThreadId ? createdTid : current));
           void queryClient.invalidateQueries({ queryKey: qk.chatThreads() });
         }
         setPendingTurn({

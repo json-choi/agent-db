@@ -104,9 +104,13 @@ CREATE TABLE IF NOT EXISTS schema_cache (
 -- underlying CLI's own resume token (Claude Code `--resume` / Codex `resume <id>`),
 -- persisted here so a conversation survives across app restarts. `model`/`effort`
 -- hold the values used by the most recent turn, seeding the picker on thread switch.
+-- `connection_id` binds the thread to one DopeDB connection for context injection
+-- (NULL = unscoped, the pre-existing behavior); deliberately no FK so a deleted
+-- connection leaves the thread readable instead of cascading it away.
 CREATE TABLE IF NOT EXISTS agent_chat_threads (
     id             TEXT PRIMARY KEY,
     provider       TEXT NOT NULL,
+    connection_id  TEXT,
     title          TEXT NOT NULL DEFAULT '',
     cli_session_id TEXT,
     model          TEXT,

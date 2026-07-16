@@ -71,6 +71,9 @@ impl Store {
         let _ = sqlx::query("ALTER TABLE connections ADD COLUMN driver_id TEXT")
             .execute(&pool)
             .await;
+        let _ = sqlx::query("ALTER TABLE agent_chat_threads ADD COLUMN connection_id TEXT")
+            .execute(&pool)
+            .await;
         migrate_audit_no_cascade(&pool).await?;
         Ok(Store { pool, audit_lock: Arc::new(Mutex::new(())) })
     }
@@ -427,6 +430,7 @@ impl Store {
     pub async fn create_chat_thread(
         &self,
         provider: AgentProvider,
+        connection_id: Option<Uuid>,
         model: Option<String>,
         effort: Option<String>,
     ) -> AppResult<ChatThread> {
@@ -434,11 +438,12 @@ impl Store {
         let now = Utc::now();
         sqlx::query(
             r#"INSERT INTO agent_chat_threads
-                (id, provider, title, cli_session_id, model, effort, created_at, updated_at)
-               VALUES (?1,?2,'',NULL,?3,?4,?5,?5)"#,
+                (id, provider, connection_id, title, cli_session_id, model, effort, created_at, updated_at)
+               VALUES (?1,?2,?3,'',NULL,?4,?5,?6,?6)"#,
         )
         .bind(id.to_string())
         .bind(agent_provider_str(provider))
+        .bind(connection_id.map(|id| id.to_string()))
         .bind(&model)
         .bind(&effort)
         .bind(now)
@@ -448,6 +453,7 @@ impl Store {
         Ok(ChatThread {
             id,
             provider,
+            connection_id,
             title: String::new(),
             cli_session_id: None,
             model,
@@ -671,6 +677,7 @@ fn row_to_chat_thread(r: &sqlx::sqlite::SqliteRow) -> AppResult<ChatThread> {
     Ok(ChatThread {
         id: parse_uuid(r.try_get("id")?)?,
         provider: parse_agent_provider(r.try_get("provider")?)?,
+        connection_id: parse_uuid_opt(r.try_get("connection_id")?)?,
         title: r.try_get("title")?,
         cli_session_id: r.try_get("cli_session_id")?,
         model: r.try_get("model")?,
@@ -752,6 +759,10 @@ pub(crate) fn parse_kind(s: String) -> AppResult<QueryKind> {
 
 pub(crate) fn parse_uuid(s: String) -> AppResult<Uuid> {
     Uuid::from_str(&s).map_err(|e| AppError::Config(format!("bad uuid '{s}': {e}")))
+}
+
+pub(crate) fn parse_uuid_opt(s: Option<String>) -> AppResult<Option<Uuid>> {
+    s.map(parse_uuid).transpose()
 }
 
 pub(crate) fn agent_provider_str(p: AgentProvider) -> &'static str {
@@ -1073,7 +1084,7 @@ mod tests {
         let store = Store::from_pool_for_test(pool);
 
         let thread = store
-            .create_chat_thread(AgentProvider::Codex, None, None)
+            .create_chat_thread(AgentProvider::Codex, None, None, None)
             .await
             .unwrap();
         assert_eq!(thread.title, "");

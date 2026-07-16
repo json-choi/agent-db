@@ -291,14 +291,18 @@ export function getChatMessages(threadId: string): Promise<ChatMessageRecord[]> 
 }
 
 // Creates the DB row for a still-draft conversation. Called only on its first message,
-// so an abandoned draft never leaves an empty thread in the sidebar.
+// so an abandoned draft never leaves an empty thread in the sidebar. connectionId scopes
+// the thread to one DB connection (schema context is injected into the first turn only);
+// null leaves it unscoped.
 export function createChatThread(
   provider: AgentProvider,
+  connectionId?: string | null,
   model?: string,
   effort?: string,
 ): Promise<ChatThread> {
   return invoke("create_chat_thread", {
     provider,
+    connectionId: connectionId ?? null,
     model: model ?? null,
     effort: effort ?? null,
   });

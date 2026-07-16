@@ -11,15 +11,18 @@ use super::ChatSignal;
 use crate::error::{AppError, AppResult};
 use crate::mcp::connect::{quiet_command, which};
 
-/// The six read-only MCP tools DopeDB's server exposes (see `mcp::tools`). Listed
+/// The seven read-only MCP tools DopeDB's server exposes (see `mcp::tools`). Listed
 /// explicitly rather than a `mcp__dopedb__*` wildcard — Claude Code does not expand
-/// wildcards in `--allowedTools`, so a wildcard silently allows nothing.
-const ALLOWED_TOOLS: [&str; 6] = [
+/// wildcards in `--allowedTools`, so a wildcard silently allows nothing. Kept in sync
+/// with `mcp::tools::DbTools`'s actual tool catalog by
+/// `mcp::tools::tests::claude_allowed_tools_matches_the_mcp_tool_catalog`.
+pub(crate) const ALLOWED_TOOLS: [&str; 7] = [
     "mcp__dopedb__list_connections",
     "mcp__dopedb__list_tables",
     "mcp__dopedb__describe_table",
     "mcp__dopedb__plan_query",
     "mcp__dopedb__run_query",
+    "mcp__dopedb__run_document_query",
     "mcp__dopedb__create_dashboard",
 ];
 
