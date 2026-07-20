@@ -36,7 +36,7 @@ h3 {
 h1 {
   font-size: var(--ds-font-size-heading);
   line-height: var(--ds-line-tight);
-  font-weight: 650;
+  font-weight: 700;
 }
 
 h2,
@@ -345,6 +345,8 @@ h3 {
   height: var(--ds-control-sm);
   display: block;
   object-fit: contain;
+  /* Brand logos stay quiet so the three-hue palette leads the screen. */
+  filter: grayscale(0.85) opacity(0.8);
 }
 
 .ds-workbench-head {

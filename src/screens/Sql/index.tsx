@@ -495,6 +495,12 @@ export default function Sql({
       {cancelled && <div className="muted sql-run-message">{t("sql.cancelled")}</div>}
 
       <div className={running && (run || scriptOut) ? "sql-results busy" : "sql-results"}>
+        {!running && !run && !scriptOut && !plan && !planErr && !runErr && (
+          <div className="sql-empty">
+            <Icon name="table" />
+            <span>{t("sql.resultsEmpty")}</span>
+          </div>
+        )}
         {resultKind === "single" && run && (
           <Outcome
             run={run}

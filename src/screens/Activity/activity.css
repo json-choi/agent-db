@@ -147,6 +147,9 @@
   letter-spacing: 0.04em;
   text-align: left;
   text-transform: uppercase;
+  /* The SQL column's max-width:0 trick squeezes the others to content width —
+     without this the header text wraps vertically. */
+  white-space: nowrap;
 }
 
 .activity-query-table th.num,

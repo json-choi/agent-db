@@ -5,6 +5,33 @@
   flex-direction: column;
   align-items: stretch;
   gap: var(--ds-space-2);
+  /* Fill the pane so the results area owns the leftover height instead of
+     leaving a dead void under the editor. */
+  min-height: 100%;
+}
+
+.sql-results {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.sql-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--ds-space-2);
+  min-height: 200px;
+  color: var(--ds-text-muted);
+  font-size: var(--ds-font-size-ui);
+}
+
+.sql-empty .icon {
+  font-size: var(--ds-font-size-heading);
+  opacity: 0.6;
 }
 
 .sql-agent-launchers {

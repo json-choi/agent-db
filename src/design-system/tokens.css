@@ -19,8 +19,8 @@
   --ds-font-size-sm: 12px;
   --ds-font-size-ui: 13px;
   --ds-font-size-body: 14px;
-  --ds-font-size-title: 15px;
-  --ds-font-size-heading: 18px;
+  --ds-font-size-title: 16px;
+  --ds-font-size-heading: 20px;
   --ds-line-tight: 1.2;
   --ds-line-ui: 1.35;
   --ds-line-body: 1.55;
@@ -92,7 +92,8 @@
     inset 0 calc(var(--ds-border-width) * -1) 0 rgba(255, 255, 255, 0.08);
   --ds-shadow-control: 0 1px 2px rgba(16, 24, 40, 0.06);
   --ds-shadow-panel:
-    0 1px 2px rgba(16, 24, 40, 0.07);
+    0 1px 2px rgba(16, 24, 40, 0.07),
+    0 2px 8px rgba(16, 24, 40, 0.06);
   --ds-shadow-popover:
     0 12px 36px rgba(16, 24, 40, 0.18),
     var(--ds-glass-edge);
@@ -119,8 +120,8 @@
     linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(226, 232, 238, 0.12));
   --ds-bg-sidebar: rgba(246, 249, 247, 0.36);
   --ds-surface-0: #ffffff;
-  --ds-surface-1: #f7faf8;
-  --ds-surface-2: #eef3f0;
+  --ds-surface-1: #f2f5f3;
+  --ds-surface-2: #e9efeb;
   --ds-surface-elevated: #ffffff;
   --ds-border-subtle: #dde5df;
   --ds-border-strong: #bdc9c1;
@@ -189,8 +190,9 @@
       linear-gradient(135deg, rgba(16, 22, 19, 0.28), rgba(22, 27, 32, 0.2)),
       linear-gradient(180deg, rgba(27, 34, 31, 0.14), rgba(12, 15, 17, 0.22));
     --ds-bg-sidebar: rgba(25, 30, 31, 0.4);
-    --ds-surface-0: #242a28;
-    --ds-surface-1: #2b322f;
+    /* Cards must sit lighter than the pane background (mirrors light mode). */
+    --ds-surface-0: #2b322f;
+    --ds-surface-1: #242a28;
     --ds-surface-2: #343c38;
     --ds-surface-elevated: #303835;
     --ds-border-subtle: #414c47;
@@ -252,7 +254,8 @@
       inset 0 calc(var(--ds-border-width) * -1) 0 rgba(255, 255, 255, 0.03);
     --ds-shadow-control: 0 1px 2px rgba(0, 0, 0, 0.16);
     --ds-shadow-panel:
-      0 1px 2px rgba(0, 0, 0, 0.24),
+      0 1px 2px rgba(0, 0, 0, 0.28),
+      0 2px 8px rgba(0, 0, 0, 0.24),
       0 1px 1px rgba(255, 255, 255, 0.04) inset;
     --ds-shadow-popover:
       0 14px 42px rgba(0, 0, 0, 0.36),

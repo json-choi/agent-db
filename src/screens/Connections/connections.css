@@ -17,11 +17,15 @@
   color: var(--ds-text);
 }
 
-/* Per-row "DDL" button — hidden until row hover to keep the tree quiet. */
+/* Per-row "DDL" button — hidden until row hover to keep the tree quiet.
+   Overlaid (not in flow) so its reserved width doesn't truncate table names. */
 .ddl-btn {
-  margin-left: auto;
+  position: absolute;
+  right: var(--ds-space-2);
+  top: 50%;
+  transform: translateY(-50%);
   border: var(--ds-border-width) solid var(--ds-border-subtle);
-  background: transparent;
+  background: var(--ds-surface-0);
   color: var(--ds-text-muted);
   font-size: var(--ds-font-size-2xs);
   font-weight: 600;
@@ -43,6 +47,7 @@
 .db-table.selected .ddl-btn {
   color: var(--ds-text-on-accent-muted);
   border-color: var(--ds-border-on-accent);
+  background: var(--ds-accent);
 }
 
 /* Schema groups collect dev/staging/prod siblings and surface prod-based drift. */
@@ -526,6 +531,7 @@
   margin-bottom: var(--ds-space-1);
 }
 .db-table {
+  position: relative; /* anchor for the overlaid .ddl-btn */
   display: flex;
   align-items: center;
   gap: var(--ds-space-2);
@@ -556,16 +562,21 @@
 }
 .tbl-name {
   flex: 1;
-  min-width: 0;
+  /* Name wins the width fight: guarantee readable text before the row-count
+     span takes any space in a narrow sidebar. */
+  min-width: 10ch;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .tbl-count {
+  min-width: 0;
   font-size: var(--ds-font-size-xs);
   font-variant-numeric: tabular-nums;
   opacity: 0.55;
-  flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .db-table:hover .tbl-count,
 .db-table.selected .tbl-count {
