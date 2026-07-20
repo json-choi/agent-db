@@ -323,6 +323,7 @@
   padding: var(--ds-space-2);
 }
 .db-conn {
+  position: relative; /* anchor for the overlaid .db-menu */
   display: flex;
   align-items: center;
   gap: var(--ds-space-2);
@@ -382,15 +383,18 @@
 }
 .db-conn-name {
   flex: 1;
-  min-width: 0;
+  /* Name wins the width fight against the env/diff chips. */
+  min-width: 8ch;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Overlaid (not in flow) so its reserved width doesn't truncate connection names. */
 .db-menu {
-  position: relative;
-  margin-left: auto;
-  flex-shrink: 0;
+  position: absolute;
+  right: var(--ds-space-1);
+  top: 50%;
+  transform: translateY(-50%);
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.12s ease;
@@ -411,7 +415,8 @@
   justify-content: center;
   border: var(--ds-border-width) solid transparent;
   border-radius: var(--ds-radius-pill);
-  background: transparent;
+  /* Solid: the overlaid trigger sits on top of the row's chips when shown. */
+  background: var(--ds-surface-2);
   color: var(--ds-text-muted);
   cursor: pointer;
   transition:
