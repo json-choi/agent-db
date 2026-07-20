@@ -51,15 +51,6 @@
   align-items: center;
   min-height: var(--ds-control-lg);
 }
-/* Fixed gap, not margin-right: auto — run-hint's auto margin already owns the
-   push-right, and two auto margins would center the button group between them. */
-.sql-actions h2 {
-  margin-right: var(--ds-space-3);
-}
-.sql-actions .run-hint {
-  margin-left: auto;
-  font-size: var(--ds-font-size-sm);
-}
 .sql-actions .script-count {
   color: var(--ds-text-muted);
 }

@@ -308,7 +308,7 @@
   color: var(--ds-text);
 }
 .tab.active {
-  color: var(--ds-text);
+  color: var(--ds-accent-text);
   border-bottom-color: var(--ds-accent-text);
 }
 /* Agent tab is connection-independent — push it to the right, set off by a divider. */

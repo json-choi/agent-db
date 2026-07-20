@@ -119,12 +119,10 @@ export default function SchemaExplorer({
   connection,
   selectedTable,
   onOpenTable,
-  title,
 }: {
   connection: ConnectionProfile;
   selectedTable: CatalogTable | null;
   onOpenTable: (table: CatalogTable) => void;
-  title?: string;
 }) {
   const { t } = useI18n();
   // Shared with the sidebar tree and the SQL editor's autocomplete — whichever surface
@@ -187,31 +185,14 @@ export default function SchemaExplorer({
   return (
     <div className="screen schema-screen">
       <div className="schema-head">
-        <div>
-          <div className="schema-title-row">
-            <h2>{title ?? t("schema.title")}</h2>
-            {catalog && (
-              <>
-                <span
-                  className="badge schema-stat"
-                  title={t("schema.tableCount", { count: catalog.tables.length })}
-                  aria-label={t("schema.tableCount", { count: catalog.tables.length })}
-                >
-                  <Icon name="table" />
-                  {catalog.tables.length}
-                </span>
-                <span
-                  className="badge schema-stat"
-                  title={t("schema.fkCount", { count: allRelationships.length })}
-                  aria-label={t("schema.fkCount", { count: allRelationships.length })}
-                >
-                  <Icon name="chevronRight" />
-                  {allRelationships.length}
-                </span>
-              </>
-            )}
-          </div>
-        </div>
+        {/* No screen title — the tab already names this view. Counts read as words. */}
+        {catalog && (
+          <span className="muted schema-stats">
+            {t("schema.tableCount", { count: catalog.tables.length })}
+            {" · "}
+            {t("schema.fkCount", { count: allRelationships.length })}
+          </span>
+        )}
         <input
           className="schema-filter"
           value={filter}

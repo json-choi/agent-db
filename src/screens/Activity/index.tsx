@@ -145,16 +145,6 @@ export default function Activity({
 
   return (
     <div className="screen activity">
-      <header className="activity-head">
-        <div className="activity-heading">
-          <h2>{t("activity.title")}</h2>
-          <p className="muted">{t("activity.description")}</p>
-        </div>
-        <button className="btn small" onClick={refresh} disabled={busy}>
-          {busy ? "..." : t("common.refresh")}
-        </button>
-      </header>
-
       <details
         className={`activity-integrity ds-card ${integrityTone}`}
         open={auditOpen}
@@ -169,11 +159,11 @@ export default function Activity({
             >
               {integrityTitle}
             </strong>
-            <span className="muted">
-              {integrityError
-                ? t("activity.auditVerifyError", { error: integrityError })
-                : t("activity.auditDescription")}
-            </span>
+            {integrityError && (
+              <span className="muted">
+                {t("activity.auditVerifyError", { error: integrityError })}
+              </span>
+            )}
           </span>
           <span className="activity-integrity-action">
             {auditEntries
@@ -265,9 +255,14 @@ export default function Activity({
       </details>
 
       <section className="activity-queries" aria-labelledby="activity-query-title">
-        <div className="activity-section-heading">
-          <h3 id="activity-query-title">{t("activity.queries")}</h3>
-          <p className="muted">{t("activity.queriesDescription")}</p>
+        <div className="activity-section-row">
+          <div className="activity-section-heading">
+            <h3 id="activity-query-title">{t("activity.queries")}</h3>
+            <p className="muted">{t("activity.queriesDescription")}</p>
+          </div>
+          <button className="btn small" onClick={refresh} disabled={busy}>
+            {busy ? "..." : t("common.refresh")}
+          </button>
         </div>
 
         {rows.length > 0 && (

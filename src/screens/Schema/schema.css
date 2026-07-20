@@ -7,23 +7,17 @@
 
 .schema-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: var(--ds-space-4);
 }
 
-.schema-title-row {
-  display: inline-flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--ds-space-2);
-}
-
-.schema-stat .icon {
-  font-size: var(--ds-icon-sm);
+.schema-stats {
+  font-size: var(--ds-font-size-sm);
 }
 
 .schema-filter {
+  margin-left: auto; /* keep the filter right-aligned even without the stats line */
   width: min(320px, 42vw);
   min-height: var(--ds-control-md);
   padding: 0 var(--ds-space-2);

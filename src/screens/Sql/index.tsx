@@ -24,7 +24,6 @@ import type { PreviewReport } from "../../ipc/types";
 import { catalogQuery } from "../../lib/queries";
 import { splitStatements } from "../../lib/sqlStatements";
 import { Icon } from "../../components/Icon";
-import InfoTip from "../../components/InfoTip";
 import LazySqlViewer from "../../components/LazySqlViewer";
 import DataGrid from "../../components/DataGrid";
 import ResultToolbar from "../../components/ResultToolbar";
@@ -412,11 +411,11 @@ export default function Sql({
         />
       </div>
       <div className="form-actions sql-actions">
-        <h2>{t("sql.title")}</h2>
         <button
           className="btn primary"
           disabled={!draft.trim() || running}
           onClick={() => void executeSql()}
+          title={t("sql.runHint")}
         >
           <Icon name="play" />
           {running ? t("sql.running") : t("sql.run")}
@@ -467,7 +466,6 @@ export default function Sql({
             </span>
           )
         )}
-        <InfoTip label={t("sql.runHint")} className="run-hint" />
       </div>
 
       {agentErr && <div className="error sql-agent-error">{agentErr}</div>}
