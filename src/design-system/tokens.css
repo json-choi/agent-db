@@ -114,17 +114,17 @@
   --ds-pane-pad: 16px;
   --ds-line: var(--ds-border-width) solid var(--ds-border-subtle);
 
-  /* Neutral surfaces and restrained glass shell */
+  /* Deep-gray chrome: pure neutral surfaces — green lives only in the accent. */
   --ds-bg-app:
-    linear-gradient(135deg, rgba(247, 249, 247, 0.26), rgba(232, 237, 241, 0.16)),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(226, 232, 238, 0.12));
-  --ds-bg-sidebar: rgba(246, 249, 247, 0.36);
+    linear-gradient(135deg, rgba(245, 246, 247, 0.3), rgba(238, 240, 242, 0.18)),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(230, 233, 236, 0.12));
+  --ds-bg-sidebar: #1b1e1d;
   --ds-surface-0: #ffffff;
-  --ds-surface-1: #eef2ef;
-  --ds-surface-2: #e3e9e5;
+  --ds-surface-1: #f2f3f4;
+  --ds-surface-2: #e8eaec;
   --ds-surface-elevated: #ffffff;
-  --ds-border-subtle: #dde5df;
-  --ds-border-strong: #bdc9c1;
+  --ds-border-subtle: #e1e4e7;
+  --ds-border-strong: #c3c8cd;
   --ds-text: #1d232f;
   --ds-text-muted: #687386;
   --ds-text-subtle: #8a94a5;
@@ -187,16 +187,16 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --ds-bg-app:
-      linear-gradient(135deg, rgba(16, 22, 19, 0.28), rgba(22, 27, 32, 0.2)),
-      linear-gradient(180deg, rgba(27, 34, 31, 0.14), rgba(12, 15, 17, 0.22));
-    --ds-bg-sidebar: rgba(25, 30, 31, 0.4);
+      linear-gradient(135deg, rgba(18, 20, 22, 0.28), rgba(24, 27, 30, 0.2)),
+      linear-gradient(180deg, rgba(30, 33, 35, 0.14), rgba(13, 15, 17, 0.22));
+    --ds-bg-sidebar: #17191b;
     /* Cards must sit lighter than the pane background (mirrors light mode). */
-    --ds-surface-0: #2b322f;
-    --ds-surface-1: #242a28;
-    --ds-surface-2: #343c38;
-    --ds-surface-elevated: #303835;
-    --ds-border-subtle: #414c47;
-    --ds-border-strong: #5b6862;
+    --ds-surface-0: #2a2e30;
+    --ds-surface-1: #212527;
+    --ds-surface-2: #34383b;
+    --ds-surface-elevated: #2f3336;
+    --ds-border-subtle: #3f4448;
+    --ds-border-strong: #5b6165;
     --ds-text: #f1f4f8;
     --ds-text-muted: #b0b8c4;
     --ds-text-subtle: #8f98a6;
@@ -261,4 +261,31 @@
       0 14px 42px rgba(0, 0, 0, 0.36),
       var(--ds-glass-edge);
   }
+}
+
+/*
+ * Deep-gray chrome: the sidebar always renders on the dark palette, in both
+ * color schemes. Re-declaring the semantic tokens here re-themes everything
+ * inside it (explorer rows, chips, filter input) without per-component rules.
+ */
+.sidebar {
+  --ds-surface-0: #242828;
+  --ds-surface-1: #1f2322;
+  --ds-surface-2: #2c302f;
+  --ds-surface-elevated: #262b2a;
+  --ds-border-subtle: #333836;
+  --ds-border-strong: #4a504d;
+  --ds-text: #edf0ee;
+  --ds-text-muted: #a9b1ad;
+  --ds-text-subtle: #858d89;
+  --ds-hover: rgba(255, 255, 255, 0.06);
+  --ds-hover-strong: rgba(255, 255, 255, 0.11);
+  --ds-primary-text: #6cbc88;
+  --ds-primary-soft: rgba(76, 175, 110, 0.16);
+  --ds-success: #6cbc88;
+  --ds-caution: #f2b84b;
+  --ds-caution-soft: rgba(242, 184, 75, 0.16);
+  --ds-critical: #ff6b5c;
+  --ds-critical-soft: rgba(255, 107, 92, 0.16);
+  --ds-shadow-control: 0 1px 2px rgba(0, 0, 0, 0.2);
 }

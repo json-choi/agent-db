@@ -47,8 +47,14 @@
   overflow: hidden;
 }
 
+/* Healthy chain reads as a quiet status row; only danger keeps the loud fill. */
+.activity-integrity.ds-tone-trust {
+  background: var(--ds-surface-0);
+  border-color: var(--ds-border-subtle);
+}
+
 .activity-integrity > summary {
-  min-height: 68px;
+  min-height: 48px;
   display: grid;
   grid-template-columns: var(--ds-control-sm) minmax(0, 1fr) auto;
   align-items: center;
