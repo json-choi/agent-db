@@ -88,7 +88,7 @@ h3 {
 
 .sidebar {
   background: var(--ds-bg-sidebar);
-  box-shadow: inset -1px 0 0 rgba(0, 0, 0, 0.35);
+  box-shadow: inset -1px 0 0 var(--ds-sidebar-inset-shadow);
 }
 
 .tab-body,

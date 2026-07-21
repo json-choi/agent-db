@@ -19,7 +19,7 @@
 /* Sidebar — solid deep-gray chrome (tokens re-scoped in tokens.css). */
 .sidebar {
   background: var(--ds-bg-sidebar);
-  border-right: var(--ds-border-width) solid rgba(0, 0, 0, 0.4);
+  border-right: var(--ds-border-width) solid var(--ds-sidebar-border);
   display: flex;
   flex-direction: column;
   overflow: hidden;

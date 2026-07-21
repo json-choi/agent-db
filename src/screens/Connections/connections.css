@@ -407,6 +407,12 @@
   pointer-events: auto;
 }
 
+.db-menu.open {
+  /* The transform above creates a stacking context; raise the open menu so
+     following connection rows cannot paint over its popover. */
+  z-index: var(--ds-z-popover);
+}
+
 .db-menu-trigger {
   width: var(--ds-control-sm);
   height: var(--ds-control-sm);

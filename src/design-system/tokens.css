@@ -90,6 +90,7 @@
   --ds-glass-edge:
     inset 0 var(--ds-border-width) 0 rgba(255, 255, 255, 0.34),
     inset 0 calc(var(--ds-border-width) * -1) 0 rgba(255, 255, 255, 0.08);
+  --ds-sidebar-inset-shadow: rgba(0, 0, 0, 0.35);
   --ds-shadow-control: 0 1px 2px rgba(16, 24, 40, 0.06);
   --ds-shadow-panel:
     0 1px 2px rgba(16, 24, 40, 0.07),
@@ -119,6 +120,7 @@
     linear-gradient(135deg, rgba(245, 246, 247, 0.3), rgba(238, 240, 242, 0.18)),
     linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(230, 233, 236, 0.12));
   --ds-bg-sidebar: #1b1e1d;
+  --ds-sidebar-border: rgba(0, 0, 0, 0.4);
   --ds-surface-0: #ffffff;
   --ds-surface-1: #f2f3f4;
   --ds-surface-2: #e8eaec;
