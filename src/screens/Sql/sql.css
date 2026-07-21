@@ -5,6 +5,33 @@
   flex-direction: column;
   align-items: stretch;
   gap: var(--ds-space-2);
+  /* Fill the pane so the results area owns the leftover height instead of
+     leaving a dead void under the editor. */
+  min-height: 100%;
+}
+
+.sql-results {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.sql-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--ds-space-2);
+  min-height: 200px;
+  color: var(--ds-text-muted);
+  font-size: var(--ds-font-size-ui);
+}
+
+.sql-empty .icon {
+  font-size: var(--ds-font-size-heading);
+  opacity: 0.6;
 }
 
 .sql-agent-launchers {
@@ -23,15 +50,6 @@
 .sql-actions {
   align-items: center;
   min-height: var(--ds-control-lg);
-}
-/* Fixed gap, not margin-right: auto — run-hint's auto margin already owns the
-   push-right, and two auto margins would center the button group between them. */
-.sql-actions h2 {
-  margin-right: var(--ds-space-3);
-}
-.sql-actions .run-hint {
-  margin-left: auto;
-  font-size: var(--ds-font-size-sm);
 }
 .sql-actions .script-count {
   color: var(--ds-text-muted);

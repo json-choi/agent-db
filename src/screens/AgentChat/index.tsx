@@ -586,6 +586,11 @@ export default function AgentChat({
               <div className="agent-chat-messages" role="log" ref={listRef}>
                 {threadId !== null && messagesQuery.isPending ? (
                   <Skeleton lines={4} />
+                ) : messages.length === 0 ? (
+                  <div className="agent-chat-empty">
+                    <Icon name="database" />
+                    <span>{t("agentChat.emptyHint")}</span>
+                  </div>
                 ) : (
                   messages.map((msg) => {
                     const tools = toolsDuringTurn(feed, msg);

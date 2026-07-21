@@ -2,6 +2,17 @@
   display: flex;
   flex-direction: column;
   gap: var(--ds-space-4);
+  /* Reading-oriented screen: cap and center so leftover pane width reads as margin. */
+  width: 100%;
+  max-width: 1120px;
+  margin-inline: auto;
+}
+
+.activity-section-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--ds-space-3);
 }
 
 .activity-head {
@@ -36,8 +47,14 @@
   overflow: hidden;
 }
 
+/* Healthy chain reads as a quiet status row; only danger keeps the loud fill. */
+.activity-integrity.ds-tone-trust {
+  background: var(--ds-surface-0);
+  border-color: var(--ds-border-subtle);
+}
+
 .activity-integrity > summary {
-  min-height: 68px;
+  min-height: 48px;
   display: grid;
   grid-template-columns: var(--ds-control-sm) minmax(0, 1fr) auto;
   align-items: center;
@@ -147,6 +164,9 @@
   letter-spacing: 0.04em;
   text-align: left;
   text-transform: uppercase;
+  /* The SQL column's max-width:0 trick squeezes the others to content width —
+     without this the header text wraps vertically. */
+  white-space: nowrap;
 }
 
 .activity-query-table th.num,

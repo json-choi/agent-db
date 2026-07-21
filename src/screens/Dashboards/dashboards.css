@@ -3,9 +3,12 @@
   display: grid;
   align-content: start;
   gap: var(--ds-space-4);
+  /* Reading-oriented screen: cap and center so leftover pane width reads as margin. */
+  width: 100%;
+  max-width: 1120px;
+  margin-inline: auto;
 }
 
-.dashboard-page-head,
 .dashboard-canvas-head,
 .dashboard-library-head {
   min-width: 0;
@@ -15,22 +18,13 @@
   gap: var(--ds-space-3);
 }
 
-.dashboard-page-head h2,
-.dashboard-page-head p,
 .dashboard-canvas-head h3,
 .dashboard-canvas-head p {
   margin: 0;
 }
 
-.dashboard-page-head .ds-title-line > .icon,
 .dashboard-state-icon {
   color: var(--ds-accent-text);
-}
-
-.dashboard-page-head p {
-  margin-top: var(--ds-space-1);
-  max-width: 70ch;
-  line-height: var(--ds-line-body);
 }
 
 .dashboard-library {
@@ -255,7 +249,6 @@
 }
 
 @media (max-width: 760px) {
-  .dashboard-page-head,
   .dashboard-canvas-head {
     flex-direction: column;
   }

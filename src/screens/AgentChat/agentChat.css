@@ -201,6 +201,22 @@
   padding-right: var(--ds-space-1);
 }
 
+.agent-chat-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--ds-space-2);
+  color: var(--ds-text-muted);
+  font-size: var(--ds-font-size-ui);
+}
+
+.agent-chat-empty .icon {
+  font-size: var(--ds-font-size-heading);
+  opacity: 0.6;
+}
+
 .agent-chat-msg {
   display: flex;
   flex-direction: column;

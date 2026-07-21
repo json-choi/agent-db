@@ -104,19 +104,6 @@ export default function Dashboards({
 
   return (
     <div className="dashboards-screen screen">
-      <header className="dashboard-page-head">
-        <div>
-          <div className="ds-title-line">
-            <Icon name="dashboard" />
-            <h2>{t("dashboard.workspace")}</h2>
-          </div>
-          <p className="muted">{t("dashboard.workspaceBody")}</p>
-        </div>
-        <span className="badge kind">
-          {t("dashboard.savedCount", { count: dashboards.length })}
-        </span>
-      </header>
-
       {loadError && (
         <div className="dashboard-error error" role="alert">
           {t("dashboard.loadFailed", { error: loadError })}

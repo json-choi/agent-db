@@ -682,7 +682,6 @@ function Shell() {
               <SchemaExplorer
                 connection={selected}
                 selectedTable={selectedTable}
-                title={t("tabs.data")}
                 onOpenTable={(table) => {
                   setSelectedTable(table);
                   setTab("data");

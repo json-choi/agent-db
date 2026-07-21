@@ -19,8 +19,8 @@
   --ds-font-size-sm: 12px;
   --ds-font-size-ui: 13px;
   --ds-font-size-body: 14px;
-  --ds-font-size-title: 15px;
-  --ds-font-size-heading: 18px;
+  --ds-font-size-title: 16px;
+  --ds-font-size-heading: 22px;
   --ds-line-tight: 1.2;
   --ds-line-ui: 1.35;
   --ds-line-body: 1.55;
@@ -90,9 +90,11 @@
   --ds-glass-edge:
     inset 0 var(--ds-border-width) 0 rgba(255, 255, 255, 0.34),
     inset 0 calc(var(--ds-border-width) * -1) 0 rgba(255, 255, 255, 0.08);
+  --ds-sidebar-inset-shadow: rgba(0, 0, 0, 0.35);
   --ds-shadow-control: 0 1px 2px rgba(16, 24, 40, 0.06);
   --ds-shadow-panel:
-    0 1px 2px rgba(16, 24, 40, 0.07);
+    0 1px 2px rgba(16, 24, 40, 0.07),
+    0 2px 8px rgba(16, 24, 40, 0.06);
   --ds-shadow-popover:
     0 12px 36px rgba(16, 24, 40, 0.18),
     var(--ds-glass-edge);
@@ -113,17 +115,18 @@
   --ds-pane-pad: 16px;
   --ds-line: var(--ds-border-width) solid var(--ds-border-subtle);
 
-  /* Neutral surfaces and restrained glass shell */
+  /* Deep-gray chrome: pure neutral surfaces — green lives only in the accent. */
   --ds-bg-app:
-    linear-gradient(135deg, rgba(247, 249, 247, 0.26), rgba(232, 237, 241, 0.16)),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(226, 232, 238, 0.12));
-  --ds-bg-sidebar: rgba(246, 249, 247, 0.36);
+    linear-gradient(135deg, rgba(245, 246, 247, 0.3), rgba(238, 240, 242, 0.18)),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(230, 233, 236, 0.12));
+  --ds-bg-sidebar: #1b1e1d;
+  --ds-sidebar-border: rgba(0, 0, 0, 0.4);
   --ds-surface-0: #ffffff;
-  --ds-surface-1: #f7faf8;
-  --ds-surface-2: #eef3f0;
+  --ds-surface-1: #f2f3f4;
+  --ds-surface-2: #e8eaec;
   --ds-surface-elevated: #ffffff;
-  --ds-border-subtle: #dde5df;
-  --ds-border-strong: #bdc9c1;
+  --ds-border-subtle: #e1e4e7;
+  --ds-border-strong: #c3c8cd;
   --ds-text: #1d232f;
   --ds-text-muted: #687386;
   --ds-text-subtle: #8a94a5;
@@ -133,11 +136,11 @@
   --ds-overlay: rgba(5, 9, 13, 0.32);
 
   /* Three chromatic hues, derived from the DopeDB icon. */
-  --ds-primary: #2f6f4d;
-  --ds-primary-hover: #285f42;
-  --ds-primary-active: #214f38;
+  --ds-primary: #2b7d4f;
+  --ds-primary-hover: #256b44;
+  --ds-primary-active: #1f5a39;
   --ds-primary-text: var(--ds-primary);
-  --ds-primary-soft: rgba(47, 111, 77, 0.13);
+  --ds-primary-soft: rgba(43, 125, 79, 0.13);
   --ds-caution: #9a6511;
   --ds-caution-soft: rgba(154, 101, 17, 0.14);
   --ds-critical: #bd574d;
@@ -158,8 +161,8 @@
   --ds-danger: var(--ds-critical);
 
   /* Trust/risk surfaces for agent-native workflows. */
-  --ds-trust-bg: rgba(47, 111, 77, 0.11);
-  --ds-trust-border: rgba(47, 111, 77, 0.34);
+  --ds-trust-bg: rgba(43, 125, 79, 0.11);
+  --ds-trust-border: rgba(43, 125, 79, 0.34);
   --ds-risk-bg: rgba(154, 101, 17, 0.13);
   --ds-risk-border: rgba(154, 101, 17, 0.4);
   --ds-danger-bg: rgba(189, 87, 77, 0.13);
@@ -186,15 +189,16 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --ds-bg-app:
-      linear-gradient(135deg, rgba(16, 22, 19, 0.28), rgba(22, 27, 32, 0.2)),
-      linear-gradient(180deg, rgba(27, 34, 31, 0.14), rgba(12, 15, 17, 0.22));
-    --ds-bg-sidebar: rgba(25, 30, 31, 0.4);
-    --ds-surface-0: #242a28;
-    --ds-surface-1: #2b322f;
-    --ds-surface-2: #343c38;
-    --ds-surface-elevated: #303835;
-    --ds-border-subtle: #414c47;
-    --ds-border-strong: #5b6862;
+      linear-gradient(135deg, rgba(18, 20, 22, 0.28), rgba(24, 27, 30, 0.2)),
+      linear-gradient(180deg, rgba(30, 33, 35, 0.14), rgba(13, 15, 17, 0.22));
+    --ds-bg-sidebar: #17191b;
+    /* Cards must sit lighter than the pane background (mirrors light mode). */
+    --ds-surface-0: #2a2e30;
+    --ds-surface-1: #212527;
+    --ds-surface-2: #34383b;
+    --ds-surface-elevated: #2f3336;
+    --ds-border-subtle: #3f4448;
+    --ds-border-strong: #5b6165;
     --ds-text: #f1f4f8;
     --ds-text-muted: #b0b8c4;
     --ds-text-subtle: #8f98a6;
@@ -203,11 +207,11 @@
     --ds-border-on-accent: rgba(255, 255, 255, 0.42);
     --ds-overlay: rgba(5, 9, 13, 0.36);
 
-    --ds-primary: #368454;
-    --ds-primary-hover: #388256;
-    --ds-primary-active: #2f724a;
-    --ds-primary-text: #5aa874;
-    --ds-primary-soft: rgba(54, 132, 84, 0.18);
+    --ds-primary: #3d9560;
+    --ds-primary-hover: #43a068;
+    --ds-primary-active: #358150;
+    --ds-primary-text: #66b884;
+    --ds-primary-soft: rgba(61, 149, 96, 0.18);
     --ds-caution: #f2b84b;
     --ds-caution-soft: rgba(242, 184, 75, 0.16);
     --ds-critical: #ff6b5c;
@@ -223,8 +227,8 @@
     --ds-warning: var(--ds-caution);
     --ds-danger: var(--ds-critical);
 
-    --ds-trust-bg: rgba(54, 132, 84, 0.16);
-    --ds-trust-border: rgba(54, 132, 84, 0.36);
+    --ds-trust-bg: rgba(61, 149, 96, 0.16);
+    --ds-trust-border: rgba(61, 149, 96, 0.36);
     --ds-risk-bg: rgba(242, 184, 75, 0.14);
     --ds-risk-border: rgba(242, 184, 75, 0.36);
     --ds-danger-bg: rgba(255, 107, 92, 0.14);
@@ -252,10 +256,38 @@
       inset 0 calc(var(--ds-border-width) * -1) 0 rgba(255, 255, 255, 0.03);
     --ds-shadow-control: 0 1px 2px rgba(0, 0, 0, 0.16);
     --ds-shadow-panel:
-      0 1px 2px rgba(0, 0, 0, 0.24),
+      0 1px 2px rgba(0, 0, 0, 0.28),
+      0 2px 8px rgba(0, 0, 0, 0.24),
       0 1px 1px rgba(255, 255, 255, 0.04) inset;
     --ds-shadow-popover:
       0 14px 42px rgba(0, 0, 0, 0.36),
       var(--ds-glass-edge);
   }
+}
+
+/*
+ * Deep-gray chrome: the sidebar always renders on the dark palette, in both
+ * color schemes. Re-declaring the semantic tokens here re-themes everything
+ * inside it (explorer rows, chips, filter input) without per-component rules.
+ */
+.sidebar {
+  --ds-surface-0: #242828;
+  --ds-surface-1: #1f2322;
+  --ds-surface-2: #2c302f;
+  --ds-surface-elevated: #262b2a;
+  --ds-border-subtle: #333836;
+  --ds-border-strong: #4a504d;
+  --ds-text: #edf0ee;
+  --ds-text-muted: #a9b1ad;
+  --ds-text-subtle: #858d89;
+  --ds-hover: rgba(255, 255, 255, 0.06);
+  --ds-hover-strong: rgba(255, 255, 255, 0.11);
+  --ds-primary-text: #6cbc88;
+  --ds-primary-soft: rgba(76, 175, 110, 0.16);
+  --ds-success: #6cbc88;
+  --ds-caution: #f2b84b;
+  --ds-caution-soft: rgba(242, 184, 75, 0.16);
+  --ds-critical: #ff6b5c;
+  --ds-critical-soft: rgba(255, 107, 92, 0.16);
+  --ds-shadow-control: 0 1px 2px rgba(0, 0, 0, 0.2);
 }
