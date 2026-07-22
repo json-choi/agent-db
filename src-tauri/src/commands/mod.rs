@@ -231,6 +231,11 @@ pub async fn poll_workspace_login(
     Ok(result)
 }
 
+#[tauri::command]
+pub fn workspace_console_url(workspace_id: Option<Uuid>) -> AppResult<String> {
+    crate::workspace_auth::console_url(workspace_id)
+}
+
 async fn sync_workspace_memberships(state: &AppState) -> AppResult<()> {
     let remote = crate::workspace_auth::remote_workspaces().await?;
     let workspaces = remote

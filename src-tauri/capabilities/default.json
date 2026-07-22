@@ -11,6 +11,9 @@
       "allow": [
         {
           "url": "https://app.dopedb.dev/auth/device?user_code=*"
+        },
+        {
+          "url": "https://app.dopedb.dev/settings*"
         }
       ]
     },

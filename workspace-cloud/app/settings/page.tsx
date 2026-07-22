@@ -13,10 +13,28 @@ import { WorkspaceAccessPanel } from "./WorkspaceAccessPanel";
 
 export const dynamic = "force-dynamic";
 
-export default async function SettingsPage() {
+export default async function SettingsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ workspace?: string | string[] }>;
+}) {
+  const params = await searchParams;
+  const requestedWorkspaceId =
+    typeof params.workspace === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(params.workspace)
+      ? params.workspace
+      : null;
   const requestHeaders = await headers();
   const session = await auth.api.getSession({ headers: requestHeaders });
-  if (!session) redirect("/auth/sign-in?returnTo=/settings");
+  const encodedWorkspaceId = requestedWorkspaceId
+    ? encodeURIComponent(requestedWorkspaceId)
+    : null;
+  const settingsPath = encodedWorkspaceId
+    ? `/settings?workspace=${encodedWorkspaceId}#workspace-${encodedWorkspaceId}`
+    : "/settings";
+  if (!session) {
+    redirect(`/auth/sign-in?returnTo=${encodeURIComponent(settingsPath)}`);
+  }
   const [workspaces, sessions] = await Promise.all([
     auth.api.listOrganizations({ headers: requestHeaders }),
     auth.api.listSessions({ headers: requestHeaders }),
@@ -27,6 +45,17 @@ export default async function SettingsPage() {
     });
     return [workspace.id, membership?.role ?? "viewer"] as const;
   })));
+  const focusedWorkspaceId = workspaces.some(
+    (workspace) => workspace.id === requestedWorkspaceId,
+  )
+    ? requestedWorkspaceId
+    : null;
+  const orderedWorkspaces = focusedWorkspaceId
+    ? [
+        ...workspaces.filter((workspace) => workspace.id === focusedWorkspaceId),
+        ...workspaces.filter((workspace) => workspace.id !== focusedWorkspaceId),
+      ]
+    : workspaces;
 
   return (
     <main className="console-shell">
@@ -40,7 +69,26 @@ export default async function SettingsPage() {
         <section id="workspaces" className="console-section">
           <div className="section-heading"><div><span>01</span><h2>Workspaces</h2></div><p>Better Auth Organization 멤버십이 권한 경계를 관리합니다.</p></div>
           <div className="workspace-grid">
-            {workspaces.map((workspace) => <article className="workspace-card-wrap" key={workspace.id}><div className="workspace-card"><div className="workspace-monogram">{workspace.name.slice(0, 2).toUpperCase()}</div><div><h3>{workspace.name}</h3><p>{workspace.slug}</p></div><span className="status-dot">{workspaceRoles.get(workspace.id)}</span></div>{["admin", "owner"].includes(workspaceRoles.get(workspace.id) ?? "") ? <WorkspaceAccessPanel workspaceId={workspace.id} /> : null}</article>)}
+            {orderedWorkspaces.map((workspace) => (
+              <article
+                className={`workspace-card-wrap${
+                  workspace.id === focusedWorkspaceId ? " focused" : ""
+                }`}
+                id={`workspace-${workspace.id}`}
+                key={workspace.id}
+              >
+                <div className="workspace-card">
+                  <div className="workspace-monogram">
+                    {workspace.name.slice(0, 2).toUpperCase()}
+                  </div>
+                  <div><h3>{workspace.name}</h3><p>{workspace.slug}</p></div>
+                  <span className="status-dot">{workspaceRoles.get(workspace.id)}</span>
+                </div>
+                {["admin", "owner"].includes(workspaceRoles.get(workspace.id) ?? "") ? (
+                  <WorkspaceAccessPanel workspaceId={workspace.id} />
+                ) : null}
+              </article>
+            ))}
             {workspaces.length === 0 ? <div className="empty-state">아직 연결된 워크스페이스가 없습니다.</div> : null}
           </div>
           <CreateWorkspaceForm />

@@ -96,7 +96,8 @@ body::before {
 .section-heading p { max-width: 350px; margin: 0; color: var(--ds-text-muted); font-size: 11px; }
 .workspace-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
 .workspace-card { min-height: 126px; padding: 22px; border: 1px solid var(--ds-border); background: var(--ds-surface); display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 18px; }
-.workspace-card-wrap { border: 1px solid var(--ds-border); background: var(--ds-surface); }
+.workspace-card-wrap { border: 1px solid var(--ds-border); background: var(--ds-surface); scroll-margin-top: 24px; transition: border-color .18s, box-shadow .18s; }
+.workspace-card-wrap.focused, .workspace-card-wrap:target { border-color: color-mix(in srgb, var(--ds-accent) 58%, var(--ds-border)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--ds-accent) 18%, transparent); }
 .workspace-card-wrap .workspace-card { border: 0; border-bottom: 1px solid var(--ds-border); }
 .access-panel { padding: 20px; display: grid; gap: 14px; }
 .access-heading { display: flex; justify-content: space-between; gap: 12px; }

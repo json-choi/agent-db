@@ -66,6 +66,12 @@ const glyphs = {
   ),
   chart: <path d="M4 19V9m6 10V5m6 14v-7m4 7H2" />,
   plus: <path d="M12 5v14M5 12h14" />,
+  externalLink: (
+    <>
+      <path d="M15 3h6v6M10 14 21 3" />
+      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+    </>
+  ),
   pencil: <path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />,
   copy: (
     <>

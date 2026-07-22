@@ -49,6 +49,10 @@ export function pollWorkspaceLogin(deviceCode: string): Promise<WorkspaceLoginPo
   return invoke("poll_workspace_login", { deviceCode });
 }
 
+export function workspaceConsoleUrl(workspaceId?: string): Promise<string> {
+  return invoke("workspace_console_url", { workspaceId: workspaceId ?? null });
+}
+
 export function listWorkspaces(): Promise<Workspace[]> {
   return invoke("list_workspaces");
 }

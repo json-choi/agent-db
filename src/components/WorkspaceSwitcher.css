@@ -41,7 +41,8 @@
 }
 
 .workspace-login-button,
-.workspace-add-button {
+.workspace-add-button,
+.workspace-dashboard-button {
   border: var(--ds-border-width) solid var(--ds-sidebar-border);
   background: var(--ds-surface-1);
   color: var(--ds-text);
@@ -68,14 +69,16 @@
 }
 
 .workspace-login-button:hover,
-.workspace-add-button:hover {
+.workspace-add-button:hover,
+.workspace-dashboard-button:hover {
   border-color: var(--ds-border-strong);
   background: var(--ds-hover);
   color: var(--ds-text);
 }
 
 .workspace-login-button:focus-visible,
-.workspace-add-button:focus-visible {
+.workspace-add-button:focus-visible,
+.workspace-dashboard-button:focus-visible {
   outline: none;
   box-shadow: var(--ds-focus-ring);
 }
@@ -93,6 +96,31 @@
   color: var(--ds-success);
   cursor: default;
   opacity: 1;
+}
+
+.workspace-select-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--ds-control-sm);
+  align-items: center;
+  gap: var(--ds-space-1);
+  min-width: 0;
+}
+
+.workspace-dashboard-button {
+  width: var(--ds-control-sm);
+  min-width: var(--ds-control-sm);
+  height: var(--ds-control-sm);
+  min-height: var(--ds-control-sm);
+  padding: 0;
+  color: var(--ds-text-muted);
+}
+
+.workspace-dashboard-button:hover:not(:disabled) {
+  color: var(--ds-accent-text);
+}
+
+.workspace-dashboard-button:disabled {
+  cursor: progress;
 }
 
 .workspace-select-wrap {

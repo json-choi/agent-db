@@ -8,6 +8,7 @@ import {
   pollWorkspaceLogin,
   refreshWorkspaceMemberships,
   setActiveWorkspace,
+  workspaceConsoleUrl,
 } from "../ipc/commands";
 import type { WorkspaceAuthState, WorkspaceLoginPoll } from "../ipc/types";
 import { errMessage } from "../ipc/types";
@@ -32,6 +33,7 @@ export default function WorkspaceSwitcher({
   const context = useQuery(workspaceContextQuery());
   const auth = useQuery(workspaceAuthStateQuery());
   const [switching, setSwitching] = useState(false);
+  const [dashboardOpening, setDashboardOpening] = useState(false);
   const [loginPhase, setLoginPhase] = useState<"idle" | "starting" | "waiting">("idle");
   const loginAttempt = useRef(0);
   const pendingLogin = useRef<{ attempt: number; deviceCode: string } | null>(null);
@@ -230,6 +232,25 @@ export default function WorkspaceSwitcher({
     }
   }
 
+  async function openDashboard() {
+    if (!context.data?.feature.enabled || dashboardOpening) return;
+    setDashboardOpening(true);
+    try {
+      const { active } = context.data;
+      const url = await workspaceConsoleUrl(active.kind === "team" ? active.id : undefined);
+      await openUrl(url);
+    } catch (error) {
+      toast(t("workspace.dashboardOpenFailed", { error: errMessage(error) }), "error");
+    } finally {
+      setDashboardOpening(false);
+    }
+  }
+
+  const dashboardLabel =
+    context.data?.active.kind === "team"
+      ? t("workspace.openDashboardFor", { name: context.data.active.name })
+      : t("workspace.openDashboard");
+
   return (
     <div className="workspace-switcher" data-tauri-drag-region="deep">
       <div className="workspace-switcher-head">
@@ -267,24 +288,47 @@ export default function WorkspaceSwitcher({
         </div>
       </div>
       {context.isLoading ? (
-        <div className="workspace-select-skeleton" aria-hidden="true" />
-      ) : context.data?.feature.enabled ? (
-        <div className="workspace-select-wrap">
-          <select
-            value={context.data.active.id}
-            onChange={(event) => void changeWorkspace(event.target.value)}
-            disabled={switching}
-            aria-label={t("workspace.select")}
+        <div className="workspace-select-row">
+          <div className="workspace-select-skeleton" aria-hidden="true" />
+          <button
+            type="button"
+            className="btn small workspace-dashboard-button"
+            disabled
+            aria-label={t("workspace.openDashboard")}
           >
-            {context.data.workspaces.map((workspace) => (
-              <option key={workspace.id} value={workspace.id}>
-                {workspace.kind === "personal"
-                  ? `${t("workspace.personalName")} · ${t("workspace.localOnly")}`
-                  : workspace.name}
-              </option>
-            ))}
-          </select>
-          <Icon name="chevronDown" />
+            <Icon name="externalLink" />
+          </button>
+        </div>
+      ) : context.data?.feature.enabled ? (
+        <div className="workspace-select-row">
+          <div className="workspace-select-wrap">
+            <select
+              value={context.data.active.id}
+              onChange={(event) => void changeWorkspace(event.target.value)}
+              disabled={switching}
+              aria-label={t("workspace.select")}
+            >
+              {context.data.workspaces.map((workspace) => (
+                <option key={workspace.id} value={workspace.id}>
+                  {workspace.kind === "personal"
+                    ? `${t("workspace.personalName")} · ${t("workspace.localOnly")}`
+                    : workspace.name}
+                </option>
+              ))}
+            </select>
+            <Icon name="chevronDown" />
+          </div>
+          <button
+            type="button"
+            className="btn small workspace-dashboard-button"
+            onClick={() => void openDashboard()}
+            disabled={dashboardOpening}
+            title={dashboardLabel}
+            aria-label={dashboardLabel}
+            aria-busy={dashboardOpening}
+          >
+            <Icon name="externalLink" />
+          </button>
         </div>
       ) : null}
     </div>

@@ -91,6 +91,7 @@ pub fn run() {
             commands::workspace_auth_state,
             commands::begin_workspace_login,
             commands::poll_workspace_login,
+            commands::workspace_console_url,
             commands::list_workspaces,
             commands::refresh_workspace_memberships,
             commands::get_active_workspace,

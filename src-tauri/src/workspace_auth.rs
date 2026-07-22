@@ -139,6 +139,24 @@ fn origin() -> AppResult<String> {
     Ok(raw)
 }
 
+/// Build the hosted workspace console URL from the same validated origin used by
+/// the auth API. Keeping this in Rust prevents the webview from opening an
+/// arbitrary origin while still honoring the localhost override in debug builds.
+pub(crate) fn console_url(workspace_id: Option<Uuid>) -> AppResult<String> {
+    let mut url = Url::parse(&origin()?)
+        .map_err(|_| AppError::Config("workspace control-plane origin is invalid".into()))?;
+    url.set_path("/settings");
+    if let Some(workspace_id) = workspace_id {
+        let workspace_id = workspace_id.to_string();
+        url.query_pairs_mut()
+            .append_pair("workspace", &workspace_id);
+        url.set_fragment(Some(&format!("workspace-{workspace_id}")));
+    } else {
+        url.set_fragment(Some("workspaces"));
+    }
+    Ok(url.into())
+}
+
 fn client() -> AppResult<Client> {
     Client::builder()
         .timeout(Duration::from_secs(15))
@@ -502,5 +520,33 @@ mod tests {
     fn device_code_validation_rejects_untrusted_input() {
         assert!(!valid_device_code("../../not-a-device-code"));
         assert!(valid_device_code("aB3dE5gH7jK9mN2pQ4rS6tU8vW0xY1zA3bC5dE7f"));
+    }
+
+    #[test]
+    fn console_url_targets_the_requested_workspace() {
+        let workspace_id = Uuid::parse_str("019bf6c8-2d35-7ba1-89bf-b4698600478c").unwrap();
+        let url = Url::parse(&console_url(Some(workspace_id)).unwrap()).unwrap();
+
+        assert_eq!(url.path(), "/settings");
+        assert_eq!(
+            url.query_pairs()
+                .find(|(key, _)| key == "workspace")
+                .unwrap()
+                .1,
+            workspace_id.to_string()
+        );
+        assert_eq!(
+            url.fragment(),
+            Some("workspace-019bf6c8-2d35-7ba1-89bf-b4698600478c")
+        );
+    }
+
+    #[test]
+    fn console_url_without_a_team_targets_the_workspace_list() {
+        let url = Url::parse(&console_url(None).unwrap()).unwrap();
+
+        assert_eq!(url.path(), "/settings");
+        assert!(url.query().is_none());
+        assert_eq!(url.fragment(), Some("workspaces"));
     }
 }
