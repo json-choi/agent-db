@@ -3,5 +3,10 @@
   "identifier": "default",
   "description": "Main window: core permissions, updater, and process relaunch.",
   "windows": ["main"],
-  "permissions": ["core:default", "updater:default", "process:default"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "updater:default",
+    "process:default"
+  ]
 }
