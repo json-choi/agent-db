@@ -5,29 +5,28 @@
 .agent-chat-screen {
   display: flex;
   flex-direction: column;
-  gap: var(--ds-space-3);
-  height: 100%;
+  height: calc(100% + var(--ds-pane-pad) + var(--ds-pane-pad));
   min-height: 0;
+  margin: calc(0px - var(--ds-pane-pad));
+  overflow: hidden;
 }
 
 .agent-chat-layout {
   display: flex;
   flex: 1 1 auto;
-  gap: var(--ds-space-3);
   min-height: 0;
 }
 
-/* Rail: solid surface (this is tab-body content, not the app shell — no glass here). */
+/* Flat project-style rail: one divider, no card wrapper or nested surface. */
 .agent-chat-rail {
   display: flex;
-  flex: 0 0 240px;
+  flex: 0 0 232px;
   flex-direction: column;
   gap: var(--ds-space-2);
   min-width: 0;
-  padding: var(--ds-space-2);
-  border: var(--ds-border-width) solid var(--ds-border-subtle);
-  border-radius: var(--ds-radius-md);
-  background: var(--ds-surface-1);
+  padding: var(--ds-space-3) var(--ds-space-2);
+  border-right: var(--ds-border-width) solid var(--ds-border-subtle);
+  background: var(--ds-surface-0);
 }
 
 .agent-chat-new-btn {
@@ -104,9 +103,10 @@
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: var(--ds-space-3);
+  gap: var(--ds-space-2);
   min-width: 0;
   min-height: 0;
+  padding: var(--ds-space-3) var(--ds-space-4);
 }
 
 .agent-chat-topbar {
@@ -114,6 +114,8 @@
   align-items: center;
   flex: 0 0 auto;
   gap: var(--ds-space-2);
+  min-width: 0;
+  min-height: var(--ds-control-lg);
 }
 
 .agent-chat-provider-tabs {
@@ -146,19 +148,29 @@
   border-color: transparent;
 }
 
-/* Connection scope indicator next to the provider tabs — same chip shape as a thread row's,
-   dimmed instead of colored when the thread's connection has since been deleted. */
+/* Read-only context indicator: it reinforces the app-wide selection without becoming a
+   second database picker inside Agent. */
 .agent-chat-connection-chip {
   display: inline-flex;
   align-items: center;
   gap: var(--ds-space-1);
+  min-width: 0;
   margin-left: auto;
   color: var(--ds-text-muted);
   font-size: var(--ds-font-size-sm);
 }
 
-.agent-chat-connection-chip.agent-chat-connection-missing {
-  opacity: 0.6;
+.agent-chat-connection-chip > strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ds-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-chat-context-label::after {
+  content: "·";
+  margin-left: var(--ds-space-1);
 }
 
 .agent-chat-command {
@@ -175,7 +187,7 @@
   white-space: pre-wrap;
 }
 
-/* Centered conversation column, ~720px, like the Codex desktop app. */
+/* Centered reading column; wide enough for result-rich database answers, still calm. */
 .agent-chat-conversation {
   display: flex;
   flex: 1 1 auto;
@@ -183,12 +195,16 @@
   gap: var(--ds-space-3);
   min-height: 0;
   width: 100%;
-  max-width: 720px;
+  max-width: 840px;
   margin: 0 auto;
 }
 
 .agent-chat-auth-warning {
   flex: 0 0 auto;
+  align-self: flex-start;
+  min-height: var(--ds-control-md);
+  padding: var(--ds-space-1) var(--ds-space-2);
+  font-size: var(--ds-font-size-sm);
 }
 
 .agent-chat-messages {
@@ -208,13 +224,52 @@
   align-items: center;
   justify-content: center;
   gap: var(--ds-space-2);
+  padding: var(--ds-space-5) var(--ds-space-3);
   color: var(--ds-text-muted);
   font-size: var(--ds-font-size-ui);
+  text-align: center;
 }
 
 .agent-chat-empty .icon {
   font-size: var(--ds-font-size-heading);
   opacity: 0.6;
+}
+
+.agent-chat-empty > strong {
+  color: var(--ds-text);
+  font-size: var(--ds-font-size-heading);
+  line-height: var(--ds-line-tight);
+}
+
+.agent-chat-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--ds-space-2);
+  margin-top: var(--ds-space-2);
+}
+
+.agent-chat-suggestions button {
+  min-height: var(--ds-control-md);
+  padding: 0 var(--ds-space-3);
+  border: var(--ds-border-width) solid var(--ds-border-subtle);
+  border-radius: var(--ds-radius-sm);
+  background: transparent;
+  color: var(--ds-text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--ds-font-size-sm);
+}
+
+.agent-chat-suggestions button:hover {
+  border-color: var(--ds-border-strong);
+  background: var(--ds-hover);
+  color: var(--ds-text);
+}
+
+.agent-chat-suggestions button:focus-visible {
+  outline: none;
+  box-shadow: var(--ds-focus-ring);
 }
 
 .agent-chat-msg {
@@ -294,16 +349,36 @@
 }
 
 @media (max-width: 760px) {
+  .agent-chat-screen {
+    height: calc(100% + var(--ds-space-3) + var(--ds-space-3));
+    margin: calc(0px - var(--ds-space-3));
+  }
+
   .agent-chat-layout {
     flex-direction: column;
   }
 
   .agent-chat-rail {
     flex: 0 0 auto;
-    max-height: 200px;
+    max-height: 180px;
+    border-right: 0;
+    border-bottom: var(--ds-border-width) solid var(--ds-border-subtle);
+  }
+
+  .agent-chat-main {
+    padding: var(--ds-space-3);
   }
 
   .agent-chat-msg.user {
     max-width: 100%;
+  }
+
+  .agent-chat-context-label {
+    display: none;
+  }
+
+  .agent-chat-provider-seg {
+    min-width: 0;
+    padding-inline: var(--ds-space-2);
   }
 }

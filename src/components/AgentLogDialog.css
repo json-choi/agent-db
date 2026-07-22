@@ -1,0 +1,56 @@
+.agent-log-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--ds-z-modal);
+  display: flex;
+  justify-content: flex-end;
+  padding: var(--ds-space-3);
+  background: var(--ds-overlay);
+  backdrop-filter: var(--ds-glass-filter-soft);
+  -webkit-backdrop-filter: var(--ds-glass-filter-soft);
+}
+
+.agent-log-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(1120px, calc(100vw - (var(--ds-space-3) * 2)));
+  min-width: 0;
+  height: calc(100dvh - (var(--ds-space-3) * 2));
+  overflow: hidden;
+  background-image: var(--ds-glass-sheen);
+  background-clip: padding-box;
+  box-shadow: var(--ds-shadow-popover), var(--ds-glass-edge);
+  backdrop-filter: var(--ds-glass-filter);
+  -webkit-backdrop-filter: var(--ds-glass-filter);
+}
+
+.agent-log-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ds-space-3);
+  min-height: var(--ds-control-lg);
+  padding: var(--ds-space-2) var(--ds-space-3);
+  border-bottom: var(--ds-border-width) solid var(--ds-border-subtle);
+}
+
+.agent-log-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--ds-pane-pad);
+  background: var(--ds-surface-1);
+}
+
+@media (max-width: 760px) {
+  .agent-log-overlay {
+    padding: 0;
+  }
+
+  .agent-log-dialog {
+    width: 100vw;
+    height: 100dvh;
+    border: 0;
+    border-radius: 0;
+  }
+}

@@ -1,10 +1,6 @@
-// In-app agent chat, Codex-desktop-style: a thread rail on the left, a centered
-// conversation column, and an onboarding gate (install/auth/consent for the claude/codex
-// CLI) that still runs before the composer appears. The subscription/read-only disclosures
-// live in the onboarding cards (per-provider i18n note, consent card) rather than a
-// permanent banner. A thread can optionally be scoped to one DB connection (chosen in the
-// draft composer, fixed once the thread is created) — App.tsx passes down the live
-// connection list and the app's currently-selected connection as the draft's default.
+// Connection-scoped Agent workspace: the sidebar's selected database is the sole context,
+// while this screen owns conversation history, provider/model controls, and the composer.
+// MCP result/audit details stay available through a secondary log action instead of a tab.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { deleteChatThread } from "../../ipc/commands";
@@ -20,6 +16,7 @@ import { Icon } from "../../components/Icon";
 import Skeleton from "../../components/Skeleton";
 import { useToast } from "../../components/Toast";
 import {
+  connectionThreads,
   loadProviderStrings,
   saveProviderString,
   useAgentChat,
@@ -126,8 +123,6 @@ function ThreadRow({
   busy,
   deleting,
   providerLabel,
-  connection,
-  connectionMissing,
   onOpen,
   onDelete,
 }: {
@@ -136,8 +131,6 @@ function ThreadRow({
   busy: boolean;
   deleting: boolean;
   providerLabel: string;
-  connection: ConnectionProfile | null;
-  connectionMissing: boolean;
   onOpen: () => void;
   onDelete: () => void;
 }) {
@@ -163,22 +156,6 @@ function ThreadRow({
         </span>
         <span className="agent-chat-thread-sub">
           <span>{providerLabel}</span>
-          {thread.connectionId !== null && (
-            <>
-              <span className="ds-meta-dot" />
-              <span
-                className={connectionMissing ? "muted" : undefined}
-                title={connectionMissing ? t("agentChat.connectionMissing") : undefined}
-              >
-                {connectionMissing
-                  ? t("agentChat.connectionMissing")
-                  : connection?.name || t("app.unnamed")}
-              </span>
-              {connection?.env && (
-                <span className={`env-chip env-${connection.env}`}>{connection.env}</span>
-              )}
-            </>
-          )}
           <span className="ds-meta-dot" />
           <span title={fullTime(thread.updatedAt)}>{relTime(thread.updatedAt)}</span>
         </span>
@@ -201,13 +178,11 @@ function ThreadRow({
 }
 
 export default function AgentChat({
-  onOpenAgent,
-  connections,
-  selectedConnectionId,
+  onOpenLogs,
+  selectedConnection,
 }: {
-  onOpenAgent: () => void;
-  connections: ConnectionProfile[];
-  selectedConnectionId: string | null;
+  onOpenLogs: () => void;
+  selectedConnection: ConnectionProfile;
 }) {
   const { t } = useI18n();
   const toast = useToast();
@@ -228,36 +203,32 @@ export default function AgentChat({
   const clis = detect.data ?? [];
   const threadsQuery = useQuery(agentChatThreadsQuery());
   const threads = threadsQuery.data ?? [];
-  const activeThread = threads.find((th) => th.id === threadId) ?? null;
+  const scopedThreads = useMemo(
+    () => connectionThreads(threads, selectedConnection.id),
+    [threads, selectedConnection.id],
+  );
+  const activeThread =
+    scopedThreads.find((thread) => thread.id === threadId) ?? null;
   const provider: AgentProvider = activeThread ? activeThread.provider : draftProvider;
 
   const selected = clis.find((c) => c.id === provider) ?? null;
   const selectedReady = !!selected?.installed && !!selected?.authenticated;
 
-  // A draft's connection is user-editable (defaults to the app's current selection); once
-  // the thread is created its connectionId is fixed, so an existing thread's scope always
-  // comes from its own row instead.
-  const [draftConnectionId, setDraftConnectionId] = useState<string | null>(
-    selectedConnectionId,
-  );
+  // A conversation belongs to exactly one global database context. If the user switches
+  // the sidebar selection while another database's thread is active, start a clean draft
+  // instead of silently showing/sending against the old scope.
   useEffect(() => {
-    if (threadId === null) setDraftConnectionId(selectedConnectionId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [threadId]);
-  const scopedConnectionId = activeThread ? activeThread.connectionId : draftConnectionId;
-  const scopedConnection = scopedConnectionId
-    ? (connections.find((c) => c.id === scopedConnectionId) ?? null)
-    : null;
-  // Only an existing thread can point at a connection that's since been deleted — a fresh
-  // draft's picker options come from the live connections list, so it can't select one.
-  const connectionMissing = !!scopedConnectionId && !scopedConnection;
+    if (!threadsQuery.isSuccess || threadId === null) return;
+    const current = threads.find((thread) => thread.id === threadId);
+    if (!current || current.connectionId !== selectedConnection.id) openThread(null);
+  }, [openThread, selectedConnection.id, threadId, threads, threadsQuery.isSuccess]);
 
   const [codexConsent, setCodexConsent] = useState(
     () => localStorage.getItem(CODEX_CONSENT_KEY) === "1",
   );
-  // The thread rail is an on-demand drawer, not a permanent column — closed by default so
-  // the conversation gets the full width, remembered across sessions.
-  const [railOpen, setRailOpen] = useState(() => localStorage.getItem(RAIL_OPEN_KEY) === "1");
+  // Orca-style project navigation stays visible by default, but users can collapse it and
+  // the preference remains local to this device.
+  const [railOpen, setRailOpen] = useState(() => localStorage.getItem(RAIL_OPEN_KEY) !== "0");
   function toggleRail() {
     setRailOpen((open) => {
       localStorage.setItem(RAIL_OPEN_KEY, open ? "0" : "1");
@@ -391,14 +362,7 @@ export default function AgentChat({
   function submit() {
     const text = draft.trim();
     if (!text || busy) return;
-    // Guards both an existing thread's turn and a draft's first send — a draft can pick
-    // any connection (not just the app's active one), and that connection can be deleted
-    // out from under the draft before Send is clicked.
-    if (connectionMissing) {
-      toast(t("agentChat.connectionMissing"), "error");
-      return;
-    }
-    send(text, provider, draftConnectionId, model || undefined, effort || undefined);
+    send(text, provider, selectedConnection.id, model || undefined, effort || undefined);
     setDraft("");
   }
 
@@ -428,30 +392,23 @@ export default function AgentChat({
           <div className="agent-chat-thread-list">
             {threadsQuery.isPending ? (
               <Skeleton lines={4} />
-            ) : threads.length === 0 ? (
+            ) : scopedThreads.length === 0 ? (
               <div className="muted agent-chat-thread-empty">
                 {t("agentChat.threadListEmpty")}
               </div>
             ) : (
-              threads.map((th) => {
-                const conn = th.connectionId
-                  ? (connections.find((c) => c.id === th.connectionId) ?? null)
-                  : null;
-                return (
-                  <ThreadRow
-                    key={th.id}
-                    thread={th}
-                    active={th.id === threadId}
-                    busy={!!pendingTurn && pendingTurn.threadId === th.id && !pendingTurn.done}
-                    deleting={deletingId === th.id}
-                    providerLabel={providerLabel(th.provider)}
-                    connection={conn}
-                    connectionMissing={!!th.connectionId && !conn}
-                    onOpen={() => openThread(th.id)}
-                    onDelete={() => void handleDeleteThread(th)}
-                  />
-                );
-              })
+              scopedThreads.map((th) => (
+                <ThreadRow
+                  key={th.id}
+                  thread={th}
+                  active={th.id === threadId}
+                  busy={!!pendingTurn && pendingTurn.threadId === th.id && !pendingTurn.done}
+                  deleting={deletingId === th.id}
+                  providerLabel={providerLabel(th.provider)}
+                  onOpen={() => openThread(th.id)}
+                  onDelete={() => void handleDeleteThread(th)}
+                />
+              ))
             )}
           </div>
         </aside>
@@ -510,24 +467,19 @@ export default function AgentChat({
               ))}
             </div>
             )}
-            {scopedConnectionId && (
-              <span
-                className={
-                  "agent-chat-connection-chip" +
-                  (connectionMissing ? " agent-chat-connection-missing" : "")
-                }
-                title={connectionMissing ? t("agentChat.connectionMissing") : undefined}
-              >
-                {connectionMissing
-                  ? t("agentChat.connectionMissing")
-                  : scopedConnection?.name || t("app.unnamed")}
-                {scopedConnection?.env && (
-                  <span className={`env-chip env-${scopedConnection.env}`}>
-                    {scopedConnection.env}
-                  </span>
-                )}
-              </span>
-            )}
+            <span
+              className="agent-chat-connection-chip"
+              title={`${selectedConnection.engine} · ${selectedConnection.database}`}
+            >
+              <Icon name="database" />
+              <span className="agent-chat-context-label">{t("agentChat.contextLabel")}</span>
+              <strong>{selectedConnection.name || t("app.unnamed")}</strong>
+              {selectedConnection.env && (
+                <span className={`env-chip env-${selectedConnection.env}`}>
+                  {selectedConnection.env}
+                </span>
+              )}
+            </span>
           </div>
 
           {detect.isPending ? (
@@ -589,7 +541,23 @@ export default function AgentChat({
                 ) : messages.length === 0 ? (
                   <div className="agent-chat-empty">
                     <Icon name="database" />
+                    <strong>
+                      {t("agentChat.emptyTitle", {
+                        name: selectedConnection.name || t("app.unnamed"),
+                      })}
+                    </strong>
                     <span>{t("agentChat.emptyHint")}</span>
+                    <div className="agent-chat-suggestions">
+                      {([
+                        "agentChat.suggestionSchema",
+                        "agentChat.suggestionTrend",
+                        "agentChat.suggestionTables",
+                      ] as I18nKey[]).map((key) => (
+                        <button key={key} type="button" onClick={() => setDraft(t(key))}>
+                          {t(key)}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 ) : (
                   messages.map((msg) => {
@@ -607,7 +575,7 @@ export default function AgentChat({
                         {tools.length > 0 && (
                           <button
                             className="btn small agent-chat-tool-chip"
-                            onClick={onOpenAgent}
+                            onClick={onOpenLogs}
                           >
                             <Icon name="database" />
                             {t("agentChat.usedTools", { count: tools.length })}
@@ -637,25 +605,15 @@ export default function AgentChat({
                       submit();
                     }
                   }}
-                  placeholder={t("agentChat.composerPlaceholder")}
-                  aria-label={t("agentChat.composerPlaceholder")}
+                  placeholder={t("agentChat.composerPlaceholder", {
+                    name: selectedConnection.name || t("app.unnamed"),
+                  })}
+                  aria-label={t("agentChat.composerPlaceholder", {
+                    name: selectedConnection.name || t("app.unnamed"),
+                  })}
                   disabled={busy}
                 />
                 <div className="agent-chat-composer-controls">
-                  {!activeThread && (
-                    <select
-                      aria-label={t("agentChat.connectionLabel")}
-                      value={draftConnectionId ?? ""}
-                      onChange={(e) => setDraftConnectionId(e.target.value || null)}
-                    >
-                      <option value="">{t("agentChat.connectionNone")}</option>
-                      {connections.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {(c.name || t("app.unnamed")) + (c.env ? ` (${c.env})` : "")}
-                        </option>
-                      ))}
-                    </select>
-                  )}
                   <select
                     aria-label={t("agentChat.modelLabel")}
                     value={model}

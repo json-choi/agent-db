@@ -30,7 +30,7 @@ import SchemaDiff from "./screens/SchemaDiff";
 import Onboarding from "./screens/Onboarding";
 import Settings from "./screens/Settings";
 import AgentChat from "./screens/AgentChat";
-import AgentResultView from "./components/AgentResultView";
+import AgentLogDialog from "./components/AgentLogDialog";
 import EngineMark from "./components/EngineMark";
 import { Icon } from "./components/Icon";
 import { ToastProvider, useToast } from "./components/Toast";
@@ -39,15 +39,11 @@ import { AgentChatProvider } from "./lib/agentChat";
 import { AgentFeedProvider, useAgentFeed } from "./lib/agentFeed";
 import { useI18n, type I18nKey } from "./lib/i18n";
 
-// App-level tabs. Chat and Agent are connection-independent (a live chat panel and a
-// tool-call feed/result surface); the rest are per-connection data views. Settings lives
-// behind the sidebar gear. SQL and Documents are mutually exclusive: a connection's driver
-// capabilities decide which one shows (see visibleTabs in Shell), so both live in ALL_TABS
-// but never render together.
-type Tab = "data" | "schema" | "sql" | "dashboard" | "documents" | "activity" | "chat" | "agent";
-// Chat is first of the connection-independent pair, so it carries the divider that pushes
-// the pair right (the .agent-tab class name predates Chat but the CSS recipe is generic).
-const ALL_TABS: Tab[] = ["data", "schema", "sql", "dashboard", "documents", "activity", "chat", "agent"];
+// App-level tabs. Every workbench tab, including Agent, inherits the one connection selected
+// in the sidebar. Agent activity/result details live behind a secondary log dialog instead
+// of competing with the conversation as another top-level tab.
+type Tab = "data" | "schema" | "sql" | "dashboard" | "documents" | "activity" | "agent";
+const ALL_TABS: Tab[] = ["data", "schema", "sql", "dashboard", "documents", "activity", "agent"];
 const TAB_LABELS: Record<Tab, I18nKey> = {
   data: "tabs.data",
   schema: "tabs.schema",
@@ -55,7 +51,6 @@ const TAB_LABELS: Record<Tab, I18nKey> = {
   dashboard: "tabs.dashboard",
   documents: "tabs.documents",
   activity: "tabs.activity",
-  chat: "tabs.chat",
   agent: "tabs.agent",
 };
 
@@ -211,6 +206,7 @@ function Shell() {
   const [tab, setTab] = useState<Tab>(() => {
     const saved = localStorage.getItem("tab");
     if (saved === "history" || saved === "audit") return "activity";
+    if (saved === "chat") return "agent";
     return (ALL_TABS as string[]).includes(saved ?? "") ? (saved as Tab) : "data";
   });
   const [sqlDraft, setSqlDraft] = useState("SELECT 1;");
@@ -228,6 +224,7 @@ function Shell() {
   const [mcpBadgeReady, setMcpBadgeReady] = useState(false);
   const [mcpRefreshTick, setMcpRefreshTick] = useState(0);
   const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
+  const [agentLogOpen, setAgentLogOpen] = useState(false);
   const updateCheckInFlight = useRef(false);
   const lastUpdateCheckAt = useRef(0);
 
@@ -423,10 +420,11 @@ function Shell() {
     }
   }, [latest, tab, toast]);
 
-  // Clear the unseen count when the Agent tab is shown (on switch, and as new events land).
+  // Agent is now the conversation itself; activity is only considered seen after the user
+  // explicitly opens the secondary log surface.
   useEffect(() => {
-    if (tab === "agent" && unseen > 0) markSeen();
-  }, [tab, unseen, markSeen]);
+    if (agentLogOpen && unseen > 0) markSeen();
+  }, [agentLogOpen, unseen, markSeen]);
 
   // Per-connection safety drives the Data/SQL views (max rows, auto-run reads).
   // safetyReqId guards against out-of-order resolution: getSafety runs on a pooled
@@ -500,6 +498,7 @@ function Shell() {
     setSettingsOpen(false);
     setSchemaDiffGroupKey(null);
     setDashboardFocusId(null);
+    setAgentLogOpen(false);
     setTab(nextTab);
   }
 
@@ -580,20 +579,19 @@ function Shell() {
       <div className="muted">{t("app.loading")}</div>
     );
 
-    // Per-connection views need a connection; Agent is connection-independent and always
-    // renders its live feed. With no connection selected, the tab bar still shows so Agent
-    // stays reachable — the data tabs fall back to a "pick a connection" placeholder.
+    // Every workbench view needs the global connection context. With no connection selected,
+    // the tab bar stays reachable but the current view asks for one explicit selection.
     const needsConn = (
       <ConnectionPicker
         connections={conns}
-        onSelect={(id) => selectConnection(id, tab === "agent" ? "data" : tab)}
+        onSelect={(id) => selectConnection(id, tab === "agent" ? "agent" : "data")}
         onNew={startNewConnection}
       />
     );
 
     return (
       <>
-        {selected && tab !== "agent" && tab !== "chat" && (
+        {selected && (
           <header className="main-head ds-workbench-head" data-tauri-drag-region="deep">
             <div className="ds-workbench-title">
               <div className="ds-title-line app-title-line">
@@ -610,16 +608,17 @@ function Shell() {
                 )}
               </div>
             </div>
-            {unseen > 0 && (
+            {(tab === "agent" || unseen > 0) && (
               <div className="main-policy ds-command-group">
                 <button
                   className="btn small agent-jump"
-                  onClick={() => setTab("agent")}
-                  title={t("app.agentUnseen", { count: unseen })}
-                  aria-label={t("app.agentUnseen", { count: unseen })}
+                  onClick={() => setAgentLogOpen(true)}
+                  title={t("agentChat.logsFor", { name: selected.name || t("app.unnamed") })}
+                  aria-label={t("agentChat.logsFor", { name: selected.name || t("app.unnamed") })}
                 >
-                  <Icon name="alert" />
-                  {unseen}
+                  <Icon name="list" />
+                  {t("agentChat.logs")}
+                  {unseen > 0 && <span className="tab-dot">{unseen > 9 ? "9+" : unseen}</span>}
                 </button>
               </div>
             )}
@@ -637,10 +636,7 @@ function Shell() {
               aria-selected={tabId === tab}
               // Roving tabindex: only the active tab is in the Tab order; arrows move within.
               tabIndex={tabId === tab ? 0 : -1}
-              className={
-                (tabId === tab ? "tab active" : "tab") +
-                (tabId === "chat" ? " agent-tab" : "")
-              }
+              className={tabId === tab ? "tab active" : "tab"}
               onClick={() => setTab(tabId)}
               // Arrow keys move focus+selection across TABS, wrapping — mirrors the sidebar tree.
               onKeyDown={(e) => {
@@ -662,14 +658,15 @@ function Shell() {
         </nav>
 
         <section className="tab-body" role="tabpanel">
-          {tab === "agent" && <AgentResultView onDashboardSaved={openDashboard} />}
-          {tab === "chat" && (
-            <AgentChat
-              onOpenAgent={() => setTab("agent")}
-              connections={conns}
-              selectedConnectionId={selectedId}
-            />
-          )}
+          {tab === "agent" &&
+            (selected ? (
+              <AgentChat
+                onOpenLogs={() => setAgentLogOpen(true)}
+                selectedConnection={selected}
+              />
+            ) : (
+              needsConn
+            ))}
           {tab === "data" &&
             (!selected ? (
               needsConn
@@ -784,7 +781,7 @@ function Shell() {
         selectedTableKey={selectedTable ? tableKey(selectedTable) : null}
         activeSchemaGroupKey={schemaDiffGroupKey}
         onSelectConn={(id) => {
-          selectConnection(id);
+          selectConnection(id, tab === "agent" ? "agent" : "data");
         }}
         onOpenTable={(conn, t) => {
           setSelectedId(conn.id);
@@ -844,6 +841,13 @@ function Shell() {
         }}
       />
       <main className="main">{renderMain()}</main>
+      {agentLogOpen && selected && (
+        <AgentLogDialog
+          connection={selected}
+          onDashboardSaved={openDashboard}
+          onClose={() => setAgentLogOpen(false)}
+        />
+      )}
       {(showUpdateBadge || showMcpBadge) && (
         <div className="ds-attention-stack">
           {showUpdateBadge && (

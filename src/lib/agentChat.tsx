@@ -1,7 +1,7 @@
 // App-level in-app agent chat state. Mounted once at the App level (same spot as
 // AgentFeedProvider) so a conversation survives leaving and returning to the Chat tab.
 // Thread list and message history live in TanStack Query (the DB is the source of truth) —
-// this provider only keeps the two things that must survive a screen unmount mid-turn: which
+// this provider only keeps the two things that must survive an Agent screen unmount mid-turn: which
 // thread is active, and the one globally-active turn's streaming buffer. The backend allows
 // only one concurrent turn (see ChatSlot in agent/mod.rs), so `busy` is a single global flag.
 import {
@@ -15,7 +15,7 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
 import { cancelQuery, createChatThread, sendChatTurn } from "../ipc/commands";
-import type { AgentProvider } from "../ipc/types";
+import type { AgentProvider, ChatThread } from "../ipc/types";
 import { errMessage } from "../ipc/types";
 import { qk } from "./queries";
 
@@ -61,6 +61,10 @@ export function useAgentChat(): AgentChatValue {
 // persist under one localStorage key per provider. The composer seeds a draft conversation's
 // initial picker state from these; an existing thread seeds from its own row instead.
 type ProviderStrings = Record<AgentProvider, string>;
+
+export function connectionThreads(threads: ChatThread[], connectionId: string): ChatThread[] {
+  return threads.filter((thread) => thread.connectionId === connectionId);
+}
 
 export function providerStorageKey(kind: "model" | "effort", p: AgentProvider): string {
   return `dopedb:agentChat:${kind}:${p}`;

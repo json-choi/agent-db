@@ -150,12 +150,24 @@ function AgentEmptyState() {
 }
 
 export default function AgentResultView({
+  compact = false,
+  connectionId,
   onDashboardSaved,
 }: {
+  compact?: boolean;
+  connectionId?: string;
   onDashboardSaved: (dashboard: Dashboard) => void;
 }) {
   const { t } = useI18n();
-  const { feed, latest } = useAgentFeed();
+  const { feed: allFeed } = useAgentFeed();
+  const feed = useMemo(
+    () =>
+      connectionId
+        ? allFeed.filter((item) => item.connectionId === connectionId)
+        : allFeed,
+    [allFeed, connectionId],
+  );
+  const latest = useMemo(() => feed.find((item) => item.result) ?? null, [feed]);
   const [view, setView] = useState<AgentView>("result");
   const [selected, setSelected] = useState<AgentActivity | null>(() =>
     selectedResult(feed, latest),
@@ -170,6 +182,11 @@ export default function AgentResultView({
   useEffect(() => {
     if (!selected && feed[0]) setSelected(feed[0]);
   }, [feed, selected]);
+  useEffect(() => {
+    if (selected && !feed.some((item) => item.id === selected.id)) {
+      setSelected(selectedResult(feed, latest));
+    }
+  }, [feed, latest, selected]);
 
   const stats = useMemo(() => {
     const calls = feed.filter((item) => item.kind === "call").length;
@@ -183,12 +200,14 @@ export default function AgentResultView({
   return (
     <div className="agent-workspace">
       <header className="agent-head">
-        <div>
-          <div className="agent-title-row">
-            <h2>{t("agent.workspace")}</h2>
-            <InfoTip label={t("agent.contextHelp")} />
+        {!compact && (
+          <div>
+            <div className="agent-title-row">
+              <h2>{t("agent.workspace")}</h2>
+              <InfoTip label={t("agent.contextHelp")} />
+            </div>
           </div>
-        </div>
+        )}
         <div className="agent-stats" aria-label={t("agent.session")}>
           <span title={t("agent.toolCalls", { count: stats.calls })} aria-label={t("agent.toolCalls", { count: stats.calls })}>
             <Icon name="play" />

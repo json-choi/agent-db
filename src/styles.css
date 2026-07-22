@@ -292,12 +292,6 @@
   color: var(--ds-accent-text);
   border-bottom-color: var(--ds-accent-text);
 }
-/* Agent tab is connection-independent — push it to the right, set off by a divider. */
-.tabs .tab.agent-tab {
-  margin-left: auto;
-  border-left: var(--ds-border-width) solid var(--ds-border-subtle);
-  padding-left: var(--ds-space-3);
-}
 /* Unseen-count pill next to the Agent tab label. */
 .tab-dot {
   min-width: 16px;
@@ -368,12 +362,6 @@
 
   .main {
     min-height: 0;
-  }
-
-  .tabs .tab.agent-tab {
-    margin-left: 0;
-    border-left: 0;
-    padding-left: var(--ds-space-2);
   }
 
   .tab {
