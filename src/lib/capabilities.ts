@@ -10,7 +10,7 @@ import type {
   Engine,
 } from "../ipc/types";
 
-export function connectionCapabilities(
+function connectionCapabilities(
   drivers: DriverDescriptor[],
   conn: ConnectionProfile,
 ): Set<DriverCapability> {

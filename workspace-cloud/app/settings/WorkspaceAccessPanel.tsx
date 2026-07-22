@@ -69,74 +69,85 @@ export function WorkspaceAccessPanel({ workspaceId }: { workspaceId: string }) {
     if (pending || mutatingId) return;
     setPending(true);
     setError("");
-    const response = await fetch(`/api/v1/workspaces/${workspaceId}/members`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email, role }),
-    }).catch(() => null);
-    setPending(false);
-    if (!response?.ok) {
-      const body = await response?.json().catch(() => null);
-      setError(body?.error ?? "초대를 만들지 못했습니다.");
-      return;
+    try {
+      const response = await fetch(`/api/v1/workspaces/${workspaceId}/members`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email, role }),
+      }).catch(() => null);
+      if (!response?.ok) {
+        const body = await response?.json().catch(() => null);
+        setError(body?.error ?? "초대를 만들지 못했습니다.");
+        return;
+      }
+      setEmail("");
+      await load();
+    } finally {
+      setPending(false);
     }
-    setEmail("");
-    await load();
   }
 
   async function updateRole(memberId: string, nextRole: string) {
     if (mutatingId) return;
     setMutatingId(memberId);
     setError("");
-    const response = await fetch(`/api/v1/workspaces/${workspaceId}/members`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ memberId, role: nextRole }),
-    }).catch(() => null);
-    if (!response?.ok) {
-      const body = await response?.json().catch(() => null);
-      setError(body?.error ?? "권한을 변경하지 못했습니다.");
+    try {
+      const response = await fetch(`/api/v1/workspaces/${workspaceId}/members`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ memberId, role: nextRole }),
+      }).catch(() => null);
+      if (!response?.ok) {
+        const body = await response?.json().catch(() => null);
+        setError(body?.error ?? "권한을 변경하지 못했습니다.");
+        return;
+      }
+      await load();
+    } finally {
       setMutatingId("");
-      return;
     }
-    await load();
-    setMutatingId("");
   }
 
   async function remove(kind: "member" | "invitation", id: string) {
     if (mutatingId) return;
     setMutatingId(id);
     setError("");
-    const response = await fetch(`/api/v1/workspaces/${workspaceId}/members`, {
-      method: "DELETE",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(kind === "member" ? { memberId: id } : { invitationId: id }),
-    }).catch(() => null);
-    setMutatingId("");
-    if (!response?.ok) {
-      const body = await response?.json().catch(() => null);
-      setError(body?.error ?? "요청을 처리하지 못했습니다.");
-      return;
+    try {
+      const response = await fetch(`/api/v1/workspaces/${workspaceId}/members`, {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(kind === "member" ? { memberId: id } : { invitationId: id }),
+      }).catch(() => null);
+      if (!response?.ok) {
+        const body = await response?.json().catch(() => null);
+        setError(body?.error ?? "요청을 처리하지 못했습니다.");
+        return;
+      }
+      await load();
+    } finally {
+      setMutatingId("");
     }
-    await load();
   }
 
   async function resend(item: PendingInvitation) {
     if (mutatingId) return;
     setMutatingId(item.id);
     setError("");
-    const response = await fetch(`/api/v1/workspaces/${workspaceId}/members`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email: item.email, role: item.role ?? "analyst" }),
-    }).catch(() => null);
-    setMutatingId("");
-    if (!response?.ok) {
-      const body = await response?.json().catch(() => null);
-      setError(body?.error ?? "초대를 다시 만들지 못했습니다.");
-      return;
+    try {
+      const response = await fetch(`/api/v1/workspaces/${workspaceId}/members`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: item.email, role: item.role ?? "analyst" }),
+      }).catch(() => null);
+      if (!response?.ok) {
+        const body = await response?.json().catch(() => null);
+        setError(body?.error ?? "초대를 다시 만들지 못했습니다.");
+        return;
+      }
+      await load();
+    } finally {
+      setMutatingId("");
     }
-    await load();
   }
 
   async function copyInvitation(item: PendingInvitation) {

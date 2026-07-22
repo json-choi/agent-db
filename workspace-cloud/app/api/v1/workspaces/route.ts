@@ -2,7 +2,12 @@ import { and, eq, inArray } from "drizzle-orm";
 import { auth } from "../../../../lib/auth";
 import { db } from "../../../../lib/db";
 import { env } from "../../../../lib/env";
-import { jsonError, mutationAllowed, privateJson } from "../../../../lib/http";
+import {
+  isSafeDisplayText,
+  jsonError,
+  mutationAllowed,
+  privateJson,
+} from "../../../../lib/http";
 import { member } from "../../../../lib/schema";
 
 export async function GET(request: Request) {
@@ -35,7 +40,9 @@ export async function POST(request: Request) {
   if (!session) return jsonError("Unauthorized", 401);
   const body = (await request.json().catch(() => null)) as { name?: string } | null;
   const name = body?.name?.trim();
-  if (!name || name.length > 120) return jsonError("Workspace name must be 1–120 characters", 400);
+  if (!name || !isSafeDisplayText(name, 120)) {
+    return jsonError("Workspace name must be 1–120 single-line characters", 400);
+  }
   const base = name
     .normalize("NFKD")
     .toLowerCase()

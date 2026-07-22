@@ -39,8 +39,8 @@ Use a local-execution, hosted-control-plane architecture:
 
 ```mermaid
 flowchart LR
-    A["Member A · DopeDB"] <-->|"encrypted sync"| W["Workspace control plane"]
-    B["Member B · DopeDB"] <-->|"encrypted sync"| W
+    A["Member A · DopeDB"] <-->|"authenticated HTTPS metadata sync"| W["Workspace control plane"]
+    B["Member B · DopeDB"] <-->|"authenticated HTTPS metadata sync"| W
     W --> M["members · roles · invitations"]
     W --> R["connection templates · dashboards · reports"]
     W --> P["provider resources · permissions · approvals"]

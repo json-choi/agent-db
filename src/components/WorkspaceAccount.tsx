@@ -126,11 +126,16 @@ export default function WorkspaceAccount({
     return request;
   }
 
-  function cancelLogin() {
-    if (!pendingLogin.current) return;
+  function abortLoginAttempt() {
     loginAttempt.current += 1;
     pendingLogin.current = null;
+    browserWasActive.current = false;
     setLoginPhase("idle");
+  }
+
+  function cancelLogin() {
+    if (!pendingLogin.current) return;
+    abortLoginAttempt();
     toast(t("workspace.loginCanceled"));
   }
 
@@ -249,9 +254,7 @@ export default function WorkspaceAccount({
 
   async function logout(userId: string) {
     if (loggingOut) return;
-    loginAttempt.current += 1;
-    pendingLogin.current = null;
-    setLoginPhase("idle");
+    abortLoginAttempt();
     setLoggingOut(userId);
     try {
       const signedOut = await signOutWorkspace(userId);
@@ -274,6 +277,7 @@ export default function WorkspaceAccount({
 
   async function logoutAll() {
     if (loggingOut) return;
+    abortLoginAttempt();
     setLoggingOut("all");
     try {
       const signedOut = await signOutAllWorkspaces();
@@ -296,6 +300,7 @@ export default function WorkspaceAccount({
       setMenuOpen(false);
       return;
     }
+    abortLoginAttempt();
     setSwitchingAccount(userId);
     try {
       await setActiveWorkspaceAccount(userId);

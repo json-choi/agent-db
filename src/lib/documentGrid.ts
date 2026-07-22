@@ -1,7 +1,7 @@
 // Shapes MongoDB documents into DataGrid columns/rows: union of top-level keys (_id
 // first), each cell JSON.stringify'd (undefined -> blank). Shared by the Documents query
 // screen and the Tables mongodb branch so both render documents the same way.
-export function documentColumns(documents: unknown[], fallback: string[] = []): string[] {
+function documentColumns(documents: unknown[], fallback: string[] = []): string[] {
   const seen = new Set<string>();
   const cols: string[] = [];
   for (const doc of documents) {

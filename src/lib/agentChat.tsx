@@ -66,7 +66,7 @@ export function connectionThreads(threads: ChatThread[], connectionId: string): 
   return threads.filter((thread) => thread.connectionId === connectionId);
 }
 
-export function providerStorageKey(kind: "model" | "effort", p: AgentProvider): string {
+function providerStorageKey(kind: "model" | "effort", p: AgentProvider): string {
   return `dopedb:agentChat:${kind}:${p}`;
 }
 

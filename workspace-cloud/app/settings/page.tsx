@@ -63,11 +63,14 @@ export default async function SettingsPage({
       <aside className="console-nav">
         <Brand />
         <nav><a className="active" href="#workspaces"><span>01</span> Workspaces</a><a href="#devices"><span>02</span> Devices</a></nav>
-        <AccountSwitcher currentUser={{
-          id: session.user.id,
-          name: session.user.name,
-          email: session.user.email,
-        }} />
+        <AccountSwitcher
+          currentSessionId={session.session.id}
+          currentUser={{
+            id: session.user.id,
+            name: session.user.name,
+            email: session.user.email,
+          }}
+        />
       </aside>
       <div className="console-main">
         <header className="console-header"><div><p className="eyebrow">BETTER AUTH / DRIZZLE</p><h1>워크스페이스 설정</h1></div><div className="user-chip"><span>{session.user.name.slice(0, 1).toUpperCase()}</span><div><strong>{session.user.name}</strong><small>{session.user.email}</small></div></div></header>

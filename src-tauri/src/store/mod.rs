@@ -9,7 +9,7 @@
 
 mod migrations;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -733,7 +733,7 @@ impl Store {
         workspace_id: Uuid,
         account_user_id: &str,
         connections: &[(ConnectionProfile, i64)],
-    ) -> AppResult<()> {
+    ) -> AppResult<Vec<Uuid>> {
         let membership_exists: bool = sqlx::query_scalar(
             "SELECT EXISTS(
                  SELECT 1 FROM workspace_members
@@ -774,8 +774,32 @@ impl Store {
         let incoming = connections
             .iter()
             .map(|(profile, _)| profile.id.to_string())
-            .collect::<Vec<_>>();
-        for id in existing_remote.iter().filter(|id| !incoming.contains(id)) {
+            .collect::<HashSet<_>>();
+        let mut removed_credential_ids = HashSet::new();
+        for id in existing_remote.iter().filter(|id| !incoming.contains(*id)) {
+            let secret_refs: Vec<String> = sqlx::query_scalar(
+                "SELECT secret_ref FROM workspace_connection_bindings
+                 WHERE connection_id = ?1 AND secret_ref IS NOT NULL",
+            )
+            .bind(id)
+            .fetch_all(&mut *tx)
+            .await?;
+            for secret_ref in secret_refs {
+                match Uuid::parse_str(&secret_ref) {
+                    Ok(credential_id) => {
+                        removed_credential_ids.insert(credential_id);
+                    }
+                    Err(error) => tracing::warn!(
+                        connection_id = id.as_str(),
+                        %error,
+                        "ignored an invalid shared credential reference during cleanup"
+                    ),
+                }
+            }
+            sqlx::query("DELETE FROM workspace_connection_bindings WHERE connection_id = ?1")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
             sqlx::query(
                 "UPDATE connections SET deleted_at = ?2, updated_at = ?2
                  WHERE id = ?1 AND workspace_id = ?3 AND remote_id IS NOT NULL",
@@ -853,7 +877,7 @@ impl Store {
             .await?;
         }
         tx.commit().await?;
-        Ok(())
+        Ok(removed_credential_ids.into_iter().collect())
     }
 
     /// Remove the local cache row for a just-created remote template after the server
@@ -994,37 +1018,6 @@ impl Store {
         .await?
         .ok_or_else(|| AppError::NotFound(format!("connection {id}")))?;
         row_to_connection_with_binding(&row)
-    }
-
-    pub async fn set_connection_schema_group(
-        &self,
-        id: Uuid,
-        schema_group: Option<String>,
-    ) -> AppResult<ConnectionProfile> {
-        self.get_connection(id).await?;
-        let workspace_id = self.active_workspace_id().await?;
-        let mut tx = self.pool.begin().await?;
-        let result = sqlx::query(
-            "UPDATE connections SET schema_group = ?2, updated_at = ?3,
-                    revision = revision + 1, sync_status = 'dirty'
-             WHERE id = ?1 AND workspace_id = ?4 AND deleted_at IS NULL",
-        )
-        .bind(id.to_string())
-        .bind(schema_group)
-        .bind(Utc::now())
-        .bind(workspace_id.to_string())
-        .execute(&mut *tx)
-        .await?;
-        if result.rows_affected() != 1 {
-            return Err(AppError::NotFound(format!("connection {id}")));
-        }
-        let revision: i64 = sqlx::query_scalar("SELECT revision FROM connections WHERE id = ?1")
-            .bind(id.to_string())
-            .fetch_one(&mut *tx)
-            .await?;
-        enqueue_outbox(&mut tx, workspace_id, "connection", id, "upsert", revision).await?;
-        tx.commit().await?;
-        self.get_connection(id).await
     }
 
     /// Update several connections as one transaction so a failed group operation
@@ -2508,6 +2501,21 @@ mod tests {
             crate::model::WorkspaceConnectionAccess::Read
         );
         assert!(!loaded.allow_writes);
+
+        let removed_credential_ids = store
+            .sync_remote_connections(workspace_id, &user.id, &[])
+            .await
+            .unwrap();
+        assert!(removed_credential_ids.contains(&id));
+        assert!(store.list_connections().await.unwrap().is_empty());
+        let binding_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM workspace_connection_bindings WHERE connection_id = ?1",
+        )
+        .bind(id.to_string())
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+        assert_eq!(binding_count, 0);
     }
 
     #[tokio::test]

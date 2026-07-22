@@ -39,7 +39,7 @@ export async function POST(request: Request, context: RouteContext) {
   if (!mutationAllowed(request, env.appOrigin())) return jsonError("Invalid request origin", 403);
   const { workspaceId } = await context.params;
   if (!isUuid(workspaceId)) return jsonError("Invalid workspace id", 400);
-  const authorization = await authorizeWorkspace(request, workspaceId, "write");
+  const authorization = await authorizeWorkspace(request, workspaceId, "manage");
   if (!authorization.ok) return jsonError(authorization.error, authorization.status);
   let input;
   try {

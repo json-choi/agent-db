@@ -93,7 +93,9 @@ export async function PATCH(request: Request, context: RouteContext) {
   if (!authorization.ok) return jsonError(authorization.error, authorization.status);
   const body = (await request.json().catch(() => null)) as { memberId?: unknown; role?: unknown } | null;
   const memberId = typeof body?.memberId === "string" ? body.memberId : "";
-  if (!memberId || !isAssignableRole(body?.role)) return jsonError("Invalid member role update", 400);
+  if (!isUuid(memberId) || !isAssignableRole(body?.role)) {
+    return jsonError("Invalid member role update", 400);
+  }
   const existing = await db.query.member.findFirst({
     where: and(eq(member.id, memberId), eq(member.organizationId, workspaceId)),
   });
@@ -126,7 +128,7 @@ export async function DELETE(request: Request, context: RouteContext) {
     invitationId?: unknown;
   } | null;
 
-  if (typeof body?.invitationId === "string" && body.invitationId) {
+  if (typeof body?.invitationId === "string" && isUuid(body.invitationId)) {
     const existing = await db.query.invitation.findFirst({
       where: and(
         eq(invitation.id, body.invitationId),
@@ -151,7 +153,7 @@ export async function DELETE(request: Request, context: RouteContext) {
     return privateJson({ status: true });
   }
 
-  if (typeof body?.memberId === "string" && body.memberId) {
+  if (typeof body?.memberId === "string" && isUuid(body.memberId)) {
     const existing = await db.query.member.findFirst({
       where: and(eq(member.id, body.memberId), eq(member.organizationId, workspaceId)),
     });

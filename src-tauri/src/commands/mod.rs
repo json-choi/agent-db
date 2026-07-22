@@ -108,7 +108,7 @@ fn secret_snapshot(id: Uuid, referenced: bool) -> AppResult<Option<Zeroizing<Str
     }
 }
 
-fn delete_secret_after_rollback(id: Uuid, action: &'static str) {
+fn delete_secret_best_effort(id: Uuid, action: &'static str) {
     if let Err(error) = connection::delete_secret(&id) {
         tracing::warn!(credential_id = %id, %error, action, "credential cleanup deferred");
     }
@@ -214,8 +214,6 @@ async fn record_run(
         tracing::error!("history insert failed for connection {id}: {e}");
     }
 }
-
-// ── connection CRUD ──────────────────────────────────────────────────────────
 
 // ── workspace context ────────────────────────────────────────────────────────
 
@@ -429,10 +427,14 @@ async fn sync_workspace_connections(
 ) -> AppResult<()> {
     match crate::workspace_auth::remote_connections(account_user_id, workspace_id).await {
         Ok(Some(connections)) => {
-            state
+            let removed_credential_ids = state
                 .store
                 .sync_remote_connections(workspace_id, account_user_id, &connections)
-                .await
+                .await?;
+            for credential_id in removed_credential_ids {
+                delete_secret_best_effort(credential_id, "remove_remote_connection");
+            }
+            Ok(())
         }
         Ok(None) => {
             tracing::info!(
@@ -620,7 +622,7 @@ pub async fn copy_connection_to_workspace(
         Ok(created) => created,
         Err(error) => {
             if let Some(credential_id) = credential_id {
-                delete_secret_after_rollback(credential_id, "share_connection");
+                delete_secret_best_effort(credential_id, "share_connection");
             }
             return Err(error);
         }
@@ -628,10 +630,13 @@ pub async fn copy_connection_to_workspace(
     remote.push((created.clone(), revision));
     let credential_ref = credential_id.map(|id| id.to_string());
     let local_result = async {
-        state
+        let removed_credential_ids = state
             .store
             .sync_remote_connections(workspace_id, &account.user.id, &remote)
             .await?;
+        for credential_id in removed_credential_ids {
+            delete_secret_best_effort(credential_id, "remove_remote_connection");
+        }
         state
             .store
             .bind_connection_credentials(
@@ -648,7 +653,7 @@ pub async fn copy_connection_to_workspace(
         Ok(profile) => Ok(profile),
         Err(error) => {
             if let Some(credential_id) = credential_id {
-                delete_secret_after_rollback(credential_id, "persist_shared_connection");
+                delete_secret_best_effort(credential_id, "persist_shared_connection");
             }
             match crate::workspace_auth::delete_connection(
                 &account.user.id,
@@ -752,7 +757,7 @@ pub async fn bind_workspace_connection_credentials(
                     );
                 }
             } else {
-                delete_secret_after_rollback(credential_id, "bind_connection_credentials");
+                delete_secret_best_effort(credential_id, "bind_connection_credentials");
             }
             Err(error)
         }
@@ -840,7 +845,7 @@ pub async fn upsert_connection(
     match state.store.upsert_connection(&profile).await {
         Ok(profile) => {
             if let Some(previous_id) = previous_secret_id.filter(|id| *id != profile.id) {
-                delete_secret_after_rollback(previous_id, "replace_connection_credentials");
+                delete_secret_best_effort(previous_id, "replace_connection_credentials");
             }
             Ok(profile)
         }
@@ -857,34 +862,12 @@ pub async fn upsert_connection(
                         );
                     }
                 } else {
-                    delete_secret_after_rollback(profile.id, "upsert_connection");
+                    delete_secret_best_effort(profile.id, "upsert_connection");
                 }
             }
             Err(error)
         }
     }
-}
-
-#[tauri::command]
-pub async fn set_connection_schema_group(
-    state: State<'_, AppState>,
-    id: Uuid,
-    schema_group: Option<String>,
-) -> AppResult<ConnectionProfile> {
-    let mut profile = state.store.get_connection(id).await?;
-    if profile.workspace_access != WorkspaceConnectionAccess::Local {
-        return Err(AppError::Blocked {
-            reason: "shared template metadata must be changed through the workspace service".into(),
-        });
-    }
-    let normalized = normalize_schema_group(schema_group);
-    profile.schema_group = normalized.clone();
-    let connections = state.store.list_connections().await?;
-    validate_schema_group_engine(&profile, &connections)?;
-    state
-        .store
-        .set_connection_schema_group(id, normalized)
-        .await
 }
 
 #[tauri::command]
@@ -910,6 +893,12 @@ pub async fn set_connections_schema_group(
             .iter_mut()
             .find(|profile| profile.id == *id)
             .ok_or_else(|| AppError::NotFound(format!("connection {id}")))?;
+        if profile.workspace_access != WorkspaceConnectionAccess::Local {
+            return Err(AppError::Blocked {
+                reason: "shared template metadata must be changed through the workspace service"
+                    .into(),
+            });
+        }
         profile.schema_group = normalized.clone();
     }
 

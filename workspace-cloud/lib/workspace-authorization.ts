@@ -6,37 +6,14 @@ import { and, eq } from "drizzle-orm";
 import { db } from "./db";
 import { auth } from "./auth";
 import { member } from "./schema";
+import {
+  accessModeForRole,
+  hasWorkspaceCapability,
+  isWorkspaceRole,
+  type WorkspaceCapability,
+} from "./workspace-permissions";
 
-const workspaceRoleNames = ["viewer", "analyst", "editor", "admin", "owner"] as const;
-export type WorkspaceRoleName = (typeof workspaceRoleNames)[number];
-type WorkspaceCapability = "view" | "read" | "write" | "manage" | "delete";
-
-const roleRank: Record<WorkspaceRoleName, number> = {
-  viewer: 0,
-  analyst: 1,
-  editor: 2,
-  admin: 3,
-  owner: 4,
-};
-
-const requiredRank: Record<WorkspaceCapability, number> = {
-  view: roleRank.viewer,
-  read: roleRank.analyst,
-  write: roleRank.editor,
-  manage: roleRank.admin,
-  delete: roleRank.owner,
-};
-
-function isWorkspaceRole(value: string): value is WorkspaceRoleName {
-  return workspaceRoleNames.includes(value as WorkspaceRoleName);
-}
-
-function accessModeForRole(role: WorkspaceRoleName) {
-  if (roleRank[role] >= roleRank.admin) return "manage" as const;
-  if (roleRank[role] >= roleRank.editor) return "write" as const;
-  if (roleRank[role] >= roleRank.analyst) return "read" as const;
-  return "view" as const;
-}
+export type { WorkspaceRoleName } from "./workspace-permissions";
 
 export async function authorizeWorkspace(
   request: Request,
@@ -55,7 +32,7 @@ export async function authorizeWorkspace(
   if (!membership || !isWorkspaceRole(membership.role)) {
     return { ok: false as const, status: 403, error: "Workspace access denied" };
   }
-  if (roleRank[membership.role] < requiredRank[capability]) {
+  if (!hasWorkspaceCapability(membership.role, capability)) {
     return { ok: false as const, status: 403, error: "Insufficient workspace permission" };
   }
   return {

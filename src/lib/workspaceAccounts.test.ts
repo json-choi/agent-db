@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { Workspace, WorkspaceAuthState } from "../ipc/types";
 import {
   buildWorkspaceChoiceGroups,
+  canManageWorkspaceConnections,
   parseWorkspaceChoice,
   workspaceChoiceValue,
 } from "./workspaceAccounts";
@@ -52,5 +53,14 @@ describe("workspace account choices", () => {
       accountUserId: "account-a",
     });
     expect(parseWorkspaceChoice("invalid")).toBeNull();
+  });
+
+  it("limits shared-template management to administrators and owners", () => {
+    expect(canManageWorkspaceConnections("owner")).toBe(true);
+    expect(canManageWorkspaceConnections("admin")).toBe(true);
+    expect(canManageWorkspaceConnections("editor")).toBe(false);
+    expect(canManageWorkspaceConnections("analyst")).toBe(false);
+    expect(canManageWorkspaceConnections("viewer")).toBe(false);
+    expect(canManageWorkspaceConnections(null)).toBe(false);
   });
 });

@@ -2,6 +2,7 @@
 //! and credential persistence stay in Rust so Bearer sessions never cross into the
 //! webview, logs, local SQLite, or frontend query caches.
 
+use std::net::IpAddr;
 use std::time::Duration;
 
 use reqwest::{redirect::Policy, Client, Response, StatusCode, Url};
@@ -119,6 +120,17 @@ pub(crate) struct RemoteWorkspace {
     pub role: WorkspaceRole,
 }
 
+fn is_loopback_host(url: &Url) -> bool {
+    url.host_str().is_some_and(|host| {
+        host.eq_ignore_ascii_case("localhost")
+            || host
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .parse::<IpAddr>()
+                .is_ok_and(|address| address.is_loopback())
+    })
+}
+
 fn origin() -> AppResult<String> {
     let raw = std::env::var("DOPEDB_WORKSPACE_ORIGIN")
         .unwrap_or_else(|_| DEFAULT_CONTROL_PLANE_ORIGIN.to_string())
@@ -126,9 +138,8 @@ fn origin() -> AppResult<String> {
         .to_string();
     let url = Url::parse(&raw)
         .map_err(|_| AppError::Config("workspace control-plane origin is invalid".into()))?;
-    let local_debug_origin = cfg!(debug_assertions)
-        && url.scheme() == "http"
-        && matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
+    let local_debug_origin =
+        cfg!(debug_assertions) && url.scheme() == "http" && is_loopback_host(&url);
     if (url.scheme() != "https" && !local_debug_origin)
         || url.username() != ""
         || url.password().is_some()
@@ -660,6 +671,20 @@ mod tests {
         assert!(!valid_device_code("../../not-a-device-code"));
         assert!(valid_device_code(
             "aB3dE5gH7jK9mN2pQ4rS6tU8vW0xY1zA3bC5dE7f"
+        ));
+    }
+
+    #[test]
+    fn loopback_detection_accepts_ipv4_ipv6_and_localhost() {
+        for origin in [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://[::1]:3000",
+        ] {
+            assert!(is_loopback_host(&Url::parse(origin).unwrap()));
+        }
+        assert!(!is_loopback_host(
+            &Url::parse("https://app.dopedb.dev").unwrap()
         ));
     }
 

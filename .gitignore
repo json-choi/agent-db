@@ -6,6 +6,7 @@
 /workspace-cloud/.next
 /workspace-cloud/node_modules
 /workspace-cloud/tsconfig.tsbuildinfo
+/site/tsconfig.tsbuildinfo
 /site/.vercel
 src-tauri/target
 .DS_Store

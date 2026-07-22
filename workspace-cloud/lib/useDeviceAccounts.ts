@@ -7,6 +7,7 @@ import { authClient } from "./auth-client";
 
 interface DeviceSession {
   session: {
+    id: string;
     token: string;
     updatedAt: Date;
   };

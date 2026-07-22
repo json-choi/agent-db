@@ -46,7 +46,7 @@ export async function PATCH(request: Request, context: RouteContext) {
   if (!isUuid(workspaceId) || !isUuid(connectionId)) {
     return jsonError("Invalid workspace or connection id", 400);
   }
-  const authorization = await authorizeWorkspace(request, workspaceId, "write");
+  const authorization = await authorizeWorkspace(request, workspaceId, "manage");
   if (!authorization.ok) return jsonError(authorization.error, authorization.status);
   let input;
   try {
@@ -108,9 +108,7 @@ export async function DELETE(request: Request, context: RouteContext) {
   if (!isUuid(workspaceId) || !isUuid(connectionId)) {
     return jsonError("Invalid workspace or connection id", 400);
   }
-  // Editors own connection lifecycle; admin/owner capabilities are reserved for
-  // membership and workspace administration.
-  const authorization = await authorizeWorkspace(request, workspaceId, "write");
+  const authorization = await authorizeWorkspace(request, workspaceId, "manage");
   if (!authorization.ok) return jsonError(authorization.error, authorization.status);
   const deletedAt = new Date();
   const requestId = crypto.randomUUID();

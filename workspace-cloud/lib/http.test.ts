@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { isUuid, mutationAllowed, privateJson, safeReturnTo } from "./http";
+import {
+  isSafeDisplayText,
+  isUuid,
+  mutationAllowed,
+  privateJson,
+  safeReturnTo,
+  singleLineText,
+} from "./http";
 
 describe("workspace HTTP boundaries", () => {
   it("marks identity-scoped JSON as private and non-cacheable", async () => {
@@ -36,5 +43,11 @@ describe("workspace HTTP boundaries", () => {
     expect(isUuid("019bf6c8-2d35-7ba1-89bf-b4698600478c")).toBe(true);
     expect(isUuid("../../connection")).toBe(false);
     expect(isUuid("00000000-0000-0000-0000-000000000000")).toBe(false);
+  });
+
+  it("keeps display names single-line at UI and email boundaries", () => {
+    expect(isSafeDisplayText("제품 데이터 팀", 120)).toBe(true);
+    expect(isSafeDisplayText("spoofed\nsubject", 120)).toBe(false);
+    expect(singleLineText("  제품\n\t데이터 팀  ")).toBe("제품 데이터 팀");
   });
 });

@@ -11,7 +11,11 @@ import type { ConnectionProfile } from "../ipc/types";
 import { errDetails } from "../ipc/types";
 import { useI18n } from "../lib/i18n";
 import { qk, workspaceAuthStateQuery, workspaceContextQuery } from "../lib/queries";
-import { buildWorkspaceChoiceGroups, parseWorkspaceChoice } from "../lib/workspaceAccounts";
+import {
+  buildWorkspaceChoiceGroups,
+  canManageWorkspaceConnections,
+  parseWorkspaceChoice,
+} from "../lib/workspaceAccounts";
 import { useToast } from "./Toast";
 import "./WorkspaceConnectionDialog.css";
 
@@ -41,6 +45,7 @@ export default function WorkspaceConnectionDialog({
         ...group,
         choices: group.choices.filter((choice) =>
           choice.workspace.kind === "team"
+          && canManageWorkspaceConnections(choice.role)
           && !(
             choice.workspace.id === context.data?.active.id
             && choice.accountUserId === auth.data?.user?.id
@@ -190,7 +195,7 @@ export default function WorkspaceConnectionDialog({
                 ))}
               </select>
             </label>
-            {targets.length === 0 ? <div className="error">{t("workspace.noTeamWorkspace")}</div> : null}
+            {targets.length === 0 ? <div className="error">{t("workspace.noManageableWorkspace")}</div> : null}
           </>
         ) : (
           <>

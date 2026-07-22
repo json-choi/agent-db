@@ -19,6 +19,19 @@ export function isUuid(value: string): boolean {
     .test(value);
 }
 
+export function isSafeDisplayText(value: string, maxLength: number): boolean {
+  return value.length > 0
+    && value.length <= maxLength
+    && !/[\u0000-\u001f\u007f]/.test(value);
+}
+
+export function singleLineText(value: string): string {
+  return value
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function safeReturnTo(value: string | null, fallback = "/settings"): string {
   if (!value?.startsWith("/") || value.startsWith("//")) return fallback;
   try {

@@ -4,10 +4,10 @@
 export type Engine = "postgres" | "mysql" | "sqlite" | "mongodb";
 export type Provider = "auto" | "generic" | "neon" | "planetScale";
 
-export type WorkspaceKind = "personal" | "team";
-export type WorkspaceLifecycleState = "active" | "archived" | "deleted";
+type WorkspaceKind = "personal" | "team";
+type WorkspaceLifecycleState = "active" | "archived" | "deleted";
 export type WorkspaceRole = "viewer" | "analyst" | "editor" | "admin" | "owner";
-export type WorkspaceConnectionAccess = "view" | "read" | "write" | "manage" | "local";
+type WorkspaceConnectionAccess = "view" | "read" | "write" | "manage" | "local";
 
 export interface Workspace {
   id: string;
@@ -22,18 +22,18 @@ export interface WorkspaceFeatureState {
   enabled: boolean;
 }
 
-export interface WorkspaceAuthUser {
+interface WorkspaceAuthUser {
   id: string;
   email: string;
   displayName: string;
 }
 
-export interface WorkspaceAccountMembership {
+interface WorkspaceAccountMembership {
   workspaceId: string;
   role: WorkspaceRole;
 }
 
-export interface WorkspaceAuthAccount {
+interface WorkspaceAuthAccount {
   user: WorkspaceAuthUser;
   memberships: WorkspaceAccountMembership[];
 }
@@ -52,7 +52,7 @@ export interface WorkspaceDeviceAuthorization {
   interval: number;
 }
 
-export type WorkspaceLoginPollStatus =
+type WorkspaceLoginPollStatus =
   | "pending"
   | "slowDown"
   | "signedIn"
@@ -85,8 +85,8 @@ export interface ConnectionProfile {
 }
 
 // Mirrors src-tauri/src/driver/mod.rs.
-export type DriverInstallMode = "bundled" | "managed";
-export type DriverInstallState = "installed" | "available" | "planned";
+type DriverInstallMode = "bundled" | "managed";
+type DriverInstallState = "installed" | "available" | "planned";
 export type DriverCapability =
   | "sql"
   | "documentQuery"
@@ -234,7 +234,7 @@ export interface ScriptOutcome {
   allReads: boolean; // true when the read-only sequential path ran
 }
 
-export interface AuditEntry {
+interface AuditEntry {
   id: string;
   connectionId: string;
   ts: string; // ISO-8601
@@ -250,7 +250,7 @@ export interface AuditEntry {
   hash: string;
 }
 
-export interface AuditVerdict {
+interface AuditVerdict {
   ok: boolean;
   firstBadIndex: number | null;
 }

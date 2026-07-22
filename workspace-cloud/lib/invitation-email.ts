@@ -1,6 +1,7 @@
 // Optional Resend transport for Better Auth organization invitations. Deployments
 // without provider credentials retain the verified, email-bound copy-link workflow.
 import "server-only";
+import { singleLineText } from "./http";
 
 interface InvitationEmailData {
   id: string;
@@ -23,6 +24,9 @@ export async function sendWorkspaceInvitation(
   if (!apiKey || !from) return;
 
   const inviteUrl = `${appOrigin}/accept-invitation/${encodeURIComponent(data.id)}`;
+  const organizationName = singleLineText(data.organization.name) || "DopeDB";
+  const inviterName = singleLineText(data.inviter.user.name) || "워크스페이스 관리자";
+  const inviterEmail = singleLineText(data.inviter.user.email);
   const response = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
@@ -33,10 +37,10 @@ export async function sendWorkspaceInvitation(
     body: JSON.stringify({
       from,
       to: [data.email],
-      subject: `${data.organization.name} 워크스페이스 초대`,
+      subject: `${organizationName} 워크스페이스 초대`,
       text: [
-        `${data.inviter.user.name} (${data.inviter.user.email})님이`,
-        `${data.organization.name} 워크스페이스에 초대했습니다.`,
+        `${inviterName} (${inviterEmail})님이`,
+        `${organizationName} 워크스페이스에 초대했습니다.`,
         "",
         `초대 수락: ${inviteUrl}`,
         "",

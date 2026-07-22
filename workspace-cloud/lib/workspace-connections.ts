@@ -1,6 +1,6 @@
 // Strict parsing and public serialization for shared connection templates. Secret-
 // bearing fields are rejected rather than silently discarded to surface client bugs.
-import type { WorkspaceRoleName } from "./workspace-authorization";
+import type { WorkspaceRoleName } from "./workspace-permissions";
 
 // SQLite paths identify files on one machine and are not meaningful team endpoints.
 const engines = ["postgres", "mysql", "mongodb"] as const;

@@ -4,12 +4,15 @@
 
 import { useEffect, useRef, useState } from "react";
 import { authClient } from "../../lib/auth-client";
+import { sessionsExceptCurrent } from "../../lib/device-session-policy";
 import { useDeviceAccounts } from "../../lib/useDeviceAccounts";
 
 export function AccountSwitcher({
   currentUser,
+  currentSessionId,
 }: {
   currentUser: { id: string; name: string; email: string };
+  currentSessionId: string;
 }) {
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
@@ -86,8 +89,8 @@ export function AccountSwitcher({
     if (pending) return;
     setPending("all");
     setError("");
-    const inactive = sessions.filter((item) => item.user.id !== currentUserId);
-    for (const item of inactive) {
+    const revokeTargets = sessionsExceptCurrent(sessions, currentSessionId);
+    for (const item of revokeTargets) {
       const result = await authClient.multiSession.revoke({
         sessionToken: item.session.token,
       });

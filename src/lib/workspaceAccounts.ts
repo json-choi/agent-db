@@ -6,7 +6,7 @@ import type {
   WorkspaceRole,
 } from "../ipc/types";
 
-export interface WorkspaceChoice {
+interface WorkspaceChoice {
   value: string;
   workspace: Workspace;
   accountUserId: string | null;
@@ -20,6 +20,10 @@ export interface WorkspaceChoiceGroup {
 }
 
 const LOCAL_ACCOUNT = "local";
+
+export function canManageWorkspaceConnections(role: WorkspaceRole | null) {
+  return role === "admin" || role === "owner";
+}
 
 export function workspaceChoiceValue(workspaceId: string, accountUserId: string | null) {
   return `${accountUserId ?? LOCAL_ACCOUNT}:${workspaceId}`;
