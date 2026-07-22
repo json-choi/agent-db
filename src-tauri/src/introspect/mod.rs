@@ -92,10 +92,25 @@ pub async fn introspect(conn: &Live) -> AppResult<Catalog> {
 /// kept here because that helper is private to the commands module and this command
 /// lives outside it.
 async fn live_for(state: &AppState, id: Uuid) -> AppResult<Live> {
+    // Validate the active workspace and current server authority before consulting
+    // the process-wide pool cache. A cached handle must never outlive its scope.
+    let profile = state.store.get_connection(id).await?;
+    if !profile.workspace_access.can_read() {
+        return Err(crate::error::AppError::Blocked {
+            reason: "workspace role cannot introspect this shared connection".into(),
+        });
+    }
+    if profile.workspace_access != crate::model::WorkspaceConnectionAccess::Local {
+        crate::workspace_auth::authorize_connection(
+            state.store.active_workspace_id().await?,
+            profile.id,
+            false,
+        )
+        .await?;
+    }
     if let Some(existing) = state.connections.lock().unwrap().get(&id) {
         return Ok(existing.clone());
     }
-    let profile = state.store.get_connection(id).await?;
     let secret = crate::connection::fetch_secret(&id).unwrap_or_default();
     let live = crate::connection::connect(&profile, &secret).await?;
     let handle = live.clone();

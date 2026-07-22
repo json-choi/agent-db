@@ -11,13 +11,15 @@ mod error;
 mod executor;
 mod introspect;
 mod mcp;
-mod model;
+pub mod model;
 mod mongo;
 mod monitoring;
 mod safety;
 mod sql_script;
 mod state;
 mod store;
+pub mod workspace;
+mod workspace_auth;
 
 pub use error::{AppError, AppResult};
 
@@ -38,6 +40,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state)
@@ -84,6 +87,16 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::workspace_feature_state,
+            commands::workspace_auth_state,
+            commands::begin_workspace_login,
+            commands::poll_workspace_login,
+            commands::list_workspaces,
+            commands::refresh_workspace_memberships,
+            commands::get_active_workspace,
+            commands::set_active_workspace,
+            commands::copy_connection_to_workspace,
+            commands::bind_workspace_connection_credentials,
             commands::list_connections,
             commands::list_drivers,
             commands::install_driver,

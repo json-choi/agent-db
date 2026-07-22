@@ -26,7 +26,59 @@ import type {
   SafetySettings,
   PlatformInfo,
   QueryResult,
+  Workspace,
+  WorkspaceAuthState,
+  WorkspaceDeviceAuthorization,
+  WorkspaceFeatureState,
+  WorkspaceLoginPoll,
 } from "./types";
+
+export function workspaceFeatureState(): Promise<WorkspaceFeatureState> {
+  return invoke("workspace_feature_state");
+}
+
+export function workspaceAuthState(): Promise<WorkspaceAuthState> {
+  return invoke("workspace_auth_state");
+}
+
+export function beginWorkspaceLogin(): Promise<WorkspaceDeviceAuthorization> {
+  return invoke("begin_workspace_login");
+}
+
+export function pollWorkspaceLogin(deviceCode: string): Promise<WorkspaceLoginPoll> {
+  return invoke("poll_workspace_login", { deviceCode });
+}
+
+export function listWorkspaces(): Promise<Workspace[]> {
+  return invoke("list_workspaces");
+}
+
+export function refreshWorkspaceMemberships(): Promise<Workspace[]> {
+  return invoke("refresh_workspace_memberships");
+}
+
+export function getActiveWorkspace(): Promise<Workspace> {
+  return invoke("get_active_workspace");
+}
+
+export function setActiveWorkspace(id: string): Promise<Workspace> {
+  return invoke("set_active_workspace", { id });
+}
+
+export function copyConnectionToWorkspace(
+  connectionId: string,
+  workspaceId: string,
+): Promise<ConnectionProfile> {
+  return invoke("copy_connection_to_workspace", { connectionId, workspaceId });
+}
+
+export function bindWorkspaceConnectionCredentials(
+  id: string,
+  username: string,
+  password: string,
+): Promise<ConnectionProfile> {
+  return invoke("bind_workspace_connection_credentials", { id, username, password });
+}
 
 export function listConnections(): Promise<ConnectionProfile[]> {
   return invoke("list_connections");

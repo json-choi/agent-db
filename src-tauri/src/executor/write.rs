@@ -3,6 +3,7 @@
 //! pool and reports exactly how many rows committed.
 
 use uuid::Uuid;
+use sqlx::AssertSqlSafe;
 
 use crate::connection::{LiveConnection, Pool};
 use crate::error::{AppError, AppResult};
@@ -33,19 +34,28 @@ pub async fn run_write(
         let affected: u64 = match &live.write_pool {
             Pool::Postgres(pool) => {
                 let mut tx = pool.begin().await?;
-                let n = sqlx::query(sql).execute(&mut *tx).await?.rows_affected();
+                let n = sqlx::query(AssertSqlSafe(sql))
+                    .execute(&mut *tx)
+                    .await?
+                    .rows_affected();
                 tx.commit().await?;
                 n
             }
             Pool::Mysql(pool) => {
                 let mut tx = pool.begin().await?;
-                let n = sqlx::query(sql).execute(&mut *tx).await?.rows_affected();
+                let n = sqlx::query(AssertSqlSafe(sql))
+                    .execute(&mut *tx)
+                    .await?
+                    .rows_affected();
                 tx.commit().await?;
                 n
             }
             Pool::Sqlite(pool) => {
                 let mut tx = pool.begin().await?;
-                let n = sqlx::query(sql).execute(&mut *tx).await?.rows_affected();
+                let n = sqlx::query(AssertSqlSafe(sql))
+                    .execute(&mut *tx)
+                    .await?
+                    .rows_affected();
                 tx.commit().await?;
                 n
             }

@@ -1,6 +1,6 @@
 # Workspace Collaboration Roadmap
 
-Status: proposed
+Status: Milestone 0 implemented; Milestone 1 identity/RBAC implemented; Milestone 2 shared-connection core implemented
 
 This roadmap defines how DopeDB can add team workspaces without turning the
 workspace service into a database proxy or weakening the local safety boundary.
@@ -9,6 +9,15 @@ Milestones are ordered by dependency and exit criteria rather than calendar date
 ## Product Decision
 
 Use a local-execution, hosted-control-plane architecture:
+
+- Keep `site/` as the public marketing deployment at `dopedb.dev`.
+- Build `workspace-cloud/` as a separate Next.js application and Vercel Project at
+  `app.dopedb.dev`. It owns the authenticated web surfaces and `/api/v1/*` control-plane
+  routes. API and account UI deploy together initially; they can split later without
+  changing the versioned API contract.
+- Use the `workspace_control` schema in hosted PostgreSQL for collaboration metadata.
+  Only `workspace-cloud` receives its database URL; the desktop app never connects to
+  the control-plane database directly.
 
 - The workspace service synchronizes membership, connection templates, dashboards,
   analysis reports, revisions, and collaboration audit events.
@@ -46,6 +55,38 @@ flowchart LR
     B --> SB["local MCP and safety pipeline"]
 ```
 
+## Deployment and Identity Decision
+
+The first hosted control plane uses one dedicated Next.js/Vercel project rather than
+adding API routes to the marketing site. This separates database credentials, auth
+secrets, deployments, rollback, logs, rate limits, and preview environments from public
+site changes while keeping the code in this repository.
+
+Better Auth is the authentication and membership boundary, using its Drizzle adapter,
+Google provider, Organization plugin, Bearer plugin, and RFC 8628 Device Authorization
+plugin. Drizzle schema and migrations are the source of truth for hosted PostgreSQL.
+
+Desktop sign-in follows Better Auth's standard device authorization flow:
+
+1. The desktop requests codes from `POST /api/auth/device/code` with the fixed,
+   server-validated `dopedb-desktop` client id.
+2. Better Auth returns a high-entropy device code, a human-readable user code, and an
+   `app.dopedb.dev/auth/device` verification URL that expires after ten minutes.
+3. The browser completes Google sign-in through Better Auth's callback and state checks.
+4. The signed-in user claims and explicitly approves or denies the displayed user code.
+5. The desktop polls `POST /api/auth/device/token` at the server-provided interval. An
+   approved code is consumed once and returns a Better Auth Bearer session.
+6. The desktop stores the Bearer session in the OS credential store and sends it only
+   over HTTPS. Better Auth owns rotation, expiry, revocation, and rate limiting.
+
+Google is requested only for identity scopes. Database hooks clear provider access,
+refresh, and ID token values before every account create or update, so the account row
+retains the provider subject but not reusable Google credentials.
+
+The authenticated web surface initially covers device-login completion, invitation
+acceptance, account/session management, and workspace membership administration. Normal
+database work remains in the Tauri app.
+
 ## Goals
 
 - Let a user create a workspace and invite teammates with clear roles.
@@ -68,7 +109,9 @@ flowchart LR
 - Automatically distributing database passwords, certificates, or cloud tokens.
 - Claiming that workspace policy can restrict how a member uses a personal provider
   token outside DopeDB. The external provider remains authoritative for that token.
-- Granting writes, DDL, or PostgreSQL roles through workspace membership.
+- Granting target-database privileges or PostgreSQL roles through workspace membership.
+  An Editor role may permit DopeDB's write path, but the member's own target-database
+  credential and the local safety/approval gates must independently permit it.
 - Treating provider project, branch, compute, backup, credential, or deployment APIs
   as database-driver responsibilities.
 - Persisting every query result or agent conversation to the workspace.
@@ -80,7 +123,7 @@ flowchart LR
 
 | Resource | Workspace data | Local-only data |
 | --- | --- | --- |
-| Connection | engine, host, port, database, SSL, environment, safety policy | password, token, certificate, local `secret_ref`, live pool |
+| Connection | engine, host, port, database, SSL, environment, safety policy | username, password, token, certificate, connection URL, advanced parameters, local `secret_ref`, live pool |
 | Provider integration | provider kind, external organization or project ids, imported resource topology, capability snapshot, workspace policy | API token, OAuth refresh token, local `secret_ref`, one-time credentials |
 | Provider operation | redacted request, approval state, provider operation id, outcome | unredacted secret responses and local transport diagnostics |
 | Dashboard | title, description, SQL, visualization definition, revision | current result rows |
@@ -90,9 +133,9 @@ flowchart LR
 | MCP | workspace-scoped connection identifiers and policy | MCP token, client session, single-use query plans |
 | History and audit | explicit collaboration events and published report provenance | full local query history and hash-chained execution audit |
 
-Connection usernames may be supplied as a shared default, but every member can
-override the username locally. A shared endpoint can therefore use individual
-database accounts and preserve target-database attribution.
+Connection usernames are member-local and are never supplied by a shared default. A
+shared endpoint therefore requires each executable member to bind an individual
+database account, preserving target-database attribution.
 
 ## Authorization Model
 
@@ -109,10 +152,12 @@ must not imply production database access.
 | Invite, remove, and change member roles | no | no | no | yes | yes |
 | Transfer ownership or delete the workspace | no | no | no | no | yes |
 
-Each connection adds explicit grants such as `view_definition`, `execute_read`,
-`edit_dashboard`, `manage_connection`, and `access_prod`. Shared connections are
-read-only in the first release. Existing local write settings are never inherited by
-another member or device.
+The initial implementation maps Analyst to read-only execution, Editor to read/write
+execution, and Admin/Owner to management. This is only DopeDB application authority:
+the target credential, database roles, local safety configuration, and explicit write
+approval remain narrowing layers. Per-connection grants such as `access_prod` remain a
+later refinement and default to deny until implemented. Existing local credentials and
+advanced connection parameters are never inherited by another member or device.
 
 Provider integrations add a separate resource hierarchy:
 
@@ -176,9 +221,11 @@ workspace service into a database query proxy.
 
 ### Workspace service
 
-- `workspaces`: name, owner, lifecycle state, encryption key reference.
-- `workspace_members`: user, role, status, joined timestamp.
-- `workspace_invitations`: inviter, email/domain, intended role, expiry, one-time token.
+- Better Auth `user`, `account`, `session`, and `verification` models own identity.
+- Better Auth `organization`, `member`, and `invitation` models own workspace membership.
+- Better Auth `device_code` implements expiring RFC 8628 desktop authorization.
+- `workspace_profile`: organization lifecycle, encryption key reference, residency,
+  and application revision metadata.
 - `workspace_connections`: shareable connection template and default safety policy.
 - `connection_permissions`: per-member or per-role connection grants.
 - `workspace_provider_integrations`: provider kind, external account or organization
@@ -297,10 +344,31 @@ Exit criteria:
 
 ## Milestone 1 — Identity, Membership, and Control Plane
 
+Implementation snapshot (2026-07-22): `workspace-cloud/` now contains the dedicated
+Next.js auth/account frontend and `/api/v1` service. Better Auth owns Google sign-in,
+Organization membership, Bearer sessions, invitation primitives, database rate limits,
+and RFC 8628 desktop authorization. Drizzle ORM is the only application database layer,
+Drizzle Kit owns migrations, and the Neon schema has been cut over from the empty SQL
+prototype. Workspace creation/listing and active-session visibility are implemented.
+Google application credentials and the production Vercel project/domain are configured.
+Desktop device authorization now requests and polls Better Auth codes, validates the
+resulting Bearer session in Rust, and stores it in the OS credential store without exposing
+it to the webview. Authenticated organization memberships are reconciled into the local
+workspace switcher at sign-in and app startup. The web console creates verified-email-bound
+invitations, exposes a copyable acceptance link, lists members, and lets Admin/Owner assign
+read-only Analyst, read/write Editor, or Admin roles. Transactional email delivery remains
+optional infrastructure; the acceptance link is functional without it.
+
 Deliverables:
 
 - Add account authentication, device sessions, workspace creation, invitations, and
   role management.
+- Deploy `workspace-cloud/` independently from `site/`, with production-only control-plane
+  credentials and a separate database/branch for preview deployments.
+- Configure Better Auth Google, Organization, Bearer, and RFC 8628 Device Authorization
+  plugins over the Drizzle adapter; do not maintain parallel custom auth tables or routes.
+- Add minimal web pages for sign-in completion, invitations, sessions, and member admin;
+  keep product data exploration in the desktop app.
 - Implement authenticated push/pull sync with optimistic revisions and tombstones.
 - Add per-workspace encryption, backups, rate limits, and collaboration audit events.
 - Add member removal, token revocation, invitation expiry, and workspace deletion
@@ -316,6 +384,24 @@ Exit criteria:
 - Server logs and traces pass automated secret and sensitive-payload checks.
 
 ## Milestone 2 — Shared Connections
+
+Implementation snapshot (2026-07-22): an Editor or higher can copy a Personal
+Workspace connection into a team workspace. The cloud API accepts a strict redacted
+template whose schema has no username, password, token, certificate, connection URL,
+advanced parameter, or `secret_ref` field. The sharer's secret is duplicated only
+inside that device's OS credential store. Other members receive a synchronized template
+with Credentials Required state and bind their own username/password locally. Cached
+role authority is enforced in manual queries, scripts, previews, schema introspection,
+dashboards, monitoring grants, and MCP reads. Analyst is read-only; Editor can enter the
+existing local write/approval path; Admin/Owner can manage membership. Target-database
+credentials remain authoritative and SQLite file connections are not shareable.
+
+The cached role is only a UI hint. Before a shared connection reads, writes, previews a
+write, changes a database monitoring grant, or serves an MCP read, the desktop asks the
+control plane to revalidate the active session, current membership, role, workspace id,
+and connection id. The check fails closed when the service is unavailable. Removing a
+member from DopeDB cannot revoke a database credential they already possess; the target
+database administrator must revoke that account separately.
 
 Deliverables:
 
@@ -335,8 +421,9 @@ Exit criteria:
   sharer's secret.
 - Sharing, editing, or deleting a connection never changes another member's local
   credential binding.
-- Shared execution is read-only and still requires MCP `plan_query` before
-  `run_query`.
+- Analyst execution is read-only. Editor writes still require the target credential,
+  connection safety setting, and explicit local approval. MCP remains read-only and
+  still requires `plan_query` before `run_query`.
 - Workspace roles cannot grant target-database permissions.
 - Removing a connection invalidates future execution but preserves relevant audit
   history.
@@ -481,10 +568,9 @@ Every milestone must include:
   monitoring preflight, row caps, approval gates, or audit recording.
 - Recovery tests for workspace deletion, member revocation, and failed partial sync.
 
-## Open Decisions Before Milestone 1
+## Remaining Product Decisions
 
-- Hosted-only first launch versus simultaneous self-hosted deployment.
-- Authentication provider and account recovery policy.
+- Account recovery and the timing of non-Google identity providers.
 - Member-local provider credentials versus managed Vault-backed credentials for each
   operation class, including whether either provider offers an appropriate OAuth flow.
 - Provider resource refresh intervals, rate-limit budgets, webhook availability, and
@@ -493,7 +579,7 @@ Every milestone must include:
 - Workspace billing and ownership transfer rules.
 - Whether connection usernames are shared defaults or always local overrides.
 - Initial report snapshot limits and retention duration.
-- Data residency requirements for the hosted control plane.
+- Data residency requirements beyond the initial US-East deployment.
 - Whether Personal Workspace resources can remain permanently local or optionally sync
   across the owner's devices.
 

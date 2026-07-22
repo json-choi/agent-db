@@ -272,55 +272,16 @@
 }
 
 /* Database explorer — sidebar tree (DataGrip-style): connections expand to tables. */
-.sidebar-top {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--ds-space-2);
-  min-height: calc(var(--ds-space-8) + var(--ds-control-md) + var(--ds-space-3));
-  padding: var(--ds-space-8) var(--ds-space-3) var(--ds-space-3);
-  border-bottom: var(--ds-border-width) solid var(--ds-border-subtle);
-  background: var(--ds-surface-elevated);
-  background-image: var(--ds-glass-sheen);
-  box-shadow: var(--ds-shadow-panel);
-}
-.sidebar-top-copy {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--ds-segment-gap);
-}
-.sidebar-top-title {
-  font-size: var(--ds-font-size-title);
-  line-height: var(--ds-line-tight);
-  font-weight: 650;
-  color: var(--ds-text);
-}
-.sidebar-add-btn {
-  width: var(--ds-control-md);
-  min-width: var(--ds-control-md);
-  height: var(--ds-control-md);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: var(--ds-border-width) solid var(--ds-border-subtle);
-  border-radius: var(--ds-radius-sm);
-  background: var(--ds-surface-0);
-  color: var(--ds-text);
-  cursor: pointer;
-  box-shadow: var(--ds-glass-edge);
-}
-.sidebar-add-btn:hover {
-  background: var(--ds-hover);
-  border-color: var(--ds-border-strong);
-}
-
 .explorer {
   flex: 1;
   min-height: 0;
+  overflow-x: hidden;
   overflow-y: auto;
   padding: var(--ds-space-2);
+  /* Scope compact connection-row rules to the resizable list. Keeping this
+     containment off .sidebar prevents fixed dialogs from being clipped. */
+  container-name: db-sidebar;
+  container-type: inline-size;
 }
 .db-conn {
   position: relative; /* anchor for the overlaid .db-menu */
@@ -328,6 +289,7 @@
   align-items: center;
   gap: var(--ds-space-2);
   padding: var(--ds-space-2);
+  padding-right: calc(var(--ds-control-sm) + var(--ds-space-2));
   border-radius: var(--ds-radius-sm);
   cursor: pointer;
   font-weight: 500;
@@ -384,7 +346,7 @@
 .db-conn-name {
   flex: 1;
   /* Name wins the width fight against the env/diff chips. */
-  min-width: 8ch;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -450,7 +412,12 @@
   z-index: var(--ds-z-popover);
   top: calc(100% + var(--ds-popover-offset));
   right: 0;
-  min-width: 172px;
+  inline-size: min(220px, calc(100cqw - var(--ds-space-6)));
+  min-width: 0;
+  max-height: min(360px, calc(100dvh - var(--ds-space-6)));
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   display: grid;
   gap: var(--ds-segment-gap);
   padding: var(--ds-space-1);
@@ -475,7 +442,10 @@
   cursor: pointer;
   font: inherit;
   font-size: var(--ds-font-size-sm);
+  line-height: var(--ds-line-body);
+  overflow-wrap: anywhere;
   text-align: left;
+  white-space: normal;
 }
 
 .db-menu-panel > button:hover,
@@ -650,5 +620,78 @@
   .ddl-actions {
     width: 100%;
     flex-wrap: wrap;
+  }
+}
+.workspace-access-chip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--ds-segment-gap);
+  padding: var(--ds-chip-pad-y) var(--ds-chip-pad-x-sm);
+  border: var(--ds-border-width) solid var(--ds-border-subtle);
+  border-radius: var(--ds-radius-xs);
+  color: var(--ds-text-muted);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-font-size-2xs);
+  text-transform: uppercase;
+}
+
+.workspace-access-dot {
+  display: none;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--ds-radius-pill);
+  background: currentColor;
+}
+
+.workspace-access-chip.access-write,
+.workspace-access-chip.access-manage {
+  border-color: var(--ds-accent);
+  color: var(--ds-accent);
+}
+
+/* The sidebar is user-resizable. Preserve the most useful information and
+   progressively compact secondary status instead of letting rows overlap. */
+@container db-sidebar (max-width: 270px) {
+  .db-conn {
+    gap: var(--ds-space-1);
+    padding-block: var(--ds-space-1);
+    padding-left: var(--ds-space-1);
+    padding-right: calc(var(--ds-control-sm) + var(--ds-space-1));
+  }
+
+  .db-conn.nested {
+    padding-left: var(--ds-space-1);
+  }
+
+  .workspace-access-chip {
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border-radius: var(--ds-radius-pill);
+  }
+
+  .workspace-access-dot {
+    display: block;
+  }
+
+  .workspace-access-label {
+    display: none;
+  }
+
+  .db-menu-panel {
+    inline-size: calc(100cqw - var(--ds-space-5));
+  }
+}
+
+@container db-sidebar (max-width: 215px) {
+  .db-conn .env-chip {
+    padding-inline: var(--ds-chip-pad-x-sm);
+    font-size: var(--ds-font-size-2xs);
+  }
+
+  .schema-diff-chip {
+    padding-inline: var(--ds-chip-pad-x-sm);
   }
 }

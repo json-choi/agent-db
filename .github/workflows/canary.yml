@@ -64,11 +64,13 @@ jobs:
           version="${base_version}-canary.${actor_slug}.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
           tag="canary-${actor_slug}-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
 
-          echo "actor_slug=$actor_slug" >> "$GITHUB_OUTPUT"
-          echo "source_ref=$SOURCE_REF" >> "$GITHUB_OUTPUT"
-          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          {
+            echo "actor_slug=$actor_slug"
+            echo "source_ref=$SOURCE_REF"
+            echo "source_sha=$source_sha"
+            echo "tag=$tag"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
 
   build:
     needs: validate

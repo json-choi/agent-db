@@ -2,7 +2,7 @@
 //! PRAGMA args can't be bound, so table names are interpolated with `"`-quoting
 //! (identifiers come from `sqlite_master`, not user input, but we quote regardless).
 
-use sqlx::{Row, SqlitePool};
+use sqlx::{AssertSqlSafe, Row, SqlitePool};
 
 use crate::error::{AppError, AppResult};
 
@@ -30,7 +30,10 @@ pub async fn introspect(pool: &SqlitePool) -> AppResult<Catalog> {
         let q = quote_ident(&name);
 
         let mut columns = Vec::new();
-        for r in sqlx::query(&format!("PRAGMA table_info({q})")).fetch_all(pool).await? {
+        for r in sqlx::query(AssertSqlSafe(format!("PRAGMA table_info({q})")))
+            .fetch_all(pool)
+            .await?
+        {
             let notnull: i64 = r.try_get("notnull")?;
             let pk: i64 = r.try_get("pk")?;
             columns.push(Column {
@@ -42,7 +45,10 @@ pub async fn introspect(pool: &SqlitePool) -> AppResult<Catalog> {
         }
 
         let mut foreign_keys = Vec::new();
-        for r in sqlx::query(&format!("PRAGMA foreign_key_list({q})")).fetch_all(pool).await? {
+        for r in sqlx::query(AssertSqlSafe(format!("PRAGMA foreign_key_list({q})")))
+            .fetch_all(pool)
+            .await?
+        {
             // `to` is NULL when the FK references the parent's primary key.
             let to: Option<String> = r.try_get("to")?;
             let ref_table: String = r.try_get("table")?;
@@ -57,7 +63,10 @@ pub async fn introspect(pool: &SqlitePool) -> AppResult<Catalog> {
         // Indexes: index_list gives name/unique/origin; index_info gives the columns.
         // origin 'pk' = the implicit primary-key index, dropped (PK is on the columns).
         let mut indexes = Vec::new();
-        for r in sqlx::query(&format!("PRAGMA index_list({q})")).fetch_all(pool).await? {
+        for r in sqlx::query(AssertSqlSafe(format!("PRAGMA index_list({q})")))
+            .fetch_all(pool)
+            .await?
+        {
             let origin: String = r.try_get("origin")?;
             if origin == "pk" {
                 continue;
@@ -66,7 +75,10 @@ pub async fn introspect(pool: &SqlitePool) -> AppResult<Catalog> {
             let unique: i64 = r.try_get("unique")?;
             let iq = quote_ident(&iname);
             let mut cols = Vec::new();
-            for ir in sqlx::query(&format!("PRAGMA index_info({iq})")).fetch_all(pool).await? {
+            for ir in sqlx::query(AssertSqlSafe(format!("PRAGMA index_info({iq})")))
+                .fetch_all(pool)
+                .await?
+            {
                 // `name` is NULL for an expression column.
                 let cn: Option<String> = ir.try_get("name")?;
                 cols.push(cn.unwrap_or_else(|| "(expression)".into()));
@@ -80,7 +92,7 @@ pub async fn introspect(pool: &SqlitePool) -> AppResult<Catalog> {
         let row_estimate: Option<i64> = if ty == "view" {
             None
         } else {
-            sqlx::query(&format!("SELECT COUNT(*) AS n FROM {q}"))
+            sqlx::query(AssertSqlSafe(format!("SELECT COUNT(*) AS n FROM {q}")))
                 .fetch_one(pool)
                 .await
                 .ok()

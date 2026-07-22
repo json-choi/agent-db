@@ -14,7 +14,7 @@
 
 use std::time::Duration;
 
-use sqlx::Row;
+use sqlx::{AssertSqlSafe, Row};
 use tokio::time::timeout;
 
 use crate::error::AppResult;
@@ -122,7 +122,7 @@ async fn explain(pool: PoolRef<'_>, sql: &str) -> (Option<i64>, Option<String>) 
     let out = match pool {
         PoolRef::Postgres(p) => {
             let q = format!("EXPLAIN (FORMAT JSON) {sql}");
-            timeout(PREVIEW_TIMEOUT, sqlx::query(&q).fetch_one(p))
+            timeout(PREVIEW_TIMEOUT, sqlx::query(AssertSqlSafe(q)).fetch_one(p))
                 .await
                 .ok()
                 .and_then(|r| r.ok())
@@ -141,7 +141,7 @@ async fn explain(pool: PoolRef<'_>, sql: &str) -> (Option<i64>, Option<String>) 
         }
         PoolRef::Mysql(p) => {
             let q = format!("EXPLAIN FORMAT=JSON {sql}");
-            timeout(PREVIEW_TIMEOUT, sqlx::query(&q).fetch_one(p))
+            timeout(PREVIEW_TIMEOUT, sqlx::query(AssertSqlSafe(q)).fetch_one(p))
                 .await
                 .ok()
                 .and_then(|r| r.ok())
@@ -158,7 +158,7 @@ async fn explain(pool: PoolRef<'_>, sql: &str) -> (Option<i64>, Option<String>) 
         }
         PoolRef::Sqlite(p) => {
             let q = format!("EXPLAIN QUERY PLAN {sql}");
-            timeout(PREVIEW_TIMEOUT, sqlx::query(&q).fetch_all(p))
+            timeout(PREVIEW_TIMEOUT, sqlx::query(AssertSqlSafe(q)).fetch_all(p))
                 .await
                 .ok()
                 .and_then(|r| r.ok())
@@ -184,7 +184,11 @@ async fn exec_rollback(pool: PoolRef<'_>, sql: &str) -> AppResult<i64> {
     // `rows_affected()` gives the exact N before the unconditional rollback.
     macro_rules! run {
         ($conn:expr) => {{
-            let res = timeout(PREVIEW_TIMEOUT, sqlx::query(sql).execute(&mut *$conn)).await;
+            let res = timeout(
+                PREVIEW_TIMEOUT,
+                sqlx::query(AssertSqlSafe(sql)).execute(&mut *$conn),
+            )
+            .await;
             let _ = sqlx::query("ROLLBACK").execute(&mut *$conn).await;
             match res {
                 Ok(Ok(r)) => r.rows_affected() as i64,
@@ -202,7 +206,9 @@ async fn exec_rollback(pool: PoolRef<'_>, sql: &str) -> AppResult<i64> {
         PoolRef::Postgres(p) => {
             let mut conn = p.acquire().await?;
             sqlx::query("BEGIN").execute(&mut *conn).await?;
-            let _ = sqlx::query(&format!("SET LOCAL statement_timeout = {STATEMENT_TIMEOUT_MS}"))
+            let _ = sqlx::query(AssertSqlSafe(format!(
+                "SET LOCAL statement_timeout = {STATEMENT_TIMEOUT_MS}"
+            )))
                 .execute(&mut *conn)
                 .await;
             run!(conn)

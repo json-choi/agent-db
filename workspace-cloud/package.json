@@ -1,0 +1,31 @@
+{
+  "name": "dopedb-workspace-cloud",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "packageManager": "pnpm@10.26.1",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "db:generate": "drizzle-kit generate --config=drizzle.config.ts",
+    "db:migrate": "drizzle-kit migrate --config=drizzle.config.ts",
+    "db:check": "drizzle-kit check --config=drizzle.config.ts"
+  },
+  "dependencies": {
+    "@better-auth/drizzle-adapter": "^1.6.24",
+    "@neondatabase/serverless": "^1.1.0",
+    "better-auth": "^1.6.24",
+    "drizzle-orm": "^0.45.2",
+    "next": "^16.2.11",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "drizzle-kit": "^0.31.10",
+    "typescript": "^6.0.3"
+  }
+}

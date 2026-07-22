@@ -34,6 +34,7 @@ jobs:
           cache-dependency-path: |
             pnpm-lock.yaml
             site/pnpm-lock.yaml
+            workspace-cloud/pnpm-lock.yaml
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -51,6 +52,9 @@ jobs:
       - name: Install site dependencies
         run: pnpm --dir site install --frozen-lockfile
 
+      - name: Install workspace cloud dependencies
+        run: pnpm --dir workspace-cloud install --frozen-lockfile
+
       - name: Build desktop frontend
         run: pnpm build
 
@@ -59,6 +63,15 @@ jobs:
 
       - name: Build landing site
         run: pnpm site:build
+
+      - name: Build workspace cloud
+        run: pnpm workspace:cloud:build
+        env:
+          BETTER_AUTH_URL: https://workspace-ci.invalid
+          BETTER_AUTH_SECRET: ci-only-placeholder-secret-with-32-characters
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/ci
+          GOOGLE_CLIENT_ID: ci-placeholder.apps.googleusercontent.com
+          GOOGLE_CLIENT_SECRET: ci-only-placeholder
 
       - name: Stage MCP bridge sidecar
         run: pnpm build:bridge

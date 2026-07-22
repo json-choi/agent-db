@@ -3,6 +3,9 @@
 /target
 /site/.next
 /site/node_modules
+/workspace-cloud/.next
+/workspace-cloud/node_modules
+/workspace-cloud/tsconfig.tsbuildinfo
 /site/.vercel
 src-tauri/target
 .DS_Store

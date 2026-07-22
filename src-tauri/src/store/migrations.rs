@@ -2,8 +2,53 @@
 //! `CREATE TABLE IF NOT EXISTS` so `Store::open` can run it on every start.
 //! Secrets never live here — connections hold only a `secret_ref` (credential-store id).
 
+/// Stable id for the offline-first Personal Workspace created during migration.
+/// A deterministic value lets fresh installs, upgrades, and restored backups converge
+/// without changing any pre-existing resource UUIDs.
+pub const PERSONAL_WORKSPACE_ID: &str = "00000000-0000-0000-0000-000000000001";
+
 /// All migrations as one script; executed via `sqlx::raw_sql` (multi-statement).
 pub const SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS workspaces (
+    id              TEXT PRIMARY KEY,
+    name            TEXT NOT NULL,
+    kind            TEXT NOT NULL,       -- personal|team
+    lifecycle_state TEXT NOT NULL,       -- active|archived|deleted
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS workspace_members (
+    id           TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+    user_id      TEXT,                   -- NULL for the offline local owner
+    display_name TEXT NOT NULL,
+    role         TEXT NOT NULL,
+    status       TEXT NOT NULL,
+    joined_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_workspace_members_workspace
+    ON workspace_members(workspace_id, status);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+INSERT OR IGNORE INTO workspaces
+    (id, name, kind, lifecycle_state, created_at, updated_at)
+VALUES
+    ('00000000-0000-0000-0000-000000000001', 'Personal Workspace', 'personal', 'active',
+     CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+INSERT OR IGNORE INTO workspace_members
+    (id, workspace_id, user_id, display_name, role, status, joined_at)
+VALUES
+    ('00000000-0000-0000-0000-000000000002',
+     '00000000-0000-0000-0000-000000000001', NULL, 'Local owner', 'owner', 'active',
+     CURRENT_TIMESTAMP);
+INSERT OR IGNORE INTO app_settings (key, value)
+VALUES ('active_workspace_id', '00000000-0000-0000-0000-000000000001');
+
 CREATE TABLE IF NOT EXISTS connections (
     id                TEXT PRIMARY KEY,
     name              TEXT NOT NULL,
@@ -21,6 +66,13 @@ CREATE TABLE IF NOT EXISTS connections (
     allow_writes      INTEGER NOT NULL DEFAULT 0,
     env               TEXT,                          -- dev|staging|prod label (optional)
     schema_group      TEXT,                          -- groups dev|staging|prod siblings for schema diff
+    workspace_id      TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'
+                      REFERENCES workspaces(id),
+    remote_id         TEXT,
+    revision          INTEGER NOT NULL DEFAULT 1,
+    sync_status       TEXT NOT NULL DEFAULT 'local', -- local|dirty|synced|conflict
+    workspace_access  TEXT NOT NULL DEFAULT 'local', -- view|read|write|manage|local
+    deleted_at        TEXT,
     created_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL
 );
@@ -78,6 +130,12 @@ CREATE TABLE IF NOT EXISTS snippets (
     title         TEXT NOT NULL,
     sql           TEXT NOT NULL,
     tags          TEXT NOT NULL DEFAULT '[]',   -- JSON array
+    workspace_id  TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'
+                  REFERENCES workspaces(id),
+    remote_id     TEXT,
+    revision      INTEGER NOT NULL DEFAULT 1,
+    sync_status   TEXT NOT NULL DEFAULT 'local',
+    deleted_at    TEXT,
     updated_at    TEXT NOT NULL
 );
 
@@ -88,11 +146,41 @@ CREATE TABLE IF NOT EXISTS dashboards (
     description        TEXT NOT NULL DEFAULT '',
     sql                TEXT NOT NULL,
     visualization_json TEXT NOT NULL,
+    workspace_id       TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'
+                       REFERENCES workspaces(id),
+    remote_id          TEXT,
+    revision           INTEGER NOT NULL DEFAULT 1,
+    sync_status        TEXT NOT NULL DEFAULT 'local',
+    deleted_at         TEXT,
     created_at         TEXT NOT NULL,
     updated_at         TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_dashboards_conn_updated
     ON dashboards(connection_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS sync_outbox (
+    id            TEXT PRIMARY KEY,
+    workspace_id  TEXT NOT NULL REFERENCES workspaces(id),
+    resource_type TEXT NOT NULL,
+    resource_id   TEXT NOT NULL,
+    operation     TEXT NOT NULL,       -- upsert|delete
+    revision      INTEGER NOT NULL,
+    payload_json  TEXT,                -- intentionally NULL until hosted sync exists
+    created_at    TEXT NOT NULL,
+    attempts      INTEGER NOT NULL DEFAULT 0,
+    last_error    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_sync_outbox_workspace_created
+    ON sync_outbox(workspace_id, created_at);
+
+CREATE TABLE IF NOT EXISTS sync_state (
+    workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id),
+    pull_cursor  TEXT,
+    last_pulled_at TEXT,
+    last_pushed_at TEXT
+);
+INSERT OR IGNORE INTO sync_state (workspace_id)
+VALUES ('00000000-0000-0000-0000-000000000001');
 
 CREATE TABLE IF NOT EXISTS schema_cache (
     connection_id   TEXT PRIMARY KEY REFERENCES connections(id) ON DELETE CASCADE,

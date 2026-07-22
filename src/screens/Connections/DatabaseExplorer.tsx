@@ -1,7 +1,14 @@
 // DataGrip-style Database Explorer sidebar: connection tree, DDL modal, schema-group
 // drag-and-drop. Split out of the old Connections/index.tsx (see ConnectionForm.tsx
 // for the connection create/edit form that used to live alongside it).
-import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent,
+  type ReactNode,
+} from "react";
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 import {
   deleteConnection,
@@ -29,6 +36,7 @@ import ConfirmButton from "../../components/ConfirmButton";
 import EngineMark from "../../components/EngineMark";
 import { Icon } from "../../components/Icon";
 import LazySqlViewer from "../../components/LazySqlViewer";
+import WorkspaceConnectionDialog from "../../components/WorkspaceConnectionDialog";
 import { useToast } from "../../components/Toast";
 import { useI18n } from "../../lib/i18n";
 import "./connections.css";
@@ -166,11 +174,11 @@ export function DatabaseExplorer({
   onSelectConn,
   onOpenTable,
   onOpenSchemaDiff,
-  onNew,
   onEdit,
   onDeleted,
   onConnectionUpdated,
   onOpenSettings,
+  workspaceHeader,
 }: {
   connections: ConnectionProfile[];
   selectedId: string | null;
@@ -179,11 +187,11 @@ export function DatabaseExplorer({
   onSelectConn: (id: string) => void;
   onOpenTable: (conn: ConnectionProfile, table: CatalogTable) => void;
   onOpenSchemaDiff: (group: SchemaConnectionGroup) => void;
-  onNew: () => void;
   onEdit: (conn: ConnectionProfile) => void;
   onDeleted: (id: string) => void;
   onConnectionUpdated: (conn: ConnectionProfile) => void;
   onOpenSettings: () => void;
+  workspaceHeader?: ReactNode;
 }) {
   const { t } = useI18n();
   const toast = useToast();
@@ -202,6 +210,10 @@ export function DatabaseExplorer({
   const [viewsOpen, setViewsOpen] = useState(true);
   const [showRowCounts, setShowRowCounts] = useState(true);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [workspaceDialog, setWorkspaceDialog] = useState<{
+    connection: ConnectionProfile;
+    mode: "copy" | "credentials";
+  } | null>(null);
   const [ddl, setDdl] = useState<{ conn: ConnectionProfile; table: CatalogTable } | null>(
     null,
   );
@@ -639,6 +651,19 @@ export function DatabaseExplorer({
 
   function renderConnection(c: ConnectionProfile, nested = false) {
     const isSel = c.id === selectedId;
+    const accessLabel =
+      c.workspaceAccess === "view"
+        ? t("workspace.accessView")
+        : c.workspaceAccess === "read"
+          ? t("workspace.accessRead")
+          : c.workspaceAccess === "write"
+            ? t("workspace.accessWrite")
+            : c.workspaceAccess === "manage"
+              ? t("workspace.accessManage")
+              : null;
+    const connectionDescription = `${c.engine} · ${c.host}${
+      c.engine !== "sqlite" ? `:${c.port}` : ""
+    } · ${c.database}`;
     const isDropTarget =
       dropTarget?.kind === "connection" && dropTarget.id === c.id;
     const rowClass = [
@@ -658,6 +683,7 @@ export function DatabaseExplorer({
           data-connection-id={c.id}
           className={rowClass}
           role="button"
+          aria-label={`${c.name || t("app.unnamed")} · ${connectionDescription}`}
           tabIndex={0}
           onPointerDown={(e) => pointerDownConnection(e, c)}
           onPointerMove={pointerMoveConnection}
@@ -678,9 +704,6 @@ export function DatabaseExplorer({
               else onSelectConn(c.id);
             }
           }}
-          title={`${c.engine} · ${c.host}${
-            c.engine !== "sqlite" ? `:${c.port}` : ""
-          } · ${c.database}`}
         >
           <span
             className="tw"
@@ -695,6 +718,16 @@ export function DatabaseExplorer({
           {!nested && <EngineMark engine={c.engine} />}
           <span className="db-conn-name">{c.name || t("app.unnamed")}</span>
           {c.env && <span className={`env-chip env-${c.env}`}>{c.env}</span>}
+          {accessLabel ? (
+            <span
+              className={`workspace-access-chip access-${c.workspaceAccess}`}
+              aria-label={accessLabel}
+              title={accessLabel}
+            >
+              <span className="workspace-access-dot" aria-hidden="true" />
+              <span className="workspace-access-label">{accessLabel}</span>
+            </span>
+          ) : null}
           {renderSchemaDiffBadge(c)}
           <div
             className={`db-menu${openMenuId === c.id ? " open" : ""}`}
@@ -723,25 +756,50 @@ export function DatabaseExplorer({
             </button>
             {openMenuId === c.id && (
               <div className="db-menu-panel" id={`connection-menu-${c.id}`}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOpenMenuId(null);
-                    onEdit(c);
-                  }}
-                >
-                  {t("connections.edit")}
-                </button>
-                <button
-                  type="button"
-                  disabled={refreshing === c.id}
-                  onClick={() => {
-                    setOpenMenuId(null);
-                    void refreshSchema(c.id);
-                  }}
-                >
-                  {refreshing === c.id ? t("mcp.working") : t("connections.refreshSchema")}
-                </button>
+                {c.workspaceAccess === "local" ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOpenMenuId(null);
+                      onEdit(c);
+                    }}
+                  >
+                    {t("connections.edit")}
+                  </button>
+                ) : c.workspaceAccess !== "view" ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOpenMenuId(null);
+                      setWorkspaceDialog({ connection: c, mode: "credentials" });
+                    }}
+                  >
+                    {t("workspace.bindCredentialsShort")}
+                  </button>
+                ) : null}
+                {c.workspaceAccess === "local" ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOpenMenuId(null);
+                      setWorkspaceDialog({ connection: c, mode: "copy" });
+                    }}
+                  >
+                    {t("workspace.copyToWorkspace")}
+                  </button>
+                ) : null}
+                {c.workspaceAccess !== "view" ? (
+                  <button
+                    type="button"
+                    disabled={refreshing === c.id}
+                    onClick={() => {
+                      setOpenMenuId(null);
+                      void refreshSchema(c.id);
+                    }}
+                  >
+                    {refreshing === c.id ? t("mcp.working") : t("connections.refreshSchema")}
+                  </button>
+                ) : null}
                 <label>
                   <input
                     type="checkbox"
@@ -750,14 +808,16 @@ export function DatabaseExplorer({
                   />
                   {t("connections.showRowCounts")}
                 </label>
-                <ConfirmButton
-                  className="db-menu-item danger"
-                  confirmLabel={t("common.reallyDelete")}
-                  disabled={deleting === c.id}
-                  onConfirm={() => void removeConnection(c)}
-                >
-                  {t("common.delete")}
-                </ConfirmButton>
+                {c.workspaceAccess === "local" ? (
+                  <ConfirmButton
+                    className="db-menu-item danger"
+                    confirmLabel={t("common.reallyDelete")}
+                    disabled={deleting === c.id}
+                    onConfirm={() => void removeConnection(c)}
+                  >
+                    {t("common.delete")}
+                  </ConfirmButton>
+                ) : null}
               </div>
             )}
           </div>
@@ -1009,19 +1069,7 @@ export function DatabaseExplorer({
 
   return (
     <aside className="sidebar">
-      <div className="sidebar-top" data-tauri-drag-region="deep">
-        <div className="sidebar-top-copy">
-          <span className="sidebar-top-title">{t("connections.sidebarTitle")}</span>
-        </div>
-        <button
-          className="sidebar-add-btn"
-          onClick={onNew}
-          title={t("connections.new")}
-          aria-label={t("connections.new")}
-        >
-          <Icon name="plus" />
-        </button>
-      </div>
+      {workspaceHeader}
 
       <div className="explorer">
         {connections.length === 0 && (
@@ -1061,6 +1109,14 @@ export function DatabaseExplorer({
       {ddl && (
         <DdlModal conn={ddl.conn} table={ddl.table} onClose={() => setDdl(null)} />
       )}
+      {workspaceDialog ? (
+        <WorkspaceConnectionDialog
+          connection={workspaceDialog.connection}
+          mode={workspaceDialog.mode}
+          onBound={onConnectionUpdated}
+          onClose={() => setWorkspaceDialog(null)}
+        />
+      ) : null}
     </aside>
   );
 }

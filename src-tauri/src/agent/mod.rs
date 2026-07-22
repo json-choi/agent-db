@@ -720,6 +720,7 @@ mod tests {
             secret_ref: None,
             env: env.map(str::to_string),
             schema_group: None,
+            workspace_access: crate::model::WorkspaceConnectionAccess::Local,
         }
     }
 

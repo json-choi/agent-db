@@ -40,6 +40,198 @@ pub enum Provider {
     PlanetScale,
 }
 
+/// Local or synchronized workspace container. Milestone 0 creates one stable,
+/// account-free Personal workspace; team creation arrives with the control plane.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Workspace {
+    pub id: Uuid,
+    pub name: String,
+    pub kind: WorkspaceKind,
+    pub lifecycle_state: WorkspaceLifecycleState,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceFeatureState {
+    pub enabled: bool,
+}
+
+/// Public identity fields returned to the desktop after Better Auth validates a
+/// Bearer session. The session token itself never crosses the IPC boundary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceAuthUser {
+    pub id: String,
+    pub email: String,
+    pub display_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceAuthState {
+    pub authenticated: bool,
+    pub user: Option<WorkspaceAuthUser>,
+}
+
+/// Expiring RFC 8628 authorization request. The high-entropy device code is kept
+/// only in frontend memory until polling finishes; it is never persisted.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceDeviceAuthorization {
+    pub device_code: String,
+    pub user_code: String,
+    pub verification_uri_complete: String,
+    pub expires_in: u64,
+    pub interval: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkspaceLoginPollStatus {
+    Pending,
+    SlowDown,
+    SignedIn,
+    Denied,
+    Expired,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceLoginPoll {
+    pub status: WorkspaceLoginPollStatus,
+    pub user: Option<WorkspaceAuthUser>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkspaceKind {
+    Personal,
+    Team,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkspaceLifecycleState {
+    Active,
+    Archived,
+    Deleted,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkspaceRole {
+    Viewer,
+    Analyst,
+    Editor,
+    Admin,
+    Owner,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceMember {
+    pub id: Uuid,
+    pub workspace_id: Uuid,
+    pub user_id: Option<String>,
+    pub display_name: String,
+    pub role: WorkspaceRole,
+    pub status: String,
+    pub joined_at: DateTime<Utc>,
+}
+
+/// Revision and synchronization metadata shared by workspace resources. Credential
+/// references deliberately remain outside this contract and never enter the outbox.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceScope {
+    pub workspace_id: Uuid,
+    pub remote_id: Option<String>,
+    pub revision: i64,
+    pub sync_status: SyncStatus,
+    pub deleted_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SyncStatus {
+    Local,
+    Dirty,
+    Synced,
+    Conflict,
+}
+
+/// Cached server authority for a shared connection. Personal connections are Local;
+/// team modes are narrowing permissions and never elevate the target DB credential.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkspaceConnectionAccess {
+    View,
+    Read,
+    Write,
+    Manage,
+    #[default]
+    Local,
+}
+
+impl WorkspaceConnectionAccess {
+    pub fn can_read(self) -> bool {
+        matches!(self, Self::Read | Self::Write | Self::Manage | Self::Local)
+    }
+
+    pub fn can_write(self) -> bool {
+        matches!(self, Self::Write | Self::Manage | Self::Local)
+    }
+
+    pub fn can_manage(self) -> bool {
+        matches!(self, Self::Manage | Self::Local)
+    }
+}
+
+/// Provider-neutral authorization input. Workspace authority narrows provider and
+/// database authority; it never manufactures privileges those systems did not grant.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthorizationRequest {
+    pub actor: AuthorizationActor,
+    pub action: String,
+    pub resource: AuthorizationResource,
+    pub explicitly_granted: bool,
+    pub explicitly_denied: bool,
+    pub external_capability_available: bool,
+    pub production_access: bool,
+    pub approval_required: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthorizationActor {
+    pub member_id: Uuid,
+    pub workspace_id: Uuid,
+    pub role: WorkspaceRole,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthorizationResource {
+    pub workspace_id: Uuid,
+    pub kind: String,
+    pub id: Uuid,
+    pub parent_id: Option<Uuid>,
+    pub environment: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthorizationDecision {
+    pub allowed: bool,
+    pub reason: String,
+    pub approval_required: bool,
+}
+
 /// A saved connection. Secrets never live here — only a `secretRef` pointing at the
 /// OS credential-store item that holds the password/connection string.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,6 +266,9 @@ pub struct ConnectionProfile {
     /// dev/staging/prod siblings, using prod as the default baseline when present.
     #[serde(default)]
     pub schema_group: Option<String>,
+    /// Local cache of the authenticated workspace member's effective permission.
+    #[serde(default)]
+    pub workspace_access: WorkspaceConnectionAccess,
 }
 
 /// Per-connection safety configuration (mirrors `connection_safety` in app.db).
