@@ -124,22 +124,20 @@
 
 .schema-diff-detail-toolbar {
   flex-shrink: 0;
-  border-bottom: var(--ds-border-width) solid var(--ds-border-subtle);
 }
 
 .schema-diff-filter-group {
+  --ds-row-control-size: var(--ds-control-field-sm);
   display: inline-flex;
-  padding: var(--ds-space-1);
-  border: var(--ds-border-width) solid var(--ds-border-subtle);
-  border-radius: var(--ds-radius-sm);
-  background: var(--ds-surface-1);
+  gap: var(--ds-space-2);
 }
 
 .schema-diff-filter {
   min-height: var(--ds-control-sm);
   padding: 0 var(--ds-control-pad-x-sm);
   border: none;
-  border-radius: var(--ds-radius-xs);
+  border-bottom: var(--ds-border-width-strong) solid transparent;
+  border-radius: 0;
   background: transparent;
   color: var(--ds-text-muted);
   cursor: pointer;
@@ -149,9 +147,9 @@
 }
 
 .schema-diff-filter.active {
-  background: var(--ds-surface-0);
-  color: var(--ds-text);
-  box-shadow: var(--ds-shadow-control);
+  background: transparent;
+  color: var(--ds-accent-text);
+  border-bottom-color: var(--ds-accent-text);
 }
 
 .schema-diff-search {

@@ -410,7 +410,7 @@ export default function Sql({
           minHeight="clamp(96px, 18vh, 140px)"
         />
       </div>
-      <div className="form-actions sql-actions">
+      <div className="form-actions sql-actions ds-control-row">
         <button
           className="btn primary"
           disabled={!draft.trim() || running}

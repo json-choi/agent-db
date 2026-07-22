@@ -31,8 +31,7 @@
   margin-left: auto;
   gap: var(--ds-space-2);
 }
-.agent-stats span,
-.seg {
+.agent-stats span {
   border: var(--ds-border-width) solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-sm);
   background: var(--ds-surface-0);
@@ -50,27 +49,28 @@
   font-size: var(--ds-icon-sm);
 }
 .agent-view-tabs {
+  --ds-row-control-size: var(--ds-control-md);
   display: inline-flex;
   align-self: flex-start;
-  gap: var(--ds-segment-gap);
-  padding: var(--ds-space-1);
-  border: var(--ds-border-width) solid var(--ds-border-subtle);
-  border-radius: var(--ds-radius-lg);
-  background: var(--ds-surface-1);
+  gap: var(--ds-space-2);
 }
 .seg {
   min-width: 88px;
   min-height: var(--ds-control-md);
   padding: 0 var(--ds-space-3);
+  border: none;
+  border-bottom: var(--ds-border-width-strong) solid transparent;
+  border-radius: 0;
+  background: transparent;
   color: var(--ds-text-muted);
   cursor: pointer;
   font: inherit;
   font-size: var(--ds-font-size-ui);
 }
 .seg.active {
-  background: var(--ds-accent);
-  color: var(--ds-text-inverse);
-  border-color: transparent;
+  background: transparent;
+  color: var(--ds-accent-text);
+  border-bottom-color: var(--ds-accent-text);
 }
 .agent-empty-panel {
   display: grid;
@@ -115,11 +115,13 @@
 }
 .agent-primary,
 .agent-secondary {
-  border: var(--ds-border-width) solid var(--ds-border-subtle);
-  border-radius: var(--ds-radius-sm);
-  background: var(--ds-surface-0);
-  padding: var(--ds-space-3);
+  background: transparent;
+  padding: var(--ds-space-2) 0;
   overflow: auto;
+}
+.agent-secondary {
+  padding-left: var(--ds-space-3);
+  border-left: var(--ds-border-width) solid var(--ds-border-subtle);
 }
 .agent-section-head {
   display: flex;
@@ -223,6 +225,7 @@
 }
 
 .mcp-result-actions {
+  --ds-row-control-size: var(--ds-control-field-sm);
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
@@ -310,13 +313,19 @@
   .agent-split,
   .agent-audit-grid,
   .agent-empty-panel {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .agent-empty-rows {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .agent-head {
     flex-direction: column;
+  }
+  .agent-secondary {
+    padding-top: var(--ds-space-3);
+    padding-left: 0;
+    border-top: var(--ds-border-width) solid var(--ds-border-subtle);
+    border-left: 0;
   }
   .agent-stats {
     justify-content: flex-start;
@@ -339,7 +348,7 @@
   }
 
   .context-row {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--ds-space-1);
   }
 

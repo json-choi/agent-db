@@ -89,6 +89,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::workspace_feature_state,
             commands::workspace_auth_state,
+            commands::workspace_sign_out,
             commands::begin_workspace_login,
             commands::poll_workspace_login,
             commands::workspace_console_url,

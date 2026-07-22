@@ -154,7 +154,7 @@ export default function Documents({
 
   return (
     <div className="screen documents">
-      <div className="ds-toolbar documents-toolbar">
+      <div className="ds-toolbar documents-toolbar ds-control-row">
         <h2>{t("documents.title")}</h2>
         <label className="documents-field">
           {t("documents.collection")}

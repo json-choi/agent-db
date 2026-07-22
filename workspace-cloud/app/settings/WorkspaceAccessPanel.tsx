@@ -96,7 +96,7 @@ export function WorkspaceAccessPanel({ workspaceId }: { workspaceId: string }) {
           </div>
         ))}
       </div>
-      <form className="invite-form" onSubmit={invite}>
+      <form className="invite-form ds-control-row" onSubmit={invite}>
         <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="member@company.com" required />
         <select value={role} onChange={(event) => setRole(event.target.value)}>
           <option value="viewer">보기 전용 (실행 불가)</option>

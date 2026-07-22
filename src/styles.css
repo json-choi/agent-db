@@ -1,7 +1,7 @@
 .app {
   display: grid;
   /* Middle track is the drag divider; the real width is set inline from App state. */
-  grid-template-columns: 240px 5px 1fr;
+  grid-template-columns: 240px 5px minmax(0, 1fr);
   height: 100dvh;
   overflow: hidden;
 }

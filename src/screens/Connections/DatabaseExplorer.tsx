@@ -145,7 +145,7 @@ function DdlModal({
           <span className="ddl-title">
             {t("connections.ddlTitle", { table: tableLabel(conn.engine, table) })}
           </span>
-          <div className="ddl-actions">
+          <div className="ddl-actions ds-control-row">
             <button className="btn small" onClick={copy} disabled={!text}>
               {copied ? t("common.copied") : t("common.copy")}
             </button>
@@ -178,6 +178,7 @@ export function DatabaseExplorer({
   onDeleted,
   onConnectionUpdated,
   onOpenSettings,
+  workspaceAccount,
   workspaceHeader,
 }: {
   connections: ConnectionProfile[];
@@ -191,6 +192,7 @@ export function DatabaseExplorer({
   onDeleted: (id: string) => void;
   onConnectionUpdated: (conn: ConnectionProfile) => void;
   onOpenSettings: () => void;
+  workspaceAccount?: ReactNode;
   workspaceHeader?: ReactNode;
 }) {
   const { t } = useI18n();
@@ -1082,10 +1084,16 @@ export function DatabaseExplorer({
         )}
       </div>
 
-      <div className="sidebar-foot">
-        <button className="foot-btn" onClick={onOpenSettings}>
-          <span className="gear"><Icon name="gear" /></span>{" "}
-          {t("common.settings")}
+      <div className="sidebar-foot ds-control-row">
+        {workspaceAccount}
+        <button
+          type="button"
+          className="sidebar-foot-action"
+          onClick={onOpenSettings}
+          title={t("common.settings")}
+          aria-label={t("common.settings")}
+        >
+          <Icon name="gear" />
         </button>
       </div>
 

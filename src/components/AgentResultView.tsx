@@ -123,7 +123,7 @@ function AgentEmptyState() {
   ];
 
   return (
-    <div className="agent-empty-panel ds-surface ds-tone-trust">
+    <div className="agent-empty-panel">
       <div className="agent-empty-copy">
         <div className="agent-empty-title">
           <h3>{t("agent.ledgerTitle")}</h3>
@@ -224,7 +224,7 @@ export default function AgentResultView({
         </div>
       </header>
 
-      <div className="agent-view-tabs" role="tablist">
+      <div className="agent-view-tabs ds-control-row" role="tablist">
         {(["result", "context", "audit"] as AgentView[]).map((id) => (
           <button
             key={id}
@@ -269,7 +269,7 @@ export default function AgentResultView({
                     )}{" "}
                     · <span title={fullTime(activeResult.iso)}>{activeResult.ts}</span>
                   </span>
-                  <div className="mcp-result-actions">
+                  <div className="mcp-result-actions ds-control-row">
                     <ResultToolbar
                       columns={activeResult.result.columns}
                       rows={activeResult.result.rows}

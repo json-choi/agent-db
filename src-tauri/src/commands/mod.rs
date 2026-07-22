@@ -210,6 +210,19 @@ pub async fn workspace_auth_state(state: State<'_, AppState>) -> AppResult<Works
 }
 
 #[tauri::command]
+pub async fn workspace_sign_out(state: State<'_, AppState>) -> AppResult<WorkspaceAuthState> {
+    crate::workspace_auth::sign_out().await?;
+    // Hiding hosted metadata and returning to Personal Workspace are part of the same
+    // desktop logout boundary. Shared DB handles must not survive that scope change.
+    state.store.sync_team_workspaces(&[]).await?;
+    state.connections.lock().unwrap().clear();
+    Ok(WorkspaceAuthState {
+        authenticated: false,
+        user: None,
+    })
+}
+
+#[tauri::command]
 pub async fn begin_workspace_login() -> AppResult<WorkspaceDeviceAuthorization> {
     crate::workspace_auth::begin_login().await
 }

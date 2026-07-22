@@ -41,6 +41,10 @@ export function workspaceAuthState(): Promise<WorkspaceAuthState> {
   return invoke("workspace_auth_state");
 }
 
+export function signOutWorkspace(): Promise<WorkspaceAuthState> {
+  return invoke("workspace_sign_out");
+}
+
 export function beginWorkspaceLogin(): Promise<WorkspaceDeviceAuthorization> {
   return invoke("begin_workspace_login");
 }

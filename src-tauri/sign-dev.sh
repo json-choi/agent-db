@@ -16,6 +16,7 @@ set -euo pipefail
 BIN="${1:-target/debug/dopedb}"
 ENTITLEMENTS="$(cd "$(dirname "$0")" && pwd)/entitlements.plist"
 KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
+IDENTIFIER="capital.launcher.dopedb"
 
 if [ ! -f "$BIN" ]; then
   echo "sign-dev: binary not found: $BIN (build first)" >&2
@@ -45,5 +46,7 @@ if [ -z "$IDENTITY" ]; then
   fi
 fi
 
-codesign --force --sign "$IDENTITY" --entitlements "$ENTITLEMENTS" "$BIN"
+codesign --force --sign "$IDENTITY" --identifier "$IDENTIFIER" \
+  --entitlements "$ENTITLEMENTS" "$BIN"
+codesign --verify --strict "$BIN"
 echo "sign-dev: signed $BIN with [$IDENTITY]"

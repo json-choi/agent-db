@@ -34,7 +34,7 @@ import AgentLogDialog from "./components/AgentLogDialog";
 import EngineMark from "./components/EngineMark";
 import { Icon } from "./components/Icon";
 import { ToastProvider, useToast } from "./components/Toast";
-import WorkspaceSwitcher from "./components/WorkspaceSwitcher";
+import WorkspaceSwitcher, { WorkspaceAccount } from "./components/WorkspaceSwitcher";
 import { AgentChatProvider } from "./lib/agentChat";
 import { AgentFeedProvider, useAgentFeed } from "./lib/agentFeed";
 import { useI18n, type I18nKey } from "./lib/i18n";
@@ -325,6 +325,18 @@ function Shell() {
       });
   }
 
+  async function reloadWorkspaceScope() {
+    setSelectedId(null);
+    setSelectedTable(null);
+    setEditing(null);
+    setSettingsOpen(false);
+    setSchemaDiffGroupKey(null);
+    setDashboardFocusId(null);
+    setSafety(null);
+    setConns([]);
+    await refresh();
+  }
+
   useEffect(() => {
     void refresh();
   }, []);
@@ -609,7 +621,7 @@ function Shell() {
               </div>
             </div>
             {(tab === "agent" || unseen > 0) && (
-              <div className="main-policy ds-command-group">
+              <div className="main-policy ds-command-group ds-control-row">
                 <button
                   className="btn small agent-jump"
                   onClick={() => setAgentLogOpen(true)}
@@ -625,7 +637,7 @@ function Shell() {
           </header>
         )}
 
-        <nav className="tabs" role="tablist">
+        <nav className="tabs ds-control-row" role="tablist">
           {visibleTabs.map((tabId) => (
             <button
               key={tabId}
@@ -758,22 +770,16 @@ function Shell() {
       : t("mcp.badgeDisconnectedTitle");
 
   return (
-    <div className="app" style={{ gridTemplateColumns: `${sidebarW}px 5px 1fr` }}>
+    <div
+      className="app"
+      style={{ gridTemplateColumns: `${sidebarW}px 5px minmax(0, 1fr)` }}
+    >
       <DatabaseExplorer
+        workspaceAccount={<WorkspaceAccount onSignedOut={reloadWorkspaceScope} />}
         workspaceHeader={
           <WorkspaceSwitcher
             onNew={startNewConnection}
-            onChanged={async () => {
-              setSelectedId(null);
-              setSelectedTable(null);
-              setEditing(null);
-              setSettingsOpen(false);
-              setSchemaDiffGroupKey(null);
-              setDashboardFocusId(null);
-              setSafety(null);
-              setConns([]);
-              await refresh();
-            }}
+            onChanged={reloadWorkspaceScope}
           />
         }
         connections={conns}

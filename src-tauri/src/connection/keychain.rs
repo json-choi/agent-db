@@ -2,6 +2,8 @@
 //! Credential Manager through keyring 4).
 //! Service = bundle id, account = connection id. The app.db holds only a
 //! `secret_ref`; the password never touches disk in cleartext.
+//! A zeroizing process-session cache avoids reopening the OS credential store for
+//! every query or membership request. The OS store remains the at-rest authority.
 //!
 //! PRODUCTION REQUIRES A SIGNED BUILD. Unsigned / ad-hoc builds hit
 //! platform credential-store failures (for example macOS `errSecMissingEntitlement
@@ -9,14 +11,52 @@
 //! app data dir.
 //! That fallback is NOT real security; it exists solely so unsigned dev builds run.
 
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex, MutexGuard};
+
 use keyring::Entry;
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 use crate::error::{AppError, AppResult};
 
 /// Credential-store service name (bundle id). Must match the signed bundle identifier.
 const SERVICE: &str = "capital.launcher.dopedb";
 const WORKSPACE_SESSION_ACCOUNT: &str = "workspace-session";
+static SESSION_CACHE: LazyLock<Mutex<HashMap<String, Zeroizing<String>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn session_cache() -> MutexGuard<'static, HashMap<String, Zeroizing<String>>> {
+    SESSION_CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn cached_secret(account: &str) -> Option<String> {
+    session_cache()
+        .get(account)
+        .map(|secret| secret.as_str().to_owned())
+}
+
+fn remember_secret(account: &str, secret: &str) {
+    session_cache().insert(account.to_owned(), Zeroizing::new(secret.to_owned()));
+}
+
+fn read_cached_secret(
+    account: &str,
+    read: impl FnOnce() -> AppResult<String>,
+) -> AppResult<String> {
+    if let Some(secret) = cached_secret(account) {
+        return Ok(secret);
+    }
+    let secret = read()?;
+    remember_secret(account, &secret);
+    Ok(secret)
+}
+
+fn forget_secret(account: &str) {
+    session_cache().remove(account);
+}
 
 fn entry(account: &str) -> AppResult<Entry> {
     Ok(Entry::new(SERVICE, account)?)
@@ -29,13 +69,15 @@ pub fn store_secret(connection_id: &Uuid, secret: &str) -> AppResult<()> {
         Ok(()) => Ok(()),
         Err(e) if should_fallback(&e) => file_store(&account, secret),
         Err(e) => Err(e.into()),
-    }
+    }?;
+    remember_secret(&account, secret);
+    Ok(())
 }
 
 /// Fetch the secret for a connection.
 pub fn fetch_secret(connection_id: &Uuid) -> AppResult<String> {
     let account = connection_id.to_string();
-    match entry(&account)?.get_password() {
+    read_cached_secret(&account, || match entry(&account)?.get_password() {
         Ok(s) => Ok(s),
         Err(keyring::Error::NoEntry) if cfg!(debug_assertions) => file_fetch(&account),
         Err(keyring::Error::NoEntry) => Err(AppError::NotFound(format!(
@@ -43,12 +85,13 @@ pub fn fetch_secret(connection_id: &Uuid) -> AppResult<String> {
         ))),
         Err(e) if should_fallback(&e) => file_fetch(&account),
         Err(e) => Err(e.into()),
-    }
+    })
 }
 
 /// Delete a connection's secret. Missing is not an error.
 pub fn delete_secret(connection_id: &Uuid) -> AppResult<()> {
     let account = connection_id.to_string();
+    forget_secret(&account);
     match entry(&account)?.delete_credential() {
         Ok(()) => Ok(()),
         Err(keyring::Error::NoEntry) => {
@@ -66,32 +109,42 @@ pub fn store_workspace_session(token: &str) -> AppResult<()> {
         Ok(()) => Ok(()),
         Err(e) if should_fallback(&e) => file_store(WORKSPACE_SESSION_ACCOUNT, token),
         Err(e) => Err(e.into()),
-    }
+    }?;
+    remember_secret(WORKSPACE_SESSION_ACCOUNT, token);
+    Ok(())
 }
 
 /// Read the stored workspace session. A missing session is normal signed-out state.
 pub fn fetch_workspace_session() -> AppResult<Option<String>> {
-    match entry(WORKSPACE_SESSION_ACCOUNT)?.get_password() {
-        Ok(token) => Ok(Some(token)),
+    if let Some(token) = cached_secret(WORKSPACE_SESSION_ACCOUNT) {
+        return Ok(Some(token));
+    }
+    let token = match entry(WORKSPACE_SESSION_ACCOUNT)?.get_password() {
+        Ok(token) => Some(token),
         Err(keyring::Error::NoEntry) if cfg!(debug_assertions) => {
             match file_fetch(WORKSPACE_SESSION_ACCOUNT) {
-                Ok(token) => Ok(Some(token)),
-                Err(AppError::NotFound(_)) => Ok(None),
-                Err(error) => Err(error),
+                Ok(token) => Some(token),
+                Err(AppError::NotFound(_)) => None,
+                Err(error) => return Err(error),
             }
         }
-        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(keyring::Error::NoEntry) => None,
         Err(e) if should_fallback(&e) => match file_fetch(WORKSPACE_SESSION_ACCOUNT) {
-            Ok(token) => Ok(Some(token)),
-            Err(AppError::NotFound(_)) => Ok(None),
-            Err(error) => Err(error),
+            Ok(token) => Some(token),
+            Err(AppError::NotFound(_)) => None,
+            Err(error) => return Err(error),
         },
-        Err(e) => Err(e.into()),
+        Err(e) => return Err(e.into()),
+    };
+    if let Some(token) = token.as_deref() {
+        remember_secret(WORKSPACE_SESSION_ACCOUNT, token);
     }
+    Ok(token)
 }
 
 /// Delete the local Better Auth session. Missing state is idempotently signed out.
 pub fn delete_workspace_session() -> AppResult<()> {
+    forget_secret(WORKSPACE_SESSION_ACCOUNT);
     match entry(WORKSPACE_SESSION_ACCOUNT)?.delete_credential() {
         Ok(()) => Ok(()),
         Err(keyring::Error::NoEntry) => {
@@ -208,6 +261,30 @@ mod tests {
             "deleted secret must not fetch"
         );
         file_delete_at(dir.path(), &account).expect("delete is idempotent");
+    }
+
+    #[test]
+    fn session_cache_reads_the_store_once_and_zeroizes_on_removal() {
+        use std::cell::Cell;
+
+        let account = format!("test-cache-{}", Uuid::new_v4());
+        let reads = Cell::new(0);
+        let first = read_cached_secret(&account, || {
+            reads.set(reads.get() + 1);
+            Ok("session-only-secret".to_owned())
+        })
+        .unwrap();
+        let second = read_cached_secret(&account, || {
+            reads.set(reads.get() + 1);
+            Ok("must-not-be-read".to_owned())
+        })
+        .unwrap();
+
+        assert_eq!(first, "session-only-secret");
+        assert_eq!(second, "session-only-secret");
+        assert_eq!(reads.get(), 1);
+        forget_secret(&account);
+        assert!(cached_secret(&account).is_none());
     }
 
     /// Real credential stores can require an interactive desktop session, which

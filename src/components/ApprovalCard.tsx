@@ -321,14 +321,14 @@ export default function ApprovalCard({
       ) : decided === "rejected" ? (
         // Not a dead-end: keep the statement visible above and let the user undo the
         // rejection to approve it, rather than forcing a re-issue.
-        <div className="approval-actions ds-action-row">
+        <div className="approval-actions ds-action-row ds-control-row">
           <StatusGlyph label={t("approval.rejected")} icon="circleSlash" tone="danger" />
           <button className="btn" onClick={() => setDecided(null)}>
             {t("approval.reconsider")}
           </button>
         </div>
       ) : busy ? (
-        <div className="approval-actions ds-action-row">
+        <div className="approval-actions ds-action-row ds-control-row">
           <StatusGlyph
             label={`${canAutoRun ? t("approval.readOnlyRunning") : t("approval.running")} ${elapsed}s`}
             icon="refresh"
@@ -340,7 +340,7 @@ export default function ApprovalCard({
       ) : canAutoRun && !cancelled ? (
         <StatusGlyph label={t("approval.readOnlyAutoRunning")} icon="play" />
       ) : (
-        <div className="approval-actions ds-action-row">
+        <div className="approval-actions ds-action-row ds-control-row">
           {writesBlocked && !compact && (
             <div className="error">{t("approval.writesDisabledBody")}</div>
           )}

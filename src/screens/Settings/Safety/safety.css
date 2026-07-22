@@ -124,7 +124,7 @@
 
 @media (max-width: 1180px) {
   .safety-controls {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -134,7 +134,7 @@
     align-items: flex-start;
   }
   .safety-controls {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -149,7 +149,7 @@
   }
 
   .safety-number {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .monitoring-access-head {

@@ -102,7 +102,7 @@ function ProviderOnboardCard({
       <pre className="agent-chat-command" onClick={() => onCopy(command)}>
         {command}
       </pre>
-      <div className="ds-toolbar">
+      <div className="ds-toolbar ds-control-row">
         <span className="muted">
           {info.installed ? t("agentChat.loginHint") : t("agentChat.installHint")}
         </span>
@@ -441,7 +441,7 @@ export default function AgentChat({
               </button>
             )}
             {clis.length > 0 && (
-            <div className="agent-chat-provider-tabs" role="tablist">
+            <div className="agent-chat-provider-tabs ds-control-row" role="tablist">
               {clis.map((info) => (
                 <button
                   key={info.id}
@@ -613,7 +613,7 @@ export default function AgentChat({
                   })}
                   disabled={busy}
                 />
-                <div className="agent-chat-composer-controls">
+                <div className="agent-chat-composer-controls ds-control-row">
                   <select
                     aria-label={t("agentChat.modelLabel")}
                     value={model}

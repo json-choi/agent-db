@@ -202,7 +202,7 @@ export default function Updates({
 
         {error && <div className="error">{t("updates.checkFailed", { error })}</div>}
 
-        <div className="form-actions">
+        <div className="form-actions ds-control-row">
           <button
             className="btn primary"
             disabled={!update || state === "checking" || state === "downloading"}

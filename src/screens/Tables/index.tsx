@@ -71,7 +71,7 @@ function Pager({
   const hasPrev = page > 0;
   const hasNext = total != null ? page < (lastPage ?? 0) : rows === pageSize;
   return (
-    <div className="table-pager ds-command-group" aria-label={t("tables.pagination")}>
+    <div className="table-pager ds-command-group ds-control-row" aria-label={t("tables.pagination")}>
       <button className="btn small" disabled={busy || !hasPrev} onClick={() => onPage(0)}>
         « {t("common.first")}
       </button>
@@ -455,7 +455,7 @@ function SqlTableData({
         </div>
       )}
 
-      <div className="grid-toolbar ds-data-toolbar">
+      <div className="grid-toolbar ds-data-toolbar ds-control-row">
         <div className="ds-toolbar-group">
           <button
             className="btn small"
@@ -596,7 +596,7 @@ function SqlTableData({
                     </div>
                   ))}
                 </div>
-                <div className="row-editor-actions ds-action-row">
+                <div className="row-editor-actions ds-action-row ds-control-row">
                   <button className="btn primary" onClick={armDelete}>
                     {t("tables.reviewDelete")}
                   </button>

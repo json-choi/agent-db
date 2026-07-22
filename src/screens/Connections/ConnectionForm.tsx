@@ -715,7 +715,7 @@ export function ConnectionForm({
 
       <InfoTip label={t("connections.writeAccessHint")} className="connection-write-help" />
 
-      <div className="form-actions">
+      <div className="form-actions ds-control-row">
         <button className="btn primary" disabled={busy} onClick={save}>
           {running === "save" ? t("common.saving") : t("common.save")}
         </button>

@@ -58,7 +58,6 @@
   align-items: center;
   gap: var(--ds-space-2);
   flex-wrap: wrap;
-  margin-bottom: var(--ds-space-2);
 }
 .toolbar-menu {
   position: relative;
@@ -108,6 +107,7 @@
 
 /* Table data pager + wide-cell handling */
 .table-data-head .table-pager {
+  --ds-row-control-size: var(--ds-control-field-sm);
   display: flex;
   align-items: center;
   gap: var(--ds-space-2);

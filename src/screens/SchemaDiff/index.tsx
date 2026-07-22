@@ -199,7 +199,7 @@ export default function SchemaDiff({
     <section className="main-view schema-diff-screen">
       <SchemaDiffHeader group={group} onClose={onClose} />
 
-      <div className="schema-diff-toolbar ds-toolbar">
+      <div className="schema-diff-toolbar ds-toolbar ds-control-row">
         <label className="schema-diff-select">
           <span>{t("schemaDiff.baseline")}</span>
           <select value={baseline?.id ?? ""} onChange={(event) => changeBaseline(event.target.value)}>
@@ -285,8 +285,8 @@ export default function SchemaDiff({
           })}
 
           <div className="schema-diff-detail ds-surface">
-            <div className="schema-diff-detail-toolbar ds-data-toolbar">
-              <div className="schema-diff-filter-group" role="group" aria-label={t("schemaDiff.filterStatus")}>
+            <div className="schema-diff-detail-toolbar ds-data-toolbar ds-control-row">
+              <div className="schema-diff-filter-group ds-control-row" role="group" aria-label={t("schemaDiff.filterStatus")}>
                 {(["all", "added", "missing", "changed"] as const).map((status) => (
                   <button
                     key={status}

@@ -54,7 +54,7 @@
 }
 
 .activity-integrity > summary {
-  min-height: 48px;
+  min-height: var(--ds-control-xl);
   display: grid;
   grid-template-columns: var(--ds-control-sm) minmax(0, 1fr) auto;
   align-items: center;
@@ -268,14 +268,12 @@
 }
 
 .activity-audit-row {
-  padding: var(--ds-space-3);
-  border: var(--ds-border-width) solid var(--ds-border-subtle);
-  border-radius: var(--ds-radius-md);
-  background: var(--ds-surface-0);
+  padding: 0 0 var(--ds-space-3);
+  border-bottom: var(--ds-border-width) solid var(--ds-border-subtle);
 }
 
 .activity-audit-row.tampered {
-  border-color: var(--ds-danger);
+  border-bottom-color: var(--ds-danger);
 }
 
 .activity-tampered-label {

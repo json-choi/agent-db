@@ -39,8 +39,8 @@ gh workflow run canary.yml --ref main -f source_ref="$branch"
 
 ## 빌드 · 검증
 
-- `pnpm build` — tsc + vite build.
-- `pnpm dev:app` — Rust 빌드 후 앱 실행.
+- `pnpm build` — UI 깊이·컨트롤 행·그리드 계약 검사 + tsc + vite build.
+- `pnpm dev:app` / `pnpm tauri dev` — macOS에서는 안정된 개발 코드 서명 후 앱 실행.
 - `cargo test --manifest-path src-tauri/Cargo.toml` — Rust 테스트.
 
 ## 릴리스

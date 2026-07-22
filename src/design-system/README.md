@@ -162,6 +162,23 @@ Agent/safety 카드 시스템:
 8. `system.css`에는 화면 이름을 넣지 않는다. 반복되는 행은 `ds-action-row`, 반복 카드/표면은 `ds-card*`와 `ds-tone-*`로 조합한다.
 9. 새 토큰은 세 화면 이상에서 반복될 때만 추가한다. 한 화면의 미세 조정 값은 화면 CSS에 둔다.
 
+## 시각적 깊이 예산
+
+한 화면에서 테두리·배경·그림자로 구획되는 깊이는 컨트롤까지 포함해 최대 3단계다.
+
+1. **화면/영역** — 배경 또는 한 방향 divider만 사용한다. 둥근 사각형으로 감싸지 않는다.
+2. **작업 표면/반복 항목** — 정보 그룹에 경계가 실제로 필요할 때 한 번만 사용한다.
+3. **컨트롤/상태** — 버튼, 입력, 배지처럼 직접 조작하거나 상태를 읽는 요소다.
+
+- `panel -> card -> card`, `inspector -> bordered list -> bordered row` 구조는 금지한다.
+- 섹션 구분은 새 박스 대신 여백, 제목, 한 방향 divider를 우선한다.
+- 카드 안에 버튼은 가능하지만, 그 버튼을 다시 카드나 패널로 감싸지 않는다.
+- 새 grid track은 `1fr` 대신 `minmax(0, 1fr)`를 쓰고, 공통 layout 요소의 `min-width: 0` 규칙을 제거하지 않는다.
+- 툴바·액션·페이지 이동·탭 행은 `ds-control-row`를 함께 쓴다. 화면별 높이는 `--ds-row-control-size`에 `--ds-control-*` 토큰을 지정한다.
+- 버튼·입력·선택 컨트롤의 높이에 px 값을 직접 쓰지 않는다. 같은 행의 컨트롤은 하나의 높이 토큰을 공유한다.
+- 정본 surface 이름과 다른 커스텀 경계를 만들면 JSX에 `data-ui-boundary`를 붙여 구조 검사에 포함한다.
+- `pnpm check:ui`가 데스크톱과 워크스페이스 웹 전체에서 surface/control 중첩, control-row 누락, 안전하지 않은 fractional grid track, 하드코딩된 컨트롤 높이를 검사하며 `pnpm build`와 CI에서도 자동 실행된다.
+
 ## DataGrip 분석에서 반영한 것
 
 - Database Explorer의 계층 구조와 view option 개념.

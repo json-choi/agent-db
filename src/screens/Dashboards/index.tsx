@@ -162,7 +162,7 @@ export default function Dashboards({
             </ul>
           </section>
 
-          <section className="dashboard-canvas ds-panel">
+          <section className="dashboard-canvas">
             {!selected ? (
               <div className="dashboard-state dashboard-select-state">
                 <span className="dashboard-state-icon"><Icon name="dashboard" /></span>
@@ -184,7 +184,7 @@ export default function Dashboards({
                       {t("dashboard.updatedAt", { time: displayTime(selected.updatedAt) })}
                     </span>
                   </div>
-                  <div className="ds-command-group">
+                  <div className="ds-command-group ds-control-row">
                     <button
                       className="btn small"
                       disabled={running || deleting}

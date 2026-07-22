@@ -9,6 +9,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 use crate::connection::keychain::{
     delete_workspace_session, fetch_workspace_session, store_workspace_session,
@@ -256,6 +257,38 @@ pub async fn auth_state() -> AppResult<WorkspaceAuthState> {
         authenticated: user.is_some(),
         user,
     })
+}
+
+/// Revoke the current Better Auth session when the control plane is reachable, then
+/// always remove the native client's credential. Remote revocation is best-effort so
+/// losing the network cannot trap someone in a locally signed-in desktop session.
+pub async fn sign_out() -> AppResult<()> {
+    let token = fetch_workspace_session()?.map(Zeroizing::new);
+    if let Some(token) = token.as_deref() {
+        let remote_result = async {
+            let origin = origin()?;
+            let response = client()?
+                .post(format!("{origin}/api/auth/sign-out"))
+                .bearer_auth(token)
+                .json(&json!({}))
+                .send()
+                .await
+                .map_err(|error| request_error("revoking workspace session", error))?;
+            if response.status().is_success() || response.status() == StatusCode::UNAUTHORIZED {
+                Ok(())
+            } else {
+                Err(oauth_error(response).await)
+            }
+        }
+        .await;
+        if let Err(error) = remote_result {
+            tracing::warn!(
+                %error,
+                "workspace session could not be revoked remotely; deleting local credential"
+            );
+        }
+    }
+    delete_workspace_session()
 }
 
 /// Fetch organization memberships for the stored Bearer session. Only identifiers

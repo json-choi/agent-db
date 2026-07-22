@@ -31,7 +31,7 @@ export function CreateWorkspaceForm() {
   return (
     <form className="create-form" onSubmit={submit}>
       <label htmlFor="workspace-name">새 워크스페이스</label>
-      <div><input id="workspace-name" value={name} onChange={(event) => setName(event.target.value)} maxLength={120} placeholder="예: Data Platform" required /><button type="submit" disabled={pending}>{pending ? "생성 중" : "만들기"}</button></div>
+      <div className="form-control-row ds-control-row"><input id="workspace-name" value={name} onChange={(event) => setName(event.target.value)} maxLength={120} placeholder="예: Data Platform" required /><button type="submit" disabled={pending}>{pending ? "생성 중" : "만들기"}</button></div>
       {error ? <small className="form-error">{error}</small> : null}
     </form>
   );

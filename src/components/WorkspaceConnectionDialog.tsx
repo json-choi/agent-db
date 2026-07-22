@@ -187,7 +187,7 @@ export default function WorkspaceConnectionDialog({
           </>
         )}
         {error ? <div className="form-msg error workspace-connection-error" role="alert">{error}</div> : null}
-        <footer className="form-actions">
+        <footer className="form-actions ds-control-row">
           <button ref={cancelRef} className="btn" type="button" onClick={onClose} disabled={pending}>{t("common.cancel")}</button>
           <button className="btn primary" type="submit" disabled={pending || (mode === "copy" && !selectedWorkspace)}>
             {pending ? t("mcp.working") : mode === "copy" ? t("workspace.copy") : t("workspace.bind")}

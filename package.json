@@ -6,21 +6,22 @@
   "packageManager": "pnpm@10.26.1",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "pnpm check:ui && tsc && vite build",
+    "check:ui": "node scripts/check-ui-depth.mjs",
     "test": "vitest run",
     "workspace:migrate": "bash scripts/migrate-workspace-service.sh",
     "workspace:cloud:dev": "pnpm --dir workspace-cloud dev",
     "workspace:cloud:build": "pnpm --dir workspace-cloud build",
     "build:bridge": "bash scripts/build-bridge.sh",
     "sign:dev": "bash src-tauri/sign-dev.sh",
-    "dev:app": "cargo build --manifest-path src-tauri/Cargo.toml && pnpm sign:dev && ./target/debug/dopedb",
+    "dev:app": "pnpm tauri dev",
     "preview": "vite preview",
     "site:dev": "pnpm --dir site dev",
     "site:build": "pnpm --dir site build",
     "site:preview": "pnpm --dir site start",
     "site:preview-image": "python3 site/scripts/generate-preview.py",
     "icons": "python3 scripts/generate-icons.py",
-    "tauri": "tauri"
+    "tauri": "bash scripts/tauri.sh"
   },
   "dependencies": {
     "@codemirror/lang-sql": "^6.10.0",
@@ -37,6 +38,7 @@
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
+    "@babel/parser": "8.0.4",
     "@tauri-apps/cli": "^2.11.4",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",

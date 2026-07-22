@@ -146,7 +146,28 @@ h3 {
   font-size: var(--ds-font-size-sm);
 }
 
-.app :where(button, input, select, textarea, summary, code, strong, span) {
+.app :where(
+  div,
+  main,
+  aside,
+  section,
+  article,
+  header,
+  footer,
+  nav,
+  form,
+  fieldset,
+  label,
+  details,
+  button,
+  input,
+  select,
+  textarea,
+  summary,
+  code,
+  strong,
+  span
+) {
   min-width: 0;
 }
 
@@ -163,9 +184,9 @@ h3 {
   padding: 0 var(--ds-control-pad-x);
   border: var(--ds-border-width) solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-sm);
-  background: var(--ds-surface-0);
+  background: transparent;
   color: var(--ds-text);
-  box-shadow: var(--ds-shadow-control);
+  box-shadow: none;
   cursor: pointer;
   font: inherit;
   font-size: var(--ds-font-size-ui);
@@ -241,8 +262,7 @@ h3 {
   padding: var(--ds-space-4);
 }
 
-.grid-panel,
-.schema-inspector {
+.grid-panel {
   background: var(--ds-surface-0);
   border: var(--ds-border-width) solid var(--ds-border-subtle);
   border-radius: var(--ds-radius-md);
@@ -401,17 +421,32 @@ h3 {
   min-width: 0;
 }
 
+/* Every horizontal control cluster shares one explicit row height. Screen CSS can
+   choose the size with --ds-row-control-size, but cannot accidentally mix tracks. */
+.ds-control-row {
+  --ds-row-control-size: var(--ds-control-field);
+}
+
+.app .ds-control-row :where(
+  button,
+  input:not([type="checkbox"]):not([type="radio"]),
+  select,
+  summary,
+  .ds-filter-token
+) {
+  height: var(--ds-row-control-size);
+  min-height: var(--ds-row-control-size);
+}
+
 .ds-data-toolbar {
+  --ds-row-control-size: var(--ds-control-field-sm);
   min-height: var(--ds-control-lg);
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: var(--ds-space-2);
-  padding: var(--ds-space-2);
-  border: var(--ds-border-width) solid var(--ds-border-subtle);
-  border-radius: var(--ds-radius-md);
-  background: var(--ds-surface-0);
-  box-shadow: var(--ds-shadow-control);
+  padding: var(--ds-space-1) 0;
+  border-bottom: var(--ds-border-width) solid var(--ds-border-subtle);
 }
 
 .ds-toolbar-group {
@@ -527,14 +562,13 @@ h3 {
 }
 
 .ds-filter-strip {
+  --ds-row-control-size: var(--ds-control-field-sm);
   min-height: var(--ds-control-lg);
   display: flex;
   align-items: center;
   gap: var(--ds-space-2);
-  padding: var(--ds-space-1) var(--ds-space-2);
-  border: var(--ds-border-width) solid var(--ds-border-subtle);
-  border-radius: var(--ds-radius-md);
-  background: var(--ds-surface-1);
+  padding: var(--ds-space-1) 0;
+  border-bottom: var(--ds-border-width) solid var(--ds-border-subtle);
 }
 
 .ds-filter-token {
@@ -560,9 +594,7 @@ h3 {
   font-weight: 650;
 }
 
-.app input:not([type="checkbox"]):not([type="radio"]),
-.app select,
-.app textarea,
+.app :where(input:not([type="checkbox"]):not([type="radio"]), select, textarea),
 .table-filter,
 .filter-input {
   box-sizing: border-box;
@@ -573,9 +605,7 @@ h3 {
   font: inherit;
 }
 
-.app input:not([type="checkbox"]):not([type="radio"]),
-.app select,
-.app textarea,
+.app :where(input:not([type="checkbox"]):not([type="radio"]), select, textarea),
 .table-filter,
 .filter-input {
   height: var(--ds-control-field);
@@ -594,7 +624,7 @@ h3 {
   width: 100%;
 }
 
-.app textarea {
+.app :where(textarea) {
   height: auto;
   min-height: 80px;
   padding-top: var(--ds-space-2);
@@ -602,9 +632,11 @@ h3 {
   line-height: var(--ds-line-body);
 }
 
-.app input:not([type="checkbox"]):not([type="radio"]):focus,
-.app select:focus,
-.app textarea:focus,
+.app :where(
+  input:not([type="checkbox"]):not([type="radio"]):focus,
+  select:focus,
+  textarea:focus
+),
 .table-filter:focus,
 .filter-input:focus {
   border-color: var(--ds-focus);
@@ -613,6 +645,7 @@ h3 {
 }
 
 .tabs {
+  --ds-row-control-size: var(--ds-control-md);
   background: var(--ds-surface-0);
 }
 

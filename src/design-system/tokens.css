@@ -104,6 +104,7 @@
   --ds-control-sm: 24px;
   --ds-control-md: 28px;
   --ds-control-lg: 32px;
+  --ds-control-xl: 48px;
   --ds-control-field: var(--ds-control-lg);
   --ds-control-field-sm: var(--ds-control-md);
   --ds-control-field-xs: var(--ds-control-sm);

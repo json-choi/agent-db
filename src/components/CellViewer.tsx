@@ -47,7 +47,7 @@ export default function CellViewer({
     <div className="cell-viewer">
       <div className="panel-head">
         <strong>{column}</strong>
-        <div className="panel-head-actions">
+        <div className="panel-head-actions ds-control-row">
           <button
             className="btn small"
             onClick={() =>

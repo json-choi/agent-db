@@ -105,7 +105,7 @@ export default function MonitoringAccess({ connectionId }: { connectionId: strin
       </div>
 
       {postgres && status.roleAvailable && (
-        <div className="monitoring-access-actions ds-action-row">
+        <div className="monitoring-access-actions ds-action-row ds-control-row">
           {status.roleGranted ? (
             <ConfirmButton
               className="btn danger small"

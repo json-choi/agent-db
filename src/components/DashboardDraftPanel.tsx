@@ -109,7 +109,7 @@ export default function DashboardDraftPanel({
       </div>
       <p className="muted dashboard-save-note">{t("dashboard.saveNote")}</p>
       {error && <div className="error" role="alert">{error}</div>}
-      <div className="ds-action-row">
+      <div className="ds-action-row ds-control-row">
         <button type="button" className="btn" disabled={saving} onClick={onCancel}>
           {t("common.cancel")}
         </button>

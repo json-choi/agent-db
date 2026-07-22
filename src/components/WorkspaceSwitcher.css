@@ -34,13 +34,13 @@
 }
 
 .workspace-switcher-actions {
+  --ds-row-control-size: var(--ds-control-field-sm);
   flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: var(--ds-space-1);
 }
 
-.workspace-login-button,
 .workspace-add-button,
 .workspace-dashboard-button {
   border: var(--ds-border-width) solid var(--ds-sidebar-border);
@@ -48,27 +48,18 @@
   color: var(--ds-text);
 }
 
-.workspace-login-button {
-  width: 76px;
-  max-width: 76px;
-  overflow: hidden;
-  padding: 0 var(--ds-space-2);
-  color: var(--ds-text-muted);
-  font-size: var(--ds-font-size-2xs);
-  font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.workspace-add-button {
+.workspace-add-button,
+.workspace-dashboard-button {
   width: var(--ds-control-md);
   min-width: var(--ds-control-md);
+  height: var(--ds-control-md);
+  min-height: var(--ds-control-md);
+  padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
 }
 
-.workspace-login-button:hover,
 .workspace-add-button:hover,
 .workspace-dashboard-button:hover {
   border-color: var(--ds-border-strong);
@@ -76,42 +67,23 @@
   color: var(--ds-text);
 }
 
-.workspace-login-button:focus-visible,
 .workspace-add-button:focus-visible,
 .workspace-dashboard-button:focus-visible {
   outline: none;
   box-shadow: var(--ds-focus-ring);
 }
 
-.workspace-login-button:disabled {
-  cursor: progress;
-}
-
-.workspace-login-button[data-checking="true"] {
-  color: var(--ds-text-subtle);
-}
-
-.workspace-login-button[data-authenticated="true"] {
-  border-color: color-mix(in srgb, var(--ds-success) 46%, var(--ds-sidebar-border));
-  color: var(--ds-success);
-  cursor: default;
-  opacity: 1;
-}
-
 .workspace-select-row {
+  --ds-row-control-size: var(--ds-control-field);
   display: grid;
-  grid-template-columns: minmax(0, 1fr) var(--ds-control-sm);
-  align-items: center;
+  grid-template-columns: minmax(0, 1fr);
+  grid-auto-rows: var(--ds-control-field);
+  align-items: stretch;
   gap: var(--ds-space-1);
   min-width: 0;
 }
 
 .workspace-dashboard-button {
-  width: var(--ds-control-sm);
-  min-width: var(--ds-control-sm);
-  height: var(--ds-control-sm);
-  min-height: var(--ds-control-sm);
-  padding: 0;
   color: var(--ds-text-muted);
 }
 
@@ -127,10 +99,11 @@
   position: relative;
   display: flex;
   align-items: center;
+  height: var(--ds-control-field);
 }
 
 .workspace-select-skeleton {
-  height: var(--ds-control-sm);
+  height: var(--ds-control-field);
   border: var(--ds-border-width) solid var(--ds-sidebar-border);
   border-radius: var(--ds-radius-sm);
   background: var(--ds-surface-1);
@@ -140,7 +113,8 @@
 .workspace-select-wrap select {
   width: 100%;
   min-width: 0;
-  height: var(--ds-control-sm);
+  height: var(--ds-control-field);
+  min-height: var(--ds-control-field);
   padding: 0 calc(var(--ds-space-5) + var(--ds-space-1)) 0 var(--ds-space-2);
   border: var(--ds-border-width) solid var(--ds-sidebar-border);
   border-radius: var(--ds-radius-sm);
@@ -168,4 +142,114 @@
   right: var(--ds-space-2);
   color: var(--ds-text-muted);
   pointer-events: none;
+}
+
+/* Authentication is account identity, not workspace chrome. Keep it in the flat
+   sidebar footer so the top grid has only workspace controls of one size. */
+.workspace-account {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: var(--ds-control-md);
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-2);
+  padding: 0;
+}
+
+.workspace-account-avatar {
+  width: var(--ds-control-md);
+  height: var(--ds-control-md);
+  flex: 0 0 var(--ds-control-md);
+  display: inline-grid;
+  place-items: center;
+  border-radius: var(--ds-radius-pill);
+  background: var(--ds-accent-soft);
+  color: var(--ds-accent-text);
+  font-size: var(--ds-font-size-xs);
+  font-weight: 750;
+}
+
+.workspace-account-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  gap: var(--ds-segment-gap);
+}
+
+.workspace-account-copy strong,
+.workspace-account-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-account-copy strong {
+  font-size: var(--ds-font-size-sm);
+}
+
+.workspace-account-copy small {
+  color: var(--ds-text-muted);
+  font-size: var(--ds-font-size-2xs);
+}
+
+.workspace-account-login {
+  width: 100%;
+  min-height: var(--ds-control-md);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ds-text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--ds-font-size-sm);
+  font-weight: 650;
+  text-align: left;
+}
+
+.workspace-account-action {
+  width: var(--ds-control-md);
+  min-width: var(--ds-control-md);
+  height: var(--ds-control-md);
+  min-height: var(--ds-control-md);
+  display: inline-grid;
+  flex: 0 0 var(--ds-control-md);
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--ds-radius-sm);
+  background: transparent;
+  color: var(--ds-text-muted);
+  cursor: pointer;
+}
+
+.workspace-account-action:hover:not(:disabled) {
+  background: var(--ds-hover);
+  color: var(--ds-danger);
+}
+
+.workspace-account-action:focus-visible {
+  outline: none;
+  box-shadow: var(--ds-focus-ring);
+}
+
+.workspace-account-action:disabled {
+  cursor: progress;
+  opacity: 0.55;
+}
+
+.workspace-account-login:hover:not(:disabled) {
+  color: var(--ds-text);
+}
+
+.workspace-account-login:disabled {
+  cursor: progress;
+  opacity: 0.65;
+}
+
+.workspace-account-skeleton {
+  width: min(128px, 78%);
+  height: var(--ds-control-md);
+  border-radius: var(--ds-radius-sm);
+  background: var(--ds-surface-1);
+  opacity: 0.55;
 }

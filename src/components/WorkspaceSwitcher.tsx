@@ -8,6 +8,7 @@ import {
   pollWorkspaceLogin,
   refreshWorkspaceMemberships,
   setActiveWorkspace,
+  signOutWorkspace,
   workspaceConsoleUrl,
 } from "../ipc/commands";
 import type { WorkspaceAuthState, WorkspaceLoginPoll } from "../ipc/types";
@@ -20,21 +21,13 @@ import { Icon } from "./Icon";
 import { useToast } from "./Toast";
 import "./WorkspaceSwitcher.css";
 
-export default function WorkspaceSwitcher({
-  onChanged,
-  onNew,
-}: {
-  onChanged: () => void | Promise<void>;
-  onNew: () => void;
-}) {
+export function WorkspaceAccount({ onSignedOut }: { onSignedOut: () => void | Promise<void> }) {
   const { t } = useI18n();
   const toast = useToast();
   const queryClient = useQueryClient();
-  const context = useQuery(workspaceContextQuery());
   const auth = useQuery(workspaceAuthStateQuery());
-  const [switching, setSwitching] = useState(false);
-  const [dashboardOpening, setDashboardOpening] = useState(false);
   const [loginPhase, setLoginPhase] = useState<"idle" | "starting" | "waiting">("idle");
+  const [loggingOut, setLoggingOut] = useState(false);
   const loginAttempt = useRef(0);
   const pendingLogin = useRef<{ attempt: number; deviceCode: string } | null>(null);
   const pollInFlight = useRef<Promise<WorkspaceLoginPoll> | null>(null);
@@ -200,16 +193,94 @@ export default function WorkspaceSwitcher({
     }
   }
 
+  async function logout() {
+    if (loggingOut) return;
+    loginAttempt.current += 1;
+    pendingLogin.current = null;
+    setLoginPhase("idle");
+    setLoggingOut(true);
+    try {
+      const signedOut = await signOutWorkspace();
+      queryClient.setQueryData(qk.workspaceAuth(), signedOut);
+      await resetWorkspaceResourceQueries(queryClient);
+      await queryClient.invalidateQueries({ queryKey: qk.workspaceContext() });
+      await onSignedOut();
+      toast(t("workspace.logoutComplete"), "success");
+    } catch (error) {
+      // The native command may already have removed the credential before a local
+      // workspace-index error. Re-read identity so the UI never displays a stale user.
+      await auth.refetch().catch(() => undefined);
+      await queryClient.invalidateQueries({ queryKey: qk.workspaceContext() });
+      toast(t("workspace.logoutFailed", { error: errMessage(error) }), "error");
+    } finally {
+      setLoggingOut(false);
+    }
+  }
+
   const authKnown = auth.data !== undefined;
   const loginLabel = !authKnown
     ? t("workspace.loginChecking")
-    : auth.data.authenticated
-      ? t("workspace.loginCompleteShort")
-      : loginPhase === "starting"
-        ? t("workspace.loginStarting")
-        : loginPhase === "waiting"
-          ? t("workspace.loginCancel")
-          : t("workspace.login");
+    : loginPhase === "starting"
+      ? t("workspace.loginStarting")
+      : loginPhase === "waiting"
+        ? t("workspace.loginCancel")
+        : t("workspace.login");
+
+  const user = auth.data?.authenticated ? auth.data.user : null;
+
+  return (
+    <div className="workspace-account" aria-live="polite">
+      {!authKnown ? (
+        <div className="workspace-account-skeleton" aria-label={loginLabel} />
+      ) : user ? (
+        <>
+          <span className="workspace-account-avatar" aria-hidden="true">
+            {(user.displayName || user.email).slice(0, 1).toUpperCase()}
+          </span>
+          <span className="workspace-account-copy">
+            <strong>{user.displayName}</strong>
+            <small>{user.email}</small>
+          </span>
+          <button
+            type="button"
+            className="workspace-account-action"
+            onClick={() => void logout()}
+            disabled={loggingOut}
+            title={t(loggingOut ? "workspace.logoutPending" : "workspace.logout")}
+            aria-label={t(loggingOut ? "workspace.logoutPending" : "workspace.logout")}
+            aria-busy={loggingOut}
+          >
+            <Icon name="logOut" />
+          </button>
+        </>
+      ) : (
+        <button
+          type="button"
+          className="workspace-account-login"
+          onClick={() => (loginPhase === "waiting" ? cancelLogin() : void login())}
+          disabled={loginPhase === "starting"}
+          title={loginPhase === "waiting" ? t("workspace.loginPending") : undefined}
+        >
+          {loginLabel}
+        </button>
+      )}
+    </div>
+  );
+}
+
+export default function WorkspaceSwitcher({
+  onChanged,
+  onNew,
+}: {
+  onChanged: () => void | Promise<void>;
+  onNew: () => void;
+}) {
+  const { t } = useI18n();
+  const toast = useToast();
+  const queryClient = useQueryClient();
+  const context = useQuery(workspaceContextQuery());
+  const [switching, setSwitching] = useState(false);
+  const [dashboardOpening, setDashboardOpening] = useState(false);
 
   async function changeWorkspace(id: string) {
     if (!context.data?.feature.enabled) return;
@@ -255,27 +326,7 @@ export default function WorkspaceSwitcher({
     <div className="workspace-switcher" data-tauri-drag-region="deep">
       <div className="workspace-switcher-head">
         <span className="workspace-switcher-label">{t("workspace.label")}</span>
-        <div className="workspace-switcher-actions">
-          <button
-            type="button"
-            className="btn small workspace-login-button"
-            onClick={() => (loginPhase === "waiting" ? cancelLogin() : void login())}
-            disabled={!authKnown || loginPhase === "starting" || auth.data.authenticated}
-            data-checking={!authKnown || undefined}
-            data-authenticated={auth.data?.authenticated || undefined}
-            title={
-              !authKnown
-                ? t("workspace.loginChecking")
-                : auth.data.user
-                ? `${auth.data.user.displayName} · ${auth.data.user.email}`
-                : loginPhase === "waiting"
-                  ? t("workspace.loginPending")
-                  : undefined
-            }
-            aria-live="polite"
-          >
-            {loginLabel}
-          </button>
+        <div className="workspace-switcher-actions ds-control-row">
           <button
             type="button"
             className="btn small workspace-add-button"
@@ -285,22 +336,25 @@ export default function WorkspaceSwitcher({
           >
             <Icon name="plus" />
           </button>
-        </div>
-      </div>
-      {context.isLoading ? (
-        <div className="workspace-select-row">
-          <div className="workspace-select-skeleton" aria-hidden="true" />
           <button
             type="button"
             className="btn small workspace-dashboard-button"
-            disabled
-            aria-label={t("workspace.openDashboard")}
+            onClick={() => void openDashboard()}
+            disabled={!context.data?.feature.enabled || dashboardOpening}
+            title={dashboardLabel}
+            aria-label={dashboardLabel}
+            aria-busy={dashboardOpening}
           >
             <Icon name="externalLink" />
           </button>
         </div>
+      </div>
+      {context.isLoading ? (
+        <div className="workspace-select-row ds-control-row">
+          <div className="workspace-select-skeleton" aria-hidden="true" />
+        </div>
       ) : context.data?.feature.enabled ? (
-        <div className="workspace-select-row">
+        <div className="workspace-select-row ds-control-row">
           <div className="workspace-select-wrap">
             <select
               value={context.data.active.id}
@@ -318,17 +372,6 @@ export default function WorkspaceSwitcher({
             </select>
             <Icon name="chevronDown" />
           </div>
-          <button
-            type="button"
-            className="btn small workspace-dashboard-button"
-            onClick={() => void openDashboard()}
-            disabled={dashboardOpening}
-            title={dashboardLabel}
-            aria-label={dashboardLabel}
-            aria-busy={dashboardOpening}
-          >
-            <Icon name="externalLink" />
-          </button>
         </div>
       ) : null}
     </div>

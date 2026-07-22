@@ -119,23 +119,21 @@
 }
 
 .agent-chat-provider-tabs {
+  --ds-row-control-size: var(--ds-control-md);
   display: inline-flex;
   align-self: center;
   flex: 0 0 auto;
-  gap: var(--ds-segment-gap);
-  padding: var(--ds-space-1);
-  border: var(--ds-border-width) solid var(--ds-border-subtle);
-  border-radius: var(--ds-radius-lg);
-  background: var(--ds-surface-1);
+  gap: var(--ds-space-2);
 }
 
 .agent-chat-provider-seg {
   min-width: 88px;
   min-height: var(--ds-control-md);
   padding: 0 var(--ds-space-3);
-  border: var(--ds-border-width) solid var(--ds-border-subtle);
-  border-radius: var(--ds-radius-sm);
-  background: var(--ds-surface-0);
+  border: none;
+  border-bottom: var(--ds-border-width-strong) solid transparent;
+  border-radius: 0;
+  background: transparent;
   color: var(--ds-text-muted);
   cursor: pointer;
   font: inherit;
@@ -143,9 +141,9 @@
 }
 
 .agent-chat-provider-seg.active {
-  background: var(--ds-accent);
-  color: var(--ds-text-inverse);
-  border-color: transparent;
+  background: transparent;
+  color: var(--ds-accent-text);
+  border-bottom-color: var(--ds-accent-text);
 }
 
 /* Read-only context indicator: it reinforces the app-wide selection without becoming a
@@ -331,6 +329,7 @@
 }
 
 .agent-chat-composer-controls {
+  --ds-row-control-size: var(--ds-control-md);
   display: flex;
   align-items: center;
   flex-wrap: wrap;

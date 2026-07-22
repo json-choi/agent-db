@@ -49,14 +49,24 @@ pnpm install
 pnpm tauri dev
 ```
 
+macOS의 `pnpm tauri dev`는 빌드마다 같은 개발용 코드 서명을 적용합니다. 이 경로를
+사용하면 Keychain이 DopeDB를 같은 앱으로 인식하므로 최초 허용 뒤 재빌드할 때마다
+암호를 다시 묻지 않습니다. DB 암호와 워크스페이스 세션은 OS 보안 저장소에 유지되고,
+실행 중에는 메모리 캐시에서 재사용되어 같은 세션 안에서 Keychain을 반복 호출하지 않습니다.
+
 개별 검증:
 
 ```sh
 pnpm build
+pnpm check:ui
 pnpm site:build
 pnpm build:bridge
 cargo check --workspace
 ```
+
+`pnpm check:ui`는 데스크톱과 워크스페이스 웹 전체의 시각적 깊이(최대 3),
+같은 행의 컨트롤 높이, 오버플로우에 안전한 grid track을 검사합니다. 이 검사는
+일반 `pnpm build`에도 포함됩니다.
 
 ## 릴리스
 
