@@ -7,7 +7,6 @@ export type Provider = "auto" | "generic" | "neon" | "planetScale";
 export type WorkspaceKind = "personal" | "team";
 export type WorkspaceLifecycleState = "active" | "archived" | "deleted";
 export type WorkspaceRole = "viewer" | "analyst" | "editor" | "admin" | "owner";
-export type SyncStatus = "local" | "dirty" | "synced" | "conflict";
 export type WorkspaceConnectionAccess = "view" | "read" | "write" | "manage" | "local";
 
 export interface Workspace {
@@ -29,9 +28,20 @@ export interface WorkspaceAuthUser {
   displayName: string;
 }
 
+export interface WorkspaceAccountMembership {
+  workspaceId: string;
+  role: WorkspaceRole;
+}
+
+export interface WorkspaceAuthAccount {
+  user: WorkspaceAuthUser;
+  memberships: WorkspaceAccountMembership[];
+}
+
 export interface WorkspaceAuthState {
   authenticated: boolean;
   user: WorkspaceAuthUser | null;
+  accounts: WorkspaceAuthAccount[];
 }
 
 export interface WorkspaceDeviceAuthorization {
@@ -52,52 +62,6 @@ export type WorkspaceLoginPollStatus =
 export interface WorkspaceLoginPoll {
   status: WorkspaceLoginPollStatus;
   user: WorkspaceAuthUser | null;
-}
-
-export interface WorkspaceMember {
-  id: string;
-  workspaceId: string;
-  userId: string | null;
-  displayName: string;
-  role: WorkspaceRole;
-  status: string;
-  joinedAt: string;
-}
-
-export interface ResourceScope {
-  workspaceId: string;
-  remoteId: string | null;
-  revision: number;
-  syncStatus: SyncStatus;
-  deletedAt: string | null;
-}
-
-export interface AuthorizationRequest {
-  actor: {
-    memberId: string;
-    workspaceId: string;
-    role: WorkspaceRole;
-    active: boolean;
-  };
-  action: string;
-  resource: {
-    workspaceId: string;
-    kind: string;
-    id: string;
-    parentId: string | null;
-    environment: string | null;
-  };
-  explicitlyGranted: boolean;
-  explicitlyDenied: boolean;
-  externalCapabilityAvailable: boolean;
-  productionAccess: boolean;
-  approvalRequired: boolean;
-}
-
-export interface AuthorizationDecision {
-  allowed: boolean;
-  reason: string;
-  approvalRequired: boolean;
 }
 
 export interface ConnectionProfile {

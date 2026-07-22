@@ -2,7 +2,7 @@
 
 // Workspace membership administration. Mutations are confirmed by the server and
 // the rendered list is then reloaded from Better Auth's organization state.
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useState } from "react";
 
 type WorkspaceMember = {
   id: string;
@@ -16,6 +16,7 @@ type PendingInvitation = {
   email: string;
   role: string | null;
   inviteUrl: string;
+  expiresAt: string;
 };
 
 const roleLabel: Record<string, string> = {
@@ -32,20 +33,40 @@ export function WorkspaceAccessPanel({ workspaceId }: { workspaceId: string }) {
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("analyst");
   const [pending, setPending] = useState(false);
+  const [mutatingId, setMutatingId] = useState("");
+  const [copiedId, setCopiedId] = useState("");
   const [error, setError] = useState("");
 
-  async function load() {
-    const response = await fetch(`/api/v1/workspaces/${workspaceId}/members`);
-    if (!response.ok) return;
-    const body = await response.json();
+  const load = useCallback(async (signal?: AbortSignal) => {
+    const response = await fetch(`/api/v1/workspaces/${workspaceId}/members`, {
+      cache: "no-store",
+      signal,
+    }).catch(() => null);
+    if (signal?.aborted) return;
+    if (!response?.ok) {
+      const body = await response?.json().catch(() => null);
+      setError(body?.error ?? "멤버와 초대 목록을 불러오지 못했습니다.");
+      return;
+    }
+    const body = await response.json().catch(() => null);
+    if (!body || !Array.isArray(body.members) || !Array.isArray(body.invitations)) {
+      setError("멤버와 초대 목록 응답을 확인하지 못했습니다.");
+      return;
+    }
+    setError("");
     setMembers(body.members);
     setInvitations(body.invitations);
-  }
+  }, [workspaceId]);
 
-  useEffect(() => { void load(); }, [workspaceId]);
+  useEffect(() => {
+    const controller = new AbortController();
+    void load(controller.signal);
+    return () => controller.abort();
+  }, [load]);
 
   async function invite(event: FormEvent) {
     event.preventDefault();
+    if (pending || mutatingId) return;
     setPending(true);
     setError("");
     const response = await fetch(`/api/v1/workspaces/${workspaceId}/members`, {
@@ -64,6 +85,8 @@ export function WorkspaceAccessPanel({ workspaceId }: { workspaceId: string }) {
   }
 
   async function updateRole(memberId: string, nextRole: string) {
+    if (mutatingId) return;
+    setMutatingId(memberId);
     setError("");
     const response = await fetch(`/api/v1/workspaces/${workspaceId}/members`, {
       method: "PATCH",
@@ -73,9 +96,61 @@ export function WorkspaceAccessPanel({ workspaceId }: { workspaceId: string }) {
     if (!response?.ok) {
       const body = await response?.json().catch(() => null);
       setError(body?.error ?? "권한을 변경하지 못했습니다.");
+      setMutatingId("");
       return;
     }
     await load();
+    setMutatingId("");
+  }
+
+  async function remove(kind: "member" | "invitation", id: string) {
+    if (mutatingId) return;
+    setMutatingId(id);
+    setError("");
+    const response = await fetch(`/api/v1/workspaces/${workspaceId}/members`, {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(kind === "member" ? { memberId: id } : { invitationId: id }),
+    }).catch(() => null);
+    setMutatingId("");
+    if (!response?.ok) {
+      const body = await response?.json().catch(() => null);
+      setError(body?.error ?? "요청을 처리하지 못했습니다.");
+      return;
+    }
+    await load();
+  }
+
+  async function resend(item: PendingInvitation) {
+    if (mutatingId) return;
+    setMutatingId(item.id);
+    setError("");
+    const response = await fetch(`/api/v1/workspaces/${workspaceId}/members`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: item.email, role: item.role ?? "analyst" }),
+    }).catch(() => null);
+    setMutatingId("");
+    if (!response?.ok) {
+      const body = await response?.json().catch(() => null);
+      setError(body?.error ?? "초대를 다시 만들지 못했습니다.");
+      return;
+    }
+    await load();
+  }
+
+  async function copyInvitation(item: PendingInvitation) {
+    setError("");
+    try {
+      await navigator.clipboard.writeText(item.inviteUrl);
+      setCopiedId(item.id);
+      window.setTimeout(
+        () => setCopiedId((current) => current === item.id ? "" : current),
+        1800,
+      );
+    } catch {
+      setError("초대 링크를 클립보드에 복사하지 못했습니다.");
+    }
   }
 
   return (
@@ -86,12 +161,15 @@ export function WorkspaceAccessPanel({ workspaceId }: { workspaceId: string }) {
           <div className="member-row" key={item.id}>
             <div><strong>{item.name}</strong><small>{item.email}</small></div>
             {item.role === "owner" ? <span>{roleLabel.owner}</span> : (
-              <select value={item.role} onChange={(event) => void updateRole(item.id, event.target.value)}>
-                <option value="viewer">보기 전용 (실행 불가)</option>
-                <option value="analyst">읽기 전용</option>
-                <option value="editor">읽기 / 쓰기</option>
-                <option value="admin">관리자</option>
-              </select>
+              <div className="member-actions ds-control-row">
+                <select value={item.role} onChange={(event) => void updateRole(item.id, event.target.value)} disabled={mutatingId !== ""}>
+                  <option value="viewer">보기 전용 (실행 불가)</option>
+                  <option value="analyst">읽기 전용</option>
+                  <option value="editor">읽기 / 쓰기</option>
+                  <option value="admin">관리자</option>
+                </select>
+                <button type="button" onClick={() => void remove("member", item.id)} disabled={mutatingId !== ""}>제거</button>
+              </div>
             )}
           </div>
         ))}
@@ -104,20 +182,24 @@ export function WorkspaceAccessPanel({ workspaceId }: { workspaceId: string }) {
           <option value="editor">읽기 / 쓰기</option>
           <option value="admin">관리자</option>
         </select>
-        <button type="submit" disabled={pending}>{pending ? "생성 중" : "초대 링크 만들기"}</button>
+        <button type="submit" disabled={pending || mutatingId !== ""}>{pending ? "생성 중" : "초대 링크 만들기"}</button>
       </form>
       {invitations.length > 0 ? (
         <div className="invitation-list">
           {invitations.map((item) => (
             <div className="invitation-row" key={item.id}>
-              <div><strong>{item.email}</strong><small>{roleLabel[item.role ?? ""] ?? item.role}</small></div>
-              <button type="button" onClick={() => void navigator.clipboard.writeText(item.inviteUrl)}>링크 복사</button>
+              <div><strong>{item.email}</strong><small>{roleLabel[item.role ?? ""] ?? item.role} · {new Date(item.expiresAt).toLocaleDateString("ko-KR")} 만료</small></div>
+              <div className="invitation-actions ds-control-row">
+                <button type="button" onClick={() => void copyInvitation(item)}>{copiedId === item.id ? "복사됨" : "링크 복사"}</button>
+                <button type="button" onClick={() => void resend(item)} disabled={mutatingId !== ""}>다시 만들기</button>
+                <button type="button" onClick={() => void remove("invitation", item.id)} disabled={mutatingId !== ""}>취소</button>
+              </div>
             </div>
           ))}
           <p>초대 링크는 해당 이메일로 Google 로그인한 사용자만 수락할 수 있습니다.</p>
         </div>
       ) : null}
-      {error ? <small className="form-error">{error}</small> : null}
+      {error ? <small className="form-error" role="alert">{error}</small> : null}
     </div>
   );
 }

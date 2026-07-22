@@ -1,6 +1,8 @@
 # Workspace Collaboration Roadmap
 
-Status: Milestone 0 implemented; Milestone 1 identity/RBAC implemented; Milestone 2 shared-connection core implemented
+Status: Milestone 0 implemented; Milestone 1 identity/RBAC slice implemented;
+Milestone 2 shared-connection core implemented. The remaining sync, envelope-encryption,
+backup, workspace-deletion, and per-connection-grant exit criteria stay open below.
 
 This roadmap defines how DopeDB can add team workspaces without turning the
 workspace service into a database proxy or weakening the local safety boundary.
@@ -344,7 +346,7 @@ Exit criteria:
 
 ## Milestone 1 — Identity, Membership, and Control Plane
 
-Implementation snapshot (2026-07-22): `workspace-cloud/` now contains the dedicated
+Implementation snapshot (2026-07-23): `workspace-cloud/` now contains the dedicated
 Next.js auth/account frontend and `/api/v1` service. Better Auth owns Google sign-in,
 Organization membership, Bearer sessions, invitation primitives, database rate limits,
 and RFC 8628 desktop authorization. Drizzle ORM is the only application database layer,
@@ -354,10 +356,25 @@ Google application credentials and the production Vercel project/domain are conf
 Desktop device authorization now requests and polls Better Auth codes, validates the
 resulting Bearer session in Rust, and stores it in the OS credential store without exposing
 it to the webview. Authenticated organization memberships are reconciled into the local
-workspace switcher at sign-in and app startup. The web console creates verified-email-bound
-invitations, exposes a copyable acceptance link, lists members, and lets Admin/Owner assign
-read-only Analyst, read/write Editor, or Admin roles. Transactional email delivery remains
-optional infrastructure; the acceptance link is functional without it.
+workspace switcher at sign-in and app startup. Better Auth Multi Session keeps up to ten
+browser identities separate, while the desktop stores one Bearer session per validated
+account id and groups duplicate workspace memberships by account. Account switching restores
+that identity's last team workspace atomically; Personal Workspace data remains account-free.
+The cached identity renders immediately and revalidates silently on focus or after five
+minutes, so a network check never makes the login control flicker. Sessions expire after
+30 days and rotate their freshness daily.
+
+The web console creates verified-email-bound invitations, exposes a copyable acceptance
+link, lists members, and lets Admin/Owner assign Viewer, read-only Analyst, read/write Editor,
+or Admin roles. Admins can also remove members, cancel or reissue pending invitations, and
+revoke device sessions. Optional Resend delivery sends the same email-bound acceptance URL;
+deployments without it retain the secure copy-link workflow. Account selection is available
+before device approval and invitation acceptance so an already active browser identity cannot
+silently approve the wrong account.
+
+This snapshot is the shipped identity and administration slice, not completion of every
+Milestone 1 exit criterion. Durable bidirectional resource sync, optimistic conflict UI,
+per-workspace envelope encryption, backup/restore, and workspace deletion remain future work.
 
 Deliverables:
 
@@ -385,7 +402,7 @@ Exit criteria:
 
 ## Milestone 2 — Shared Connections
 
-Implementation snapshot (2026-07-22): an Editor or higher can copy a Personal
+Implementation snapshot (2026-07-23): an Editor or higher can copy a Personal
 Workspace connection into a team workspace. The cloud API accepts a strict redacted
 template whose schema has no username, password, token, certificate, connection URL,
 advanced parameter, or `secret_ref` field. The sharer's secret is duplicated only
@@ -393,8 +410,12 @@ inside that device's OS credential store. Other members receive a synchronized t
 with Credentials Required state and bind their own username/password locally. Cached
 role authority is enforced in manual queries, scripts, previews, schema introspection,
 dashboards, monitoring grants, and MCP reads. Analyst is read-only; Editor can enter the
-existing local write/approval path; Admin/Owner can manage membership. Target-database
-credentials remain authoritative and SQLite file connections are not shareable.
+existing local write/approval path; Admin/Owner can manage membership. Credential references,
+RBAC snapshots, schema caches, query history, and Agent threads are keyed by the exact local
+account scope, so two accounts in the same workspace cannot reuse or overwrite one another's
+secrets or cached permissions. A failed copy removes its temporary credential item and rolls
+back the newly created server template where possible. Target-database credentials remain
+authoritative and SQLite file connections are not shareable.
 
 The cached role is only a UI hint. Before a shared connection reads, writes, previews a
 write, changes a database monitoring grant, or serves an MCP read, the desktop asks the
@@ -402,6 +423,10 @@ control plane to revalidate the active session, current membership, role, worksp
 and connection id. The check fails closed when the service is unavailable. Removing a
 member from DopeDB cannot revoke a database credential they already possess; the target
 database administrator must revoke that account separately.
+
+This core deliberately shares only endpoint templates and does not yet satisfy the later
+per-connection grant, shared-template editing, provider-resource, or full tombstone-sync
+deliverables listed below.
 
 Deliverables:
 

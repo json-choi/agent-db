@@ -1,0 +1,284 @@
+/* Authentication is account identity, not workspace chrome. Keep it in the flat
+   sidebar footer so the top grid has only workspace controls of one size. */
+.workspace-account {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: var(--ds-control-md);
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-2);
+  padding: 0;
+}
+
+.workspace-account-identity {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: var(--ds-control-md);
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-2);
+  padding: 0;
+  border: 0;
+  border-radius: var(--ds-radius-sm);
+  background: transparent;
+  color: var(--ds-text);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.workspace-account-identity:hover,
+.workspace-account-identity[aria-expanded="true"] {
+  background: var(--ds-hover);
+}
+
+.workspace-account-identity:focus-visible {
+  outline: none;
+  box-shadow: var(--ds-focus-ring);
+}
+
+.workspace-account-identity > .icon {
+  flex: 0 0 auto;
+  margin-right: var(--ds-space-1);
+  color: var(--ds-text-muted);
+  font-size: var(--ds-font-size-xs);
+}
+
+.workspace-account-avatar {
+  width: var(--ds-control-md);
+  height: var(--ds-control-md);
+  flex: 0 0 var(--ds-control-md);
+  display: inline-grid;
+  place-items: center;
+  border-radius: var(--ds-radius-pill);
+  background: var(--ds-accent-soft);
+  color: var(--ds-accent-text);
+  font-size: var(--ds-font-size-xs);
+  font-weight: 750;
+}
+
+.workspace-account-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  gap: var(--ds-segment-gap);
+}
+
+.workspace-account-copy strong,
+.workspace-account-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-account-copy strong {
+  font-size: var(--ds-font-size-sm);
+}
+
+.workspace-account-copy small {
+  color: var(--ds-text-muted);
+  font-size: var(--ds-font-size-2xs);
+}
+
+.workspace-account-login {
+  width: 100%;
+  min-height: var(--ds-control-md);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ds-text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--ds-font-size-sm);
+  font-weight: 650;
+  text-align: left;
+}
+
+.workspace-account-action {
+  width: var(--ds-control-md);
+  min-width: var(--ds-control-md);
+  height: var(--ds-control-md);
+  min-height: var(--ds-control-md);
+  display: inline-grid;
+  flex: 0 0 var(--ds-control-md);
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--ds-radius-sm);
+  background: transparent;
+  color: var(--ds-text-muted);
+  cursor: pointer;
+}
+
+.workspace-account-action:hover:not(:disabled) {
+  background: var(--ds-hover);
+  color: var(--ds-danger);
+}
+
+.workspace-account-action:focus-visible {
+  outline: none;
+  box-shadow: var(--ds-focus-ring);
+}
+
+.workspace-account-action:disabled {
+  cursor: progress;
+  opacity: 0.55;
+}
+
+.workspace-account-login:hover:not(:disabled) {
+  color: var(--ds-text);
+}
+
+.workspace-account-login:disabled {
+  cursor: progress;
+  opacity: 0.65;
+}
+
+.workspace-account-skeleton {
+  width: min(128px, 78%);
+  height: var(--ds-control-md);
+  border-radius: var(--ds-radius-sm);
+  background: var(--ds-surface-1);
+  opacity: 0.55;
+}
+
+.workspace-account-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + var(--ds-space-2));
+  z-index: var(--ds-z-popover);
+  width: calc(100% + var(--ds-control-md) + var(--ds-space-2));
+  max-width: calc(100vw - var(--ds-space-6));
+  max-height: min(420px, calc(100vh - var(--ds-space-8)));
+  overflow: auto;
+  padding: var(--ds-space-1);
+  border: var(--ds-border-width) solid var(--ds-border-strong);
+  border-radius: var(--ds-radius-md);
+  background: var(--ds-surface-2);
+  box-shadow: var(--ds-shadow-popover);
+}
+
+.workspace-account-menu > p {
+  margin: 0;
+  padding: var(--ds-space-2);
+  color: var(--ds-text-muted);
+  font-size: var(--ds-font-size-2xs);
+  font-weight: 750;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.workspace-account-menu-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--ds-control-md);
+  align-items: stretch;
+}
+
+.workspace-account-menu-switch,
+.workspace-account-menu-logout,
+.workspace-account-menu-command {
+  min-height: var(--ds-control-lg);
+  border: 0;
+  border-radius: var(--ds-radius-sm);
+  background: transparent;
+  color: var(--ds-text);
+  cursor: pointer;
+  font: inherit;
+}
+
+.workspace-account-menu-switch {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: var(--ds-control-md) minmax(0, 1fr) var(--ds-control-sm);
+  align-items: center;
+  gap: var(--ds-space-2);
+  padding: var(--ds-space-1) var(--ds-space-2);
+  text-align: left;
+}
+
+.workspace-account-menu-switch > span:nth-child(2) {
+  min-width: 0;
+  display: grid;
+  gap: var(--ds-segment-gap);
+}
+
+.workspace-account-menu-switch strong,
+.workspace-account-menu-switch small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-account-menu-switch strong {
+  font-size: var(--ds-font-size-sm);
+}
+
+.workspace-account-menu-switch small {
+  color: var(--ds-text-muted);
+  font-size: var(--ds-font-size-2xs);
+}
+
+.workspace-account-menu-switch > .icon {
+  color: var(--ds-accent-text);
+  font-size: var(--ds-font-size-xs);
+}
+
+.workspace-account-menu-avatar {
+  width: var(--ds-control-md);
+  height: var(--ds-control-md);
+  display: inline-grid;
+  place-items: center;
+  border-radius: var(--ds-radius-pill);
+  background: var(--ds-accent-soft);
+  color: var(--ds-accent-text);
+  font-size: var(--ds-font-size-xs);
+  font-weight: 750;
+}
+
+.workspace-account-menu-logout {
+  width: var(--ds-control-md);
+  display: inline-grid;
+  place-items: center;
+  color: var(--ds-text-muted);
+}
+
+.workspace-account-menu-command {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-2);
+  padding: 0 var(--ds-space-2);
+  font-size: var(--ds-font-size-sm);
+  font-weight: 650;
+  text-align: left;
+}
+
+.workspace-account-menu-command > .icon {
+  width: var(--ds-control-md);
+}
+
+.workspace-account-menu-switch:hover:not(:disabled),
+.workspace-account-menu-logout:hover:not(:disabled),
+.workspace-account-menu-command:hover:not(:disabled) {
+  background: var(--ds-hover);
+}
+
+.workspace-account-menu-logout:hover:not(:disabled),
+.workspace-account-menu-command.danger:hover:not(:disabled) {
+  color: var(--ds-danger);
+}
+
+.workspace-account-menu-switch:focus-visible,
+.workspace-account-menu-logout:focus-visible,
+.workspace-account-menu-command:focus-visible {
+  outline: none;
+  box-shadow: var(--ds-focus-ring);
+}
+
+.workspace-account-menu button:disabled {
+  cursor: progress;
+  opacity: 0.55;
+}
+

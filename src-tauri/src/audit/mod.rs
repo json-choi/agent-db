@@ -130,12 +130,10 @@ pub async fn snapshot(
 /// its `prev_hash` broken (index = 0-based insertion-order position); `(true, None)`
 /// if the whole chain verifies.
 pub async fn verify_chain(store: &Store, connection_id: Uuid) -> AppResult<(bool, Option<i64>)> {
-    let rows = sqlx::query(
-        "SELECT * FROM audit_log WHERE connection_id = ?1 ORDER BY rowid ASC",
-    )
-    .bind(connection_id.to_string())
-    .fetch_all(store.pool())
-    .await?;
+    let rows = sqlx::query("SELECT * FROM audit_log WHERE connection_id = ?1 ORDER BY rowid ASC")
+        .bind(connection_id.to_string())
+        .fetch_all(store.pool())
+        .await?;
 
     let entries: Vec<AuditEntry> = rows.iter().map(row_to_audit).collect::<AppResult<_>>()?;
     Ok(verify_entries(&entries))

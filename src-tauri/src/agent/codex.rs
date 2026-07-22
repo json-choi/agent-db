@@ -185,10 +185,9 @@ mod tests {
     #[test]
     fn turn_failed_reads_the_nested_error_message() {
         // Real codex-cli shape: turn.failed nests the message under `error.message`.
-        let line: serde_json::Value = serde_json::from_str(
-            r#"{"type":"turn.failed","error":{"message":"model gone"}}"#,
-        )
-        .unwrap();
+        let line: serde_json::Value =
+            serde_json::from_str(r#"{"type":"turn.failed","error":{"message":"model gone"}}"#)
+                .unwrap();
         let signals = parse_line(&line);
         assert!(signals
             .iter()
@@ -212,7 +211,10 @@ mod tests {
     #[test]
     fn model_and_effort_flags_come_before_the_resume_subcommand() {
         let args = build_args("hi", Some("thr-1"), Some("o3"), Some("high"));
-        let resume_pos = args.iter().position(|a| a == "resume").expect("resume present");
+        let resume_pos = args
+            .iter()
+            .position(|a| a == "resume")
+            .expect("resume present");
         let m_pos = args.iter().position(|a| a == "-m").expect("-m present");
         assert!(m_pos < resume_pos, "-m must precede resume");
         assert_eq!(args[m_pos + 1], "o3");
@@ -220,7 +222,10 @@ mod tests {
             .iter()
             .position(|a| a == "model_reasoning_effort=high")
             .expect("model_reasoning_effort=high present");
-        assert!(effort_pos < resume_pos, "-c model_reasoning_effort must precede resume");
+        assert!(
+            effort_pos < resume_pos,
+            "-c model_reasoning_effort must precede resume"
+        );
         assert_eq!(args[effort_pos - 1], "-c");
     }
 
@@ -229,6 +234,8 @@ mod tests {
     fn no_model_or_effort_omits_both_flags() {
         let args = build_args("hi", None, None, None);
         assert!(!args.iter().any(|a| a == "-m"));
-        assert!(!args.iter().any(|a| a.starts_with("model_reasoning_effort=")));
+        assert!(!args
+            .iter()
+            .any(|a| a.starts_with("model_reasoning_effort=")));
     }
 }

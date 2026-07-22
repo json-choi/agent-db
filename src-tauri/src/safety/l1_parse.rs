@@ -57,7 +57,9 @@ pub fn classify(sql: &str, engine: Engine) -> AppResult<Classification> {
     };
 
     if statements.is_empty() {
-        return Ok(fail_safe("no parseable statement — treated as a write (fail-safe)"));
+        return Ok(fail_safe(
+            "no parseable statement — treated as a write (fail-safe)",
+        ));
     }
 
     if statements.len() > 1 {
@@ -132,7 +134,9 @@ fn classify_stmt(stmt: &Statement, notes: &mut Vec<String>, no_where: &mut bool)
                 QueryKind::Write
             } else if !q.locks.is_empty() {
                 // FOR UPDATE / FOR SHARE takes row locks (would fail on a read-only txn).
-                notes.push("SELECT ... FOR UPDATE/SHARE takes row locks — reclassified as a write".into());
+                notes.push(
+                    "SELECT ... FOR UPDATE/SHARE takes row locks — reclassified as a write".into(),
+                );
                 QueryKind::Write
             } else {
                 QueryKind::Read
@@ -140,9 +144,14 @@ fn classify_stmt(stmt: &Statement, notes: &mut Vec<String>, no_where: &mut bool)
         }
         // Plain EXPLAIN just plans (Read); EXPLAIN ANALYZE runs the statement, so
         // classify by the boxed inner statement (EXPLAIN ANALYZE DELETE = Write/high).
-        Statement::Explain { analyze, statement, .. } => {
+        Statement::Explain {
+            analyze, statement, ..
+        } => {
             if *analyze {
-                notes.push("EXPLAIN ANALYZE executes the statement — classified by its inner statement".into());
+                notes.push(
+                    "EXPLAIN ANALYZE executes the statement — classified by its inner statement"
+                        .into(),
+                );
                 classify_stmt(statement, notes, no_where)
             } else {
                 QueryKind::Read

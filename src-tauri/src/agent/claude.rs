@@ -46,7 +46,9 @@ const DISALLOWED_TOOLS: [&str; 10] = [
 /// in `--mcp-config` from the child's own environment) and passed only as an env var
 /// to the spawned process, so the token is never written to disk in plaintext.
 fn mcp_config_path() -> AppResult<PathBuf> {
-    let dir = dirs::data_dir().ok_or_else(|| AppError::Config("no data dir".into()))?.join("dopedb");
+    let dir = dirs::data_dir()
+        .ok_or_else(|| AppError::Config("no data dir".into()))?
+        .join("dopedb");
     std::fs::create_dir_all(&dir)?;
     let path = dir.join("agent-mcp-config.json");
     if !path.exists() {
@@ -76,11 +78,18 @@ pub(super) fn command(
     model: Option<&str>,
     effort: Option<&str>,
 ) -> AppResult<Command> {
-    let bin = which("claude").ok_or_else(|| AppError::Agent("Claude Code (`claude`) not found".into()))?;
+    let bin = which("claude")
+        .ok_or_else(|| AppError::Agent("Claude Code (`claude`) not found".into()))?;
     let cfg = mcp_config_path()?;
     let mut cmd: Command = quiet_command(&bin).into();
-    cmd.args(build_args(message, resume, &cfg.to_string_lossy(), model, effort))
-        .env("DOPEDB_MCP_TOKEN", token);
+    cmd.args(build_args(
+        message,
+        resume,
+        &cfg.to_string_lossy(),
+        model,
+        effort,
+    ))
+    .env("DOPEDB_MCP_TOKEN", token);
     Ok(cmd)
 }
 
@@ -97,7 +106,11 @@ fn build_args(
     let mut args: Vec<String> = ["-p", "--output-format", "stream-json", "--verbose"]
         .map(String::from)
         .into();
-    args.extend(["--mcp-config".into(), mcp_config.into(), "--strict-mcp-config".into()]);
+    args.extend([
+        "--mcp-config".into(),
+        mcp_config.into(),
+        "--strict-mcp-config".into(),
+    ]);
     args.push("--allowedTools".into());
     args.extend(ALLOWED_TOOLS.map(String::from));
     args.push("--disallowedTools".into());
@@ -184,10 +197,9 @@ mod tests {
 
     #[test]
     fn system_init_yields_the_session_id() {
-        let line: serde_json::Value = serde_json::from_str(
-            r#"{"type":"system","subtype":"init","session_id":"sess-1"}"#,
-        )
-        .unwrap();
+        let line: serde_json::Value =
+            serde_json::from_str(r#"{"type":"system","subtype":"init","session_id":"sess-1"}"#)
+                .unwrap();
         assert_eq!(session_ids(&parse_line(&line)), vec!["sess-1"]);
     }
 
@@ -219,7 +231,9 @@ mod tests {
             serde_json::from_str(r#"{"type":"result","session_id":"sess-1","is_error":false}"#)
                 .unwrap();
         let signals = parse_line(&line);
-        assert!(!signals.iter().any(|s| matches!(s, ChatSignal::TurnFailed(_))));
+        assert!(!signals
+            .iter()
+            .any(|s| matches!(s, ChatSignal::TurnFailed(_))));
     }
 
     #[test]
@@ -235,8 +249,14 @@ mod tests {
     fn model_and_effort_flags_come_before_the_message_separator() {
         let args = build_args("hi", None, "/cfg.json", Some("opus"), Some("high"));
         let dash_dash = args.iter().position(|a| a == "--").expect("-- present");
-        let model_pos = args.iter().position(|a| a == "--model").expect("--model present");
-        let effort_pos = args.iter().position(|a| a == "--effort").expect("--effort present");
+        let model_pos = args
+            .iter()
+            .position(|a| a == "--model")
+            .expect("--model present");
+        let effort_pos = args
+            .iter()
+            .position(|a| a == "--effort")
+            .expect("--effort present");
         assert!(model_pos < dash_dash, "--model must precede --");
         assert!(effort_pos < dash_dash, "--effort must precede --");
         assert_eq!(args[model_pos + 1], "opus");

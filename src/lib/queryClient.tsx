@@ -9,6 +9,8 @@ import { qk } from "./queries";
 
 const WORKSPACE_RESOURCE_QUERY_ROOTS = new Set([
   "catalog",
+  "chatMessages",
+  "chatThreads",
   "history",
   "audit",
   "monitoring",

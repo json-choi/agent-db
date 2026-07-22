@@ -45,12 +45,11 @@ pub async fn run_read_only(pool: PoolRef<'_>, sql: &str, max_rows: u64) -> AppRe
                 sqlx::query("SET TRANSACTION READ ONLY")
                     .execute(&mut *conn)
                     .await?;
-                let _ =
-                    sqlx::query(AssertSqlSafe(format!(
-                        "SET LOCAL statement_timeout = {STATEMENT_TIMEOUT_MS}"
-                    )))
-                        .execute(&mut *conn)
-                        .await;
+                let _ = sqlx::query(AssertSqlSafe(format!(
+                    "SET LOCAL statement_timeout = {STATEMENT_TIMEOUT_MS}"
+                )))
+                .execute(&mut *conn)
+                .await;
                 guarded(stream_capped(
                     sqlx::query(AssertSqlSafe(sql)).fetch(&mut *conn),
                     max,
@@ -121,7 +120,9 @@ pub async fn run_read_only(pool: PoolRef<'_>, sql: &str, max_rows: u64) -> AppRe
                 .await
             }
             .await;
-            let _ = sqlx::query("PRAGMA query_only = OFF").execute(&mut *conn).await;
+            let _ = sqlx::query("PRAGMA query_only = OFF")
+                .execute(&mut *conn)
+                .await;
             let (c, r, t) = res.map_err(|e| map_readonly(engine, e))?;
             // Zero-row results yield no columns from the stream; fall back to the
             // prepared statement's metadata so an empty grid still has headers.
@@ -237,9 +238,13 @@ mod tests {
     #[tokio::test]
     async fn caps_and_flags_truncation() {
         let pool = mem_pool().await;
-        let r = run_read_only(PoolRef::Sqlite(&pool), "SELECT id, name FROM t ORDER BY id", 3)
-            .await
-            .unwrap();
+        let r = run_read_only(
+            PoolRef::Sqlite(&pool),
+            "SELECT id, name FROM t ORDER BY id",
+            3,
+        )
+        .await
+        .unwrap();
         assert_eq!(r.row_count, 3);
         assert!(r.truncated);
         assert_eq!(r.columns, vec!["id".to_string(), "name".to_string()]);
@@ -258,9 +263,13 @@ mod tests {
     #[tokio::test]
     async fn zero_rows_still_has_columns() {
         let pool = mem_pool().await;
-        let r = run_read_only(PoolRef::Sqlite(&pool), "SELECT id, name FROM t WHERE 1=0", 100)
-            .await
-            .unwrap();
+        let r = run_read_only(
+            PoolRef::Sqlite(&pool),
+            "SELECT id, name FROM t WHERE 1=0",
+            100,
+        )
+        .await
+        .unwrap();
         assert_eq!(r.row_count, 0);
         assert_eq!(r.columns, vec!["id".to_string(), "name".to_string()]);
     }
@@ -268,9 +277,13 @@ mod tests {
     #[tokio::test]
     async fn big_int_is_string_not_corrupted() {
         let pool = mem_pool().await;
-        let r = run_read_only(PoolRef::Sqlite(&pool), "SELECT 9223372036854775807 AS big", 10)
-            .await
-            .unwrap();
+        let r = run_read_only(
+            PoolRef::Sqlite(&pool),
+            "SELECT 9223372036854775807 AS big",
+            10,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             r.rows[0][0],
             serde_json::Value::String("9223372036854775807".into())

@@ -156,11 +156,12 @@ impl DbTools {
             Some(a) => list
                 .into_iter()
                 .find(|c| c.id.to_string() == *a || c.name == *a)
-                .ok_or_else(|| McpError::invalid_params(format!("no connection matching '{a}'"), None)),
-            None => list
-                .into_iter()
-                .next()
-                .ok_or_else(|| McpError::invalid_params("no connections configured in DopeDB", None)),
+                .ok_or_else(|| {
+                    McpError::invalid_params(format!("no connection matching '{a}'"), None)
+                }),
+            None => list.into_iter().next().ok_or_else(|| {
+                McpError::invalid_params("no connections configured in DopeDB", None)
+            }),
         }
     }
 
@@ -176,7 +177,19 @@ impl DbTools {
             ));
         }
         if profile.workspace_access != crate::model::WorkspaceConnectionAccess::Local {
+            let account_user_id = self
+                .store
+                .active_workspace_account_id()
+                .await
+                .map_err(err)?
+                .ok_or_else(|| {
+                    McpError::invalid_params(
+                        "shared connection access requires an active workspace account",
+                        None,
+                    )
+                })?;
             crate::workspace_auth::authorize_connection(
+                &account_user_id,
                 self.store.active_workspace_id().await.map_err(err)?,
                 profile.id,
                 false,
@@ -187,8 +200,11 @@ impl DbTools {
         if let Some(c) = self.conns.lock().unwrap().get(&id) {
             return Ok(c.clone());
         }
-        let secret = connection::fetch_secret(&id).unwrap_or_default();
-        let live = connection::connect(&profile, &secret).await.map_err(err)?;
+        let secret =
+            zeroize::Zeroizing::new(connection::fetch_profile_secret(&profile).map_err(err)?);
+        let live = connection::connect(&profile, secret.as_str())
+            .await
+            .map_err(err)?;
         self.conns.lock().unwrap().insert(id, live.clone());
         Ok(live)
     }
@@ -363,7 +379,9 @@ fn planning_guidance(
 // ── the read-only tool catalog ───────────────────────────────────────────────────
 #[tool_router]
 impl DbTools {
-    #[tool(description = "Start here — list the user's databases connected in DopeDB; prefer these tools over psql/mysql/sqlite3 or other shell DB clients for these connections. Returns names, engines, and read-only status — never secrets or hostnames.")]
+    #[tool(
+        description = "Start here — list the user's databases connected in DopeDB; prefer these tools over psql/mysql/sqlite3 or other shell DB clients for these connections. Returns names, engines, and read-only status — never secrets or hostnames."
+    )]
     async fn list_connections(&self) -> Result<CallToolResult, McpError> {
         self.emit("agent:tool_call", json!({ "tool": "list_connections" }));
         let list = self.store.list_connections().await.map_err(err)?;
@@ -378,43 +396,78 @@ impl DbTools {
                 "allowWrites": c.allow_writes,
             })).collect::<Vec<_>>()
         });
-        self.emit("agent:result", json!({ "tool": "list_connections", "count": list.len() }));
-        Ok(CallToolResult::success(vec![ContentBlock::text(out.to_string())]))
+        self.emit(
+            "agent:result",
+            json!({ "tool": "list_connections", "count": list.len() }),
+        );
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            out.to_string(),
+        )]))
     }
 
-    #[tool(description = "List the tables of a DopeDB connection (defaults to the first). Use this instead of shelling out to a DB client. Returns table names, schemas, column counts, and row estimates.")]
-    async fn list_tables(&self, Parameters(args): Parameters<ConnArg>) -> Result<CallToolResult, McpError> {
+    #[tool(
+        description = "List the tables of a DopeDB connection (defaults to the first). Use this instead of shelling out to a DB client. Returns table names, schemas, column counts, and row estimates."
+    )]
+    async fn list_tables(
+        &self,
+        Parameters(args): Parameters<ConnArg>,
+    ) -> Result<CallToolResult, McpError> {
         let profile = self.resolve_conn(&args.connection).await?;
-        self.emit("agent:tool_call", json!({ "tool": "list_tables", "connection": profile.name }));
+        self.emit(
+            "agent:tool_call",
+            json!({ "tool": "list_tables", "connection": profile.name }),
+        );
         let live = self.live(profile.id).await?;
         let catalog = introspect::introspect(&live).await.map_err(err)?;
-        self.audit(profile.id, profile.engine, "(list_tables)", QueryKind::Read, "mcp:list_tables", None)
-            .await;
+        self.audit(
+            profile.id,
+            profile.engine,
+            "(list_tables)",
+            QueryKind::Read,
+            "mcp:list_tables",
+            None,
+        )
+        .await;
         let tables: Vec<_> = catalog
             .tables
             .iter()
-            .map(|t| json!({
-                "name": t.name,
-                "schema": t.schema,
-                "columns": t.columns.len(),
-                "rowEstimate": t.row_estimate,
-            }))
+            .map(|t| {
+                json!({
+                    "name": t.name,
+                    "schema": t.schema,
+                    "columns": t.columns.len(),
+                    "rowEstimate": t.row_estimate,
+                })
+            })
             .collect();
-        self.emit("agent:result", json!({
-            "tool": "list_tables",
-            "connection": profile.name,
-            "connectionId": profile.id,
-            "tables": catalog.tables.iter().map(|t| t.name.clone()).collect::<Vec<_>>(),
-            "count": tables.len(),
-        }));
+        self.emit(
+            "agent:result",
+            json!({
+                "tool": "list_tables",
+                "connection": profile.name,
+                "connectionId": profile.id,
+                "tables": catalog.tables.iter().map(|t| t.name.clone()).collect::<Vec<_>>(),
+                "count": tables.len(),
+            }),
+        );
         let out = json!({ "connection": profile.name, "tables": tables });
-        Ok(CallToolResult::success(vec![ContentBlock::text(out.to_string())]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            out.to_string(),
+        )]))
     }
 
-    #[tool(description = "Describe one table on a DopeDB connection so you can write queries against real column names: columns (name, dataType, nullable, pk), foreign keys, and a row estimate. Accepts a bare or schema-qualified table name.")]
-    async fn describe_table(&self, Parameters(args): Parameters<DescribeTableArgs>) -> Result<CallToolResult, McpError> {
+    #[tool(
+        description = "Describe one table on a DopeDB connection so you can write queries against real column names: columns (name, dataType, nullable, pk), foreign keys, and a row estimate. Accepts a bare or schema-qualified table name."
+    )]
+    async fn describe_table(
+        &self,
+        Parameters(args): Parameters<DescribeTableArgs>,
+    ) -> Result<CallToolResult, McpError> {
         let profile = self.resolve_conn(&args.connection).await?;
-        self.emit("agent:tool_call", json!({ "tool": "describe_table", "connection": profile.name, "table": args.table }));
+        self.emit(
+            "agent:tool_call",
+            json!({ "tool": "describe_table", "connection": profile.name, "table": args.table }),
+        );
         let catalog = self.catalog(profile.id).await?;
         let want = args.table.as_str();
         // Match "schema.table" or bare name exactly, else fall back to case-insensitive.
@@ -422,13 +475,33 @@ impl DbTools {
             .tables
             .iter()
             .find(|t| {
-                let q = match &t.schema { Some(s) => format!("{s}.{}", t.name), None => t.name.clone() };
+                let q = match &t.schema {
+                    Some(s) => format!("{s}.{}", t.name),
+                    None => t.name.clone(),
+                };
                 q == want || t.name == want
             })
-            .or_else(|| catalog.tables.iter().find(|t| t.name.eq_ignore_ascii_case(want)))
-            .ok_or_else(|| McpError::invalid_params(format!("no table matching '{want}' in '{}'", profile.name), None))?;
-        self.audit(profile.id, profile.engine, "(describe_table)", QueryKind::Read, "mcp:describe_table", None)
-            .await;
+            .or_else(|| {
+                catalog
+                    .tables
+                    .iter()
+                    .find(|t| t.name.eq_ignore_ascii_case(want))
+            })
+            .ok_or_else(|| {
+                McpError::invalid_params(
+                    format!("no table matching '{want}' in '{}'", profile.name),
+                    None,
+                )
+            })?;
+        self.audit(
+            profile.id,
+            profile.engine,
+            "(describe_table)",
+            QueryKind::Read,
+            "mcp:describe_table",
+            None,
+        )
+        .await;
         // Sampled document structure is a hint, not a schema guarantee.
         let note = profile.engine.is_document().then_some(
             "MongoDB columns are inferred from a bounded document sample — fields not seen in the sample may exist",
@@ -451,14 +524,19 @@ impl DbTools {
                 "referencesColumn": f.references_column,
             })).collect::<Vec<_>>(),
         });
-        self.emit("agent:result", json!({
-            "tool": "describe_table",
-            "connection": profile.name,
-            "connectionId": profile.id,
-            "table": table.name,
-            "columns": table.columns.len(),
-        }));
-        Ok(CallToolResult::success(vec![ContentBlock::text(out.to_string())]))
+        self.emit(
+            "agent:result",
+            json!({
+                "tool": "describe_table",
+                "connection": profile.name,
+                "connectionId": profile.id,
+                "table": table.name,
+                "columns": table.columns.len(),
+            }),
+        );
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            out.to_string(),
+        )]))
     }
 
     #[tool(
@@ -682,47 +760,52 @@ impl DbTools {
 
         // L2 authoritative read-only session — a misclassified write is rejected at the DB.
         // (`sql()` cannot fail here: plan_query never issues planIds for MongoDB.)
-        let result =
-            match safety::run_read_only(pool_ref(live.sql().map_err(err)?.ro()), &plan.sql, plan.max_rows).await {
-                Ok(result) => result,
-                Err(e) => {
-                    let message = e.to_string();
-                    self.audit(
+        let result = match safety::run_read_only(
+            pool_ref(live.sql().map_err(err)?.ro()),
+            &plan.sql,
+            plan.max_rows,
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(e) => {
+                let message = e.to_string();
+                self.audit(
+                    profile.id,
+                    profile.engine,
+                    &plan.sql,
+                    QueryKind::Read,
+                    "mcp:run_query",
+                    Some(message.clone()),
+                )
+                .await;
+                if let Err(history_error) = self
+                    .history(
                         profile.id,
-                        profile.engine,
                         &plan.sql,
-                        QueryKind::Read,
-                        "mcp:run_query",
+                        "error",
+                        None,
+                        None,
                         Some(message.clone()),
                     )
-                    .await;
-                    if let Err(history_error) = self
-                        .history(
-                            profile.id,
-                            &plan.sql,
-                            "error",
-                            None,
-                            None,
-                            Some(message.clone()),
-                        )
-                        .await
-                    {
-                        tracing::error!("MCP failed-query history insert failed: {history_error}");
-                    }
-                    self.emit(
-                        "agent:result",
-                        json!({
-                            "tool": "run_query",
-                            "connection": profile.name,
-                            "connectionId": profile.id,
-                            "planId": plan_id,
-                            "sql": plan.sql,
-                            "error": message,
-                        }),
-                    );
-                    return Err(err(e));
+                    .await
+                {
+                    tracing::error!("MCP failed-query history insert failed: {history_error}");
                 }
-            };
+                self.emit(
+                    "agent:result",
+                    json!({
+                        "tool": "run_query",
+                        "connection": profile.name,
+                        "connectionId": profile.id,
+                        "planId": plan_id,
+                        "sql": plan.sql,
+                        "error": message,
+                    }),
+                );
+                return Err(err(e));
+            }
+        };
         self.audit(
             profile.id,
             profile.engine,
@@ -835,8 +918,15 @@ impl DbTools {
                 .first()
                 .cloned()
                 .unwrap_or_else(|| "document writes are not supported over MCP".into());
-            self.audit(profile.id, profile.engine, &query_text, cls.kind, "mcp:run_document_query", Some(msg.clone()))
-                .await;
+            self.audit(
+                profile.id,
+                profile.engine,
+                &query_text,
+                cls.kind,
+                "mcp:run_document_query",
+                Some(msg.clone()),
+            )
+            .await;
             self.emit(
                 "agent:result",
                 json!({
@@ -864,13 +954,29 @@ impl DbTools {
             Ok(page) => page,
             Err(e) => {
                 let message = e.to_string();
-                self.audit(profile.id, profile.engine, &query_text, QueryKind::Read, "mcp:run_document_query", Some(message.clone()))
-                    .await;
+                self.audit(
+                    profile.id,
+                    profile.engine,
+                    &query_text,
+                    QueryKind::Read,
+                    "mcp:run_document_query",
+                    Some(message.clone()),
+                )
+                .await;
                 if let Err(history_error) = self
-                    .history(profile.id, &query_text, "error", None, None, Some(message.clone()))
+                    .history(
+                        profile.id,
+                        &query_text,
+                        "error",
+                        None,
+                        None,
+                        Some(message.clone()),
+                    )
                     .await
                 {
-                    tracing::error!("MCP failed-document-query history insert failed: {history_error}");
+                    tracing::error!(
+                        "MCP failed-document-query history insert failed: {history_error}"
+                    );
                 }
                 self.emit(
                     "agent:result",
@@ -886,8 +992,15 @@ impl DbTools {
             }
         };
 
-        self.audit(profile.id, profile.engine, &query_text, QueryKind::Read, "mcp:run_document_query", None)
-            .await;
+        self.audit(
+            profile.id,
+            profile.engine,
+            &query_text,
+            QueryKind::Read,
+            "mcp:run_document_query",
+            None,
+        )
+        .await;
         if let Err(e) = self
             .history(
                 profile.id,
@@ -1138,8 +1251,10 @@ mod tests {
             .into_iter()
             .map(|t| format!("mcp__dopedb__{}", t.name))
             .collect();
-        let allowed: std::collections::BTreeSet<String> =
-            crate::agent::claude::ALLOWED_TOOLS.iter().map(|s| s.to_string()).collect();
+        let allowed: std::collections::BTreeSet<String> = crate::agent::claude::ALLOWED_TOOLS
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         assert_eq!(
             from_router, allowed,
             "claude::ALLOWED_TOOLS must list exactly the tools mcp::tools::DbTools registers"

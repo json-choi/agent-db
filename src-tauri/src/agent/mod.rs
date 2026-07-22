@@ -172,7 +172,11 @@ struct ChatDonePayload<'a> {
 fn emit_event(app: &AppHandle, turn_id: Uuid, thread_id: Uuid, text_chunk: &str) {
     if let Err(e) = app.emit(
         "agent:chat_event",
-        ChatEventPayload { turn_id, thread_id, text_chunk },
+        ChatEventPayload {
+            turn_id,
+            thread_id,
+            text_chunk,
+        },
     ) {
         tracing::warn!("failed to emit agent:chat_event: {e}");
     }
@@ -181,7 +185,12 @@ fn emit_event(app: &AppHandle, turn_id: Uuid, thread_id: Uuid, text_chunk: &str)
 fn emit_done(app: &AppHandle, turn_id: Uuid, thread_id: Uuid, ok: bool, error: Option<&str>) {
     if let Err(e) = app.emit(
         "agent:chat_done",
-        ChatDonePayload { turn_id, thread_id, ok, error },
+        ChatDonePayload {
+            turn_id,
+            thread_id,
+            ok,
+            error,
+        },
     ) {
         tracing::warn!("failed to emit agent:chat_done: {e}");
     }
@@ -204,7 +213,10 @@ fn thread_title_from(message: &str) -> String {
 /// Tauri process's real cwd (a macOS app bundle's is `Contents/MacOS`) — if a tool
 /// restriction flag ever has a hole, there's nothing nearby to find.
 fn agent_workdir() -> std::path::PathBuf {
-    let dir = dirs::data_dir().unwrap_or_default().join("dopedb").join("agent-workdir");
+    let dir = dirs::data_dir()
+        .unwrap_or_default()
+        .join("dopedb")
+        .join("agent-workdir");
     let _ = std::fs::create_dir_all(&dir);
     dir
 }
@@ -269,7 +281,9 @@ fn build_context_block(profile: &ConnectionProfile, catalog_json: Option<&str>) 
                         None => t.name.clone(),
                     };
                     match t.row_estimate {
-                        Some(rows) => format!("{qualified}({} cols, ~{rows} rows)", t.columns.len()),
+                        Some(rows) => {
+                            format!("{qualified}({} cols, ~{rows} rows)", t.columns.len())
+                        }
                         None => format!("{qualified}({} cols, rows unknown)", t.columns.len()),
                     }
                 })
@@ -279,7 +293,9 @@ fn build_context_block(profile: &ConnectionProfile, catalog_json: Option<&str>) 
             }
             lines.join("\n")
         })
-        .unwrap_or_else(|| "No schema cache available — call list_tables to look it up.".to_string());
+        .unwrap_or_else(|| {
+            "No schema cache available — call list_tables to look it up.".to_string()
+        });
 
     let env_label = profile.env.as_deref().unwrap_or("unlabeled");
     format!(
@@ -334,7 +350,9 @@ pub async fn send_turn(
     // Persisted before the CLI ever spawns, so the message survives even a turn that
     // fails to start (bad binary, etc.). Kept as the user typed it — any context block
     // below is added only to the copy handed to the CLI.
-    store.insert_chat_message(thread_id, "user", &message, None).await?;
+    store
+        .insert_chat_message(thread_id, "user", &message, None)
+        .await?;
 
     // A connection-scoped thread's very first turn (no CLI session to resume yet) gets
     // a context block (connection profile + compact schema summary) prepended to the
@@ -344,7 +362,10 @@ pub async fn send_turn(
         (Some(conn_id), true) => match store.get_connection(conn_id).await {
             Ok(profile) => {
                 let catalog_json = store.get_schema_cache(conn_id).await.unwrap_or(None);
-                format!("{}\n\n{message}", build_context_block(&profile, catalog_json.as_deref()))
+                format!(
+                    "{}\n\n{message}",
+                    build_context_block(&profile, catalog_json.as_deref())
+                )
             }
             Err(e) => {
                 tracing::warn!(
@@ -357,12 +378,20 @@ pub async fn send_turn(
     };
 
     let cmd_result = match provider {
-        AgentProvider::Claude => {
-            claude::command(&cli_message, resume.as_deref(), &mcp_token, model.as_deref(), effort.as_deref())
-        }
-        AgentProvider::Codex => {
-            codex::command(&cli_message, resume.as_deref(), &mcp_token, model.as_deref(), effort.as_deref())
-        }
+        AgentProvider::Claude => claude::command(
+            &cli_message,
+            resume.as_deref(),
+            &mcp_token,
+            model.as_deref(),
+            effort.as_deref(),
+        ),
+        AgentProvider::Codex => codex::command(
+            &cli_message,
+            resume.as_deref(),
+            &mcp_token,
+            model.as_deref(),
+            effort.as_deref(),
+        ),
     };
 
     // Captured outside `run` so cancel/timeout (which drops `run` mid-flight) can't
@@ -416,8 +445,12 @@ pub async fn send_turn(
                                 emit_event(&app, turn_id, thread_id, &chunk);
                                 progress.lock().unwrap().text.push_str(&chunk);
                             }
-                            ChatSignal::SessionId(id) => progress.lock().unwrap().session_id = Some(id),
-                            ChatSignal::TurnFailed(msg) => progress.lock().unwrap().error = Some(msg),
+                            ChatSignal::SessionId(id) => {
+                                progress.lock().unwrap().session_id = Some(id)
+                            }
+                            ChatSignal::TurnFailed(msg) => {
+                                progress.lock().unwrap().error = Some(msg)
+                            }
                         }
                     }
                 }
@@ -456,7 +489,11 @@ pub async fn send_turn(
     // (possibly still-`None`) session id must round-trip so a later retry can resume.
     let (session_id, ok, error) = match &outcome {
         Ok(ok_flag) => (progress_session_id, *ok_flag, progress_error),
-        Err(e) => (progress_session_id, false, progress_error.or_else(|| Some(e.to_string()))),
+        Err(e) => (
+            progress_session_id,
+            false,
+            progress_error.or_else(|| Some(e.to_string())),
+        ),
     };
 
     if let Err(e) = store
@@ -466,7 +503,13 @@ pub async fn send_turn(
         tracing::error!("chat: failed to persist assistant message for thread {thread_id}: {e}");
     }
     if let Err(e) = store
-        .finish_chat_turn(thread_id, session_id, model, effort, &thread_title_from(&message))
+        .finish_chat_turn(
+            thread_id,
+            session_id,
+            model,
+            effort,
+            &thread_title_from(&message),
+        )
         .await
     {
         tracing::error!("chat: failed to update thread {thread_id} after turn: {e}");
@@ -475,9 +518,9 @@ pub async fn send_turn(
     emit_done(&app, turn_id, thread_id, ok, error.as_deref());
     match outcome {
         Ok(true) => Ok(()),
-        Ok(false) => Err(AppError::Agent(
-            error.unwrap_or_else(|| format!("{provider:?} exited with a non-zero status")),
-        )),
+        Ok(false) => Err(AppError::Agent(error.unwrap_or_else(|| {
+            format!("{provider:?} exited with a non-zero status")
+        }))),
         Err(e) => Err(e),
     }
 }
@@ -489,15 +532,20 @@ const CLAUDE_EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 // ponytail: hardcoded per the confirmed model-catalog contract — swap for a real
 // catalog command (parsed like `codex_models` below) the moment claude-cli grows one.
 fn claude_models() -> Vec<AgentModel> {
-    [("fable", "Fable"), ("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku")]
-        .into_iter()
-        .map(|(id, name)| AgentModel {
-            id: id.into(),
-            name: name.into(),
-            efforts: CLAUDE_EFFORTS.iter().map(|s| s.to_string()).collect(),
-            default_effort: None,
-        })
-        .collect()
+    [
+        ("fable", "Fable"),
+        ("opus", "Opus"),
+        ("sonnet", "Sonnet"),
+        ("haiku", "Haiku"),
+    ]
+    .into_iter()
+    .map(|(id, name)| AgentModel {
+        id: id.into(),
+        name: name.into(),
+        efforts: CLAUDE_EFFORTS.iter().map(|s| s.to_string()).collect(),
+        default_effort: None,
+    })
+    .collect()
 }
 
 /// Codex's own model catalog via `codex debug models` — a local, offline render (no
@@ -506,14 +554,17 @@ fn claude_models() -> Vec<AgentModel> {
 /// `codex-auto-review` entry) are Codex-internal and hidden from `codex --help` too.
 /// Sorted by ascending `priority` (lower = more prominent in Codex's own UI).
 fn codex_models() -> AppResult<Vec<AgentModel>> {
-    let bin = connect::which("codex").ok_or_else(|| AppError::Agent("Codex (`codex`) not found".into()))?;
+    let bin = connect::which("codex")
+        .ok_or_else(|| AppError::Agent("Codex (`codex`) not found".into()))?;
     let out = connect::run(&bin, &["debug", "models"]).map_err(AppError::Agent)?;
     let value: serde_json::Value = serde_json::from_str(&out)
         .map_err(|e| AppError::Agent(format!("codex debug models: unparseable JSON ({e})")))?;
     let models = value
         .get("models")
         .and_then(|m| m.as_array())
-        .ok_or_else(|| AppError::Agent("codex debug models: response has no 'models' array".into()))?;
+        .ok_or_else(|| {
+            AppError::Agent("codex debug models: response has no 'models' array".into())
+        })?;
 
     let mut listed: Vec<(i64, AgentModel)> = models
         .iter()
@@ -525,7 +576,10 @@ fn codex_models() -> AppResult<Vec<AgentModel>> {
                 .and_then(|d| d.as_str())
                 .unwrap_or(&slug)
                 .to_string();
-            let priority = m.get("priority").and_then(|p| p.as_i64()).unwrap_or(i64::MAX);
+            let priority = m
+                .get("priority")
+                .and_then(|p| p.as_i64())
+                .unwrap_or(i64::MAX);
             let efforts = m
                 .get("supported_reasoning_levels")
                 .and_then(|l| l.as_array())
@@ -536,9 +590,19 @@ fn codex_models() -> AppResult<Vec<AgentModel>> {
                         .collect()
                 })
                 .unwrap_or_default();
-            let default_effort =
-                m.get("default_reasoning_level").and_then(|d| d.as_str()).map(String::from);
-            Some((priority, AgentModel { id: slug, name, efforts, default_effort }))
+            let default_effort = m
+                .get("default_reasoning_level")
+                .and_then(|d| d.as_str())
+                .map(String::from);
+            Some((
+                priority,
+                AgentModel {
+                    id: slug,
+                    name,
+                    efforts,
+                    default_effort,
+                },
+            ))
         })
         .collect();
     listed.sort_by_key(|(priority, _)| *priority);
@@ -591,16 +655,19 @@ fn probe_timed_out(id: AgentProvider, name: &str) -> CliInfo {
 /// blocking task itself isn't cancelled on timeout (there's no cooperative way to stop
 /// a `Command::output()` already in flight) — it's just no longer awaited.
 pub async fn detect_clis_async() -> Vec<CliInfo> {
-    tokio::time::timeout(AGENT_PROBE_TIMEOUT, tokio::task::spawn_blocking(detect_clis))
-        .await
-        .ok()
-        .and_then(Result::ok)
-        .unwrap_or_else(|| {
-            vec![
-                probe_timed_out(AgentProvider::Claude, "Claude Code"),
-                probe_timed_out(AgentProvider::Codex, "Codex CLI"),
-            ]
-        })
+    tokio::time::timeout(
+        AGENT_PROBE_TIMEOUT,
+        tokio::task::spawn_blocking(detect_clis),
+    )
+    .await
+    .ok()
+    .and_then(Result::ok)
+    .unwrap_or_else(|| {
+        vec![
+            probe_timed_out(AgentProvider::Claude, "Claude Code"),
+            probe_timed_out(AgentProvider::Codex, "Codex CLI"),
+        ]
+    })
 }
 
 /// Async, timeout-bounded wrapper around [`list_models`] — see `AGENT_PROBE_TIMEOUT`.
@@ -612,8 +679,12 @@ pub async fn list_models_async(provider: AgentProvider) -> AppResult<Vec<AgentMo
     .await
     {
         Ok(Ok(result)) => result,
-        Ok(Err(_)) => Err(AppError::Agent(format!("{provider:?} model list probe panicked"))),
-        Err(_) => Err(AppError::Agent(format!("{provider:?} model list timed out"))),
+        Ok(Err(_)) => Err(AppError::Agent(format!(
+            "{provider:?} model list probe panicked"
+        ))),
+        Err(_) => Err(AppError::Agent(format!(
+            "{provider:?} model list timed out"
+        ))),
     }
 }
 
@@ -621,16 +692,23 @@ fn detect_claude() -> CliInfo {
     let bin = connect::which("claude");
     // A bare `which` hit isn't enough — on Windows a Claude Desktop GUI install is
     // known to shadow the `claude` CLI name on PATH, so confirm it's actually the CLI.
-    let installed = bin
-        .as_ref()
-        .is_some_and(|b| connect::run(b, &["--version"]).is_ok_and(|out| out.contains("Claude Code")));
+    let installed = bin.as_ref().is_some_and(|b| {
+        connect::run(b, &["--version"]).is_ok_and(|out| out.contains("Claude Code"))
+    });
 
     let (authenticated, auth_method) = if installed {
         bin.as_ref()
             .and_then(|b| connect::run(b, &["auth", "status"]).ok())
             .and_then(|out| serde_json::from_str::<serde_json::Value>(&out).ok())
             .filter(|v| v.get("loggedIn").and_then(|b| b.as_bool()).unwrap_or(false))
-            .map(|v| (true, v.get("authMethod").and_then(|m| m.as_str()).map(String::from)))
+            .map(|v| {
+                (
+                    true,
+                    v.get("authMethod")
+                        .and_then(|m| m.as_str())
+                        .map(String::from),
+                )
+            })
             .unwrap_or((false, None))
     } else {
         (false, None)
@@ -648,11 +726,13 @@ fn detect_claude() -> CliInfo {
 
 fn detect_codex() -> CliInfo {
     let bin = connect::which("codex");
-    let installed = bin
-        .as_ref()
-        .is_some_and(|b| connect::run(b, &["--version"]).is_ok_and(|out| out.contains("codex-cli")));
-    let authenticated =
-        installed && bin.as_ref().is_some_and(|b| connect::run(b, &["login", "status"]).is_ok());
+    let installed = bin.as_ref().is_some_and(|b| {
+        connect::run(b, &["--version"]).is_ok_and(|out| out.contains("codex-cli"))
+    });
+    let authenticated = installed
+        && bin
+            .as_ref()
+            .is_some_and(|b| connect::run(b, &["login", "status"]).is_ok());
 
     CliInfo {
         id: AgentProvider::Codex,
@@ -694,7 +774,10 @@ mod tests {
         let start = tokio::time::Instant::now();
         slot.wait_idle(Duration::from_millis(50)).await;
         assert!(start.elapsed() >= Duration::from_millis(50));
-        assert!(slot.active_turn().is_some(), "bounded wait must not block forever");
+        assert!(
+            slot.active_turn().is_some(),
+            "bounded wait must not block forever"
+        );
     }
 
     // ── build_context_block ──────────────────────────────────────────────────────
@@ -751,7 +834,10 @@ mod tests {
         assert!(block.contains("Environment: prod"));
         assert!(block.starts_with("<dopedb-context>"));
         assert!(block.trim_end().ends_with("</dopedb-context>"));
-        assert!(!block.contains("db.internal.example"), "host must never reach the model");
+        assert!(
+            !block.contains("db.internal.example"),
+            "host must never reach the model"
+        );
         assert!(!block.contains("5432"), "port must never reach the model");
     }
 
@@ -763,7 +849,9 @@ mod tests {
 
     #[test]
     fn cache_present_lists_tables_compactly() {
-        let catalog = Catalog { tables: vec![table(Some("public"), "users", 4, Some(120))] };
+        let catalog = Catalog {
+            tables: vec![table(Some("public"), "users", 4, Some(120))],
+        };
         let json = serde_json::to_string(&catalog).unwrap();
         let block = build_context_block(&profile(None), Some(&json));
         assert!(block.contains("public.users(4 cols, ~120 rows)"));
@@ -771,7 +859,9 @@ mod tests {
 
     #[test]
     fn cache_present_without_a_row_estimate_says_so() {
-        let catalog = Catalog { tables: vec![table(None, "events", 2, None)] };
+        let catalog = Catalog {
+            tables: vec![table(None, "events", 2, None)],
+        };
         let json = serde_json::to_string(&catalog).unwrap();
         let block = build_context_block(&profile(None), Some(&json));
         assert!(block.contains("events(2 cols, rows unknown)"));
@@ -779,13 +869,20 @@ mod tests {
 
     #[test]
     fn more_than_max_tables_are_truncated_with_a_count() {
-        let tables: Vec<Table> =
-            (0..(CONTEXT_MAX_TABLES + 10)).map(|i| table(None, &format!("t{i}"), 1, Some(1))).collect();
+        let tables: Vec<Table> = (0..(CONTEXT_MAX_TABLES + 10))
+            .map(|i| table(None, &format!("t{i}"), 1, Some(1)))
+            .collect();
         let catalog = Catalog { tables };
         let json = serde_json::to_string(&catalog).unwrap();
         let block = build_context_block(&profile(None), Some(&json));
         assert!(block.contains("...and 10 more"));
-        assert!(block.contains(&format!("t{}", CONTEXT_MAX_TABLES - 1)), "last kept table must render");
-        assert!(!block.contains(&format!("t{}(", CONTEXT_MAX_TABLES)), "table beyond the cut must not render");
+        assert!(
+            block.contains(&format!("t{}", CONTEXT_MAX_TABLES - 1)),
+            "last kept table must render"
+        );
+        assert!(
+            !block.contains(&format!("t{}(", CONTEXT_MAX_TABLES)),
+            "table beyond the cut must not render"
+        );
     }
 }

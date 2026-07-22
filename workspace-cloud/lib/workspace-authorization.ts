@@ -7,9 +7,9 @@ import { db } from "./db";
 import { auth } from "./auth";
 import { member } from "./schema";
 
-export const workspaceRoleNames = ["viewer", "analyst", "editor", "admin", "owner"] as const;
+const workspaceRoleNames = ["viewer", "analyst", "editor", "admin", "owner"] as const;
 export type WorkspaceRoleName = (typeof workspaceRoleNames)[number];
-export type WorkspaceCapability = "view" | "read" | "write" | "manage" | "delete";
+type WorkspaceCapability = "view" | "read" | "write" | "manage" | "delete";
 
 const roleRank: Record<WorkspaceRoleName, number> = {
   viewer: 0,
@@ -27,11 +27,11 @@ const requiredRank: Record<WorkspaceCapability, number> = {
   delete: roleRank.owner,
 };
 
-export function isWorkspaceRole(value: string): value is WorkspaceRoleName {
+function isWorkspaceRole(value: string): value is WorkspaceRoleName {
   return workspaceRoleNames.includes(value as WorkspaceRoleName);
 }
 
-export function accessModeForRole(role: WorkspaceRoleName) {
+function accessModeForRole(role: WorkspaceRoleName) {
   if (roleRank[role] >= roleRank.admin) return "manage" as const;
   if (roleRank[role] >= roleRank.editor) return "write" as const;
   if (roleRank[role] >= roleRank.analyst) return "read" as const;

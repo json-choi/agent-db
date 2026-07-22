@@ -16,6 +16,69 @@ pub use pool::{DbPool, LiveConnection};
 pub use pool::DbPool as Pool;
 
 use crate::error::{AppError, AppResult};
+use crate::model::{ConnectionProfile, WorkspaceConnectionAccess};
+use uuid::Uuid;
+
+/// Resolve the credential item referenced by a profile. Shared templates must carry
+/// an account-specific binding; they never fall back to the connection UUID where a
+/// different signed-in account's legacy credential could exist.
+pub fn fetch_profile_secret(profile: &ConnectionProfile) -> AppResult<String> {
+    let secret_id = match profile.secret_ref.as_deref() {
+        Some(secret_ref) => Uuid::parse_str(secret_ref)
+            .map_err(|_| AppError::Config("connection secret reference is invalid".into()))?,
+        // A local profile without a reference intentionally uses socket/trust/no
+        // password authentication. A referenced-but-missing item still fails.
+        None if profile.workspace_access == WorkspaceConnectionAccess::Local => {
+            return Ok(String::new())
+        }
+        None => {
+            return Err(AppError::NotFound(format!(
+                "no credential binding for shared connection {}",
+                profile.id
+            )))
+        }
+    };
+    fetch_secret(&secret_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn profile(access: WorkspaceConnectionAccess) -> ConnectionProfile {
+        ConnectionProfile {
+            id: Uuid::new_v4(),
+            name: "test".into(),
+            engine: crate::model::Engine::Postgres,
+            provider: crate::model::Provider::Generic,
+            driver_id: None,
+            host: "localhost".into(),
+            port: 5432,
+            database: "postgres".into(),
+            username: "postgres".into(),
+            sslmode: "prefer".into(),
+            extra_params: Default::default(),
+            readonly_default: true,
+            allow_writes: false,
+            secret_ref: None,
+            env: None,
+            schema_group: None,
+            workspace_access: access,
+        }
+    }
+
+    #[test]
+    fn only_unreferenced_local_profiles_may_use_an_empty_secret() {
+        assert_eq!(
+            fetch_profile_secret(&profile(WorkspaceConnectionAccess::Local)).unwrap(),
+            ""
+        );
+        assert!(matches!(
+            fetch_profile_secret(&profile(WorkspaceConnectionAccess::Read)),
+            Err(AppError::NotFound(_))
+        ));
+    }
+}
 
 /// One open connection of either family: the sqlx SQL stack or the MongoDB
 /// document adapter. Callers pull this out of the shared connection map and

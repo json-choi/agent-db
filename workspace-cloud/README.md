@@ -8,7 +8,9 @@ the marketing `site/` deployment remains independent.
 
 Copy `.env.example` to the ignored `workspace-cloud/.env.local` and provide the Neon
 pooler/unpooled URLs, Google OAuth web client credentials, a Better Auth secret, and the
-exact Better Auth URL. Configure this Google redirect URI:
+exact Better Auth URL. To deliver invitation email, also set `RESEND_API_KEY` and a
+verified `WORKSPACE_INVITATION_FROM` sender; without them, the dashboard keeps the
+email-bound copy-link fallback. Configure this Google redirect URI:
 
 ```text
 http://localhost:3000/api/auth/callback/google
@@ -23,19 +25,28 @@ them through the unpooled URL with `pnpm workspace:migrate` from the repository 
 - Better Auth owns Google login, sessions, organizations, invitations, rate limits, and
   RFC 8628 device authorization; the app does not maintain a parallel auth system.
 - Database hooks clear Google access, refresh, and ID tokens before account persistence.
+- Better Auth Multi Session keeps at most ten browser identities available without
+  merging their users or organization memberships. The active identity is explicit.
 - Desktop sign-in uses a ten-minute, single-use device code and a Better Auth Bearer
-  session. The desktop must store that session in the operating-system credential store.
+  session. Sessions expire after 30 days with a one-day refresh age, and the desktop
+  stores each account in a separate operating-system credential item.
 - All application queries use Drizzle ORM; all schema changes use committed Drizzle Kit
   migrations.
 - Target-database passwords and provider API credentials never enter this service.
 - Shared connection rows contain only endpoint metadata and safety defaults. Usernames,
   passwords, tokens, certificates, connection URLs, SQLite paths, advanced parameters,
   and desktop `secret_ref` values are rejected or absent from the hosted schema.
-- Admin/Owner can create Better Auth invitations and assign Analyst (read-only), Editor
-  (read/write through local safety gates), or Admin roles. Until an email provider is
-  configured, the settings page exposes a copyable, email-bound invitation link.
+- Endpoint metadata currently relies on HTTPS in transit and the managed database's
+  storage controls. The roadmap's application-level per-workspace envelope encryption is
+  not yet implemented, so this release must not be described as end-to-end encrypted.
+- Admin/Owner can create, resend, and cancel Better Auth invitations; remove members;
+  and assign Viewer (metadata only), Analyst (read-only), Editor (read/write through
+  local safety gates), or Admin roles. Resend delivers email when configured, while the
+  settings page always exposes a copyable, email-bound invitation link.
 - Shared database execution uses a fresh server authorization check. Cached desktop role
   data is for presentation and fail-closed prechecks, not the final permission decision.
+- Identity, membership, invitation, and connection API responses are private `no-store`
+  payloads and are covered by restrictive browser security headers.
 
 ## Security references
 

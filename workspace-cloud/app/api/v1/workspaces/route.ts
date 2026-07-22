@@ -1,12 +1,32 @@
+import { and, eq, inArray } from "drizzle-orm";
 import { auth } from "../../../../lib/auth";
+import { db } from "../../../../lib/db";
 import { env } from "../../../../lib/env";
-import { jsonError, mutationAllowed } from "../../../../lib/http";
+import { jsonError, mutationAllowed, privateJson } from "../../../../lib/http";
+import { member } from "../../../../lib/schema";
 
 export async function GET(request: Request) {
   const session = await auth.api.getSession({ headers: request.headers });
   if (!session) return jsonError("Unauthorized", 401);
   const workspaces = await auth.api.listOrganizations({ headers: request.headers });
-  return Response.json({ workspaces });
+  const roles = workspaces.length > 0
+    ? await db.select({ organizationId: member.organizationId, role: member.role })
+        .from(member)
+        .where(and(
+          eq(member.userId, session.user.id),
+          inArray(member.organizationId, workspaces.map((workspace) => workspace.id)),
+        ))
+    : [];
+  const roleByWorkspace = new Map(roles.map((membership) => [
+    membership.organizationId,
+    membership.role,
+  ]));
+  return privateJson({
+    workspaces: workspaces.map((workspace) => ({
+      ...workspace,
+      role: roleByWorkspace.get(workspace.id) ?? "viewer",
+    })),
+  });
 }
 
 export async function POST(request: Request) {
@@ -27,5 +47,5 @@ export async function POST(request: Request) {
     headers: request.headers,
     body: { name, slug },
   });
-  return Response.json({ workspace }, { status: 201 });
+  return privateJson({ workspace }, { status: 201 });
 }

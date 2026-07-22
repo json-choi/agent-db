@@ -4,9 +4,10 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "@better-auth/drizzle-adapter";
-import { bearer, deviceAuthorization, organization } from "better-auth/plugins";
+import { bearer, deviceAuthorization, multiSession, organization } from "better-auth/plugins";
 import { db } from "./db";
 import { env } from "./env";
+import { sendWorkspaceInvitation } from "./invitation-email";
 import { authSchema, workspaceAuditEvent, workspaceProfile } from "./schema";
 import { ac, workspaceRoles } from "./access";
 
@@ -63,6 +64,9 @@ export const auth = betterAuth({
     },
   },
   plugins: [
+    // Keep several browser identities available without merging their organization
+    // boundaries. The active session remains explicit and can be switched atomically.
+    multiSession({ maximumSessions: 10 }),
     // RFC 8628 returns the Better Auth session token directly; the desktop stores it
     // in the OS credential store and presents it only over HTTPS as a Bearer token.
     bearer(),
@@ -78,7 +82,11 @@ export const auth = betterAuth({
       creatorRole: "owner",
       membershipLimit: 100,
       invitationExpiresIn: 60 * 60 * 48,
+      cancelPendingInvitationsOnReInvite: true,
       requireEmailVerificationOnInvitation: true,
+      sendInvitationEmail: async (data) => {
+        await sendWorkspaceInvitation(data, env.appOrigin());
+      },
       organizationHooks: {
         afterCreateOrganization: async ({ organization, user }) => {
           await db

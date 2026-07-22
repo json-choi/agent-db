@@ -2,8 +2,8 @@
 //! `allow_writes` gate on. Runs the statement inside BEGIN..COMMIT on the read-write
 //! pool and reports exactly how many rows committed.
 
-use uuid::Uuid;
 use sqlx::AssertSqlSafe;
+use uuid::Uuid;
 
 use crate::connection::{LiveConnection, Pool};
 use crate::error::{AppError, AppResult};

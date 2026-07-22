@@ -10,7 +10,8 @@ import {
 import type { ConnectionProfile } from "../ipc/types";
 import { errDetails } from "../ipc/types";
 import { useI18n } from "../lib/i18n";
-import { qk, workspaceContextQuery } from "../lib/queries";
+import { qk, workspaceAuthStateQuery, workspaceContextQuery } from "../lib/queries";
+import { buildWorkspaceChoiceGroups, parseWorkspaceChoice } from "../lib/workspaceAccounts";
 import { useToast } from "./Toast";
 import "./WorkspaceConnectionDialog.css";
 
@@ -29,13 +30,28 @@ export default function WorkspaceConnectionDialog({
   const toast = useToast();
   const queryClient = useQueryClient();
   const context = useQuery(workspaceContextQuery());
-  const targets = useMemo(
-    () => context.data?.workspaces.filter(
-      (workspace) => workspace.kind === "team" && workspace.id !== context.data?.active.id,
-    ) ?? [],
-    [context.data],
+  const auth = useQuery(workspaceAuthStateQuery());
+  const targetGroups = useMemo(
+    () => buildWorkspaceChoiceGroups(
+      auth.data,
+      context.data?.workspaces ?? [],
+      t("workspace.localOnly"),
+    )
+      .map((group) => ({
+        ...group,
+        choices: group.choices.filter((choice) =>
+          choice.workspace.kind === "team"
+          && !(
+            choice.workspace.id === context.data?.active.id
+            && choice.accountUserId === auth.data?.user?.id
+          ),
+        ),
+      }))
+      .filter((group) => group.choices.length > 0),
+    [auth.data, context.data, t],
   );
-  const [workspaceId, setWorkspaceId] = useState("");
+  const targets = targetGroups.flatMap((group) => group.choices);
+  const [targetValue, setTargetValue] = useState("");
   const [username, setUsername] = useState(connection.username);
   const [password, setPassword] = useState("");
   const [pending, setPending] = useState(false);
@@ -43,7 +59,7 @@ export default function WorkspaceConnectionDialog({
   const dialogRef = useRef<HTMLFormElement>(null);
   const initialFocusRef = useRef<HTMLElement | null>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
-  const selectedWorkspace = workspaceId || targets[0]?.id || "";
+  const selectedTargetValue = targetValue || targets[0]?.value || "";
 
   useEffect(() => {
     const trigger = document.activeElement as HTMLElement | null;
@@ -89,7 +105,13 @@ export default function WorkspaceConnectionDialog({
     setError("");
     try {
       if (mode === "copy") {
-        await copyConnectionToWorkspace(connection.id, selectedWorkspace);
+        const target = parseWorkspaceChoice(selectedTargetValue);
+        if (!target?.accountUserId) throw new Error("A workspace account is required.");
+        await copyConnectionToWorkspace(
+          connection.id,
+          target.workspaceId,
+          target.accountUserId,
+        );
         await queryClient.invalidateQueries({ queryKey: qk.workspaceContext() });
         toast(t("workspace.connectionCopied"));
       } else {
@@ -153,12 +175,18 @@ export default function WorkspaceConnectionDialog({
                 ref={(node) => {
                   initialFocusRef.current = node;
                 }}
-                value={selectedWorkspace}
-                onChange={(event) => setWorkspaceId(event.target.value)}
+                value={selectedTargetValue}
+                onChange={(event) => setTargetValue(event.target.value)}
                 disabled={pending || targets.length === 0}
               >
-                {targets.map((workspace) => (
-                  <option value={workspace.id} key={workspace.id}>{workspace.name}</option>
+                {targetGroups.map((group) => (
+                  <optgroup key={group.key} label={group.label}>
+                    {group.choices.map((choice) => (
+                      <option value={choice.value} key={choice.value}>
+                        {choice.workspace.name}
+                      </option>
+                    ))}
+                  </optgroup>
                 ))}
               </select>
             </label>
@@ -189,7 +217,7 @@ export default function WorkspaceConnectionDialog({
         {error ? <div className="form-msg error workspace-connection-error" role="alert">{error}</div> : null}
         <footer className="form-actions ds-control-row">
           <button ref={cancelRef} className="btn" type="button" onClick={onClose} disabled={pending}>{t("common.cancel")}</button>
-          <button className="btn primary" type="submit" disabled={pending || (mode === "copy" && !selectedWorkspace)}>
+          <button className="btn primary" type="submit" disabled={pending || (mode === "copy" && !selectedTargetValue)}>
             {pending ? t("mcp.working") : mode === "copy" ? t("workspace.copy") : t("workspace.bind")}
           </button>
         </footer>

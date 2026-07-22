@@ -41,8 +41,16 @@ export function workspaceAuthState(): Promise<WorkspaceAuthState> {
   return invoke("workspace_auth_state");
 }
 
-export function signOutWorkspace(): Promise<WorkspaceAuthState> {
-  return invoke("workspace_sign_out");
+export function refreshWorkspaceAuthState(): Promise<WorkspaceAuthState> {
+  return invoke("refresh_workspace_auth_state");
+}
+
+export function signOutWorkspace(userId?: string): Promise<WorkspaceAuthState> {
+  return invoke("workspace_sign_out", { userId: userId ?? null });
+}
+
+export function signOutAllWorkspaces(): Promise<WorkspaceAuthState> {
+  return invoke("workspace_sign_out_all");
 }
 
 export function beginWorkspaceLogin(): Promise<WorkspaceDeviceAuthorization> {
@@ -69,15 +77,27 @@ export function getActiveWorkspace(): Promise<Workspace> {
   return invoke("get_active_workspace");
 }
 
-export function setActiveWorkspace(id: string): Promise<Workspace> {
-  return invoke("set_active_workspace", { id });
+export function setActiveWorkspace(
+  id: string,
+  accountUserId?: string,
+): Promise<Workspace> {
+  return invoke("set_active_workspace", { id, accountUserId: accountUserId ?? null });
+}
+
+export function setActiveWorkspaceAccount(userId: string): Promise<Workspace> {
+  return invoke("set_active_workspace_account", { userId });
 }
 
 export function copyConnectionToWorkspace(
   connectionId: string,
   workspaceId: string,
+  accountUserId: string,
 ): Promise<ConnectionProfile> {
-  return invoke("copy_connection_to_workspace", { connectionId, workspaceId });
+  return invoke("copy_connection_to_workspace", {
+    connectionId,
+    workspaceId,
+    accountUserId,
+  });
 }
 
 export function bindWorkspaceConnectionCredentials(
@@ -351,18 +371,17 @@ export function getChatMessages(threadId: string): Promise<ChatMessageRecord[]> 
 }
 
 // Creates the DB row for a still-draft conversation. Called only on its first message,
-// so an abandoned draft never leaves an empty thread in the sidebar. connectionId scopes
-// the thread to one DB connection (schema context is injected into the first turn only);
-// null leaves it unscoped.
+// so an abandoned draft never leaves an empty thread in the sidebar. Every conversation
+// is bound to the database selected in the global sidebar context.
 export function createChatThread(
   provider: AgentProvider,
-  connectionId?: string | null,
+  connectionId: string,
   model?: string,
   effort?: string,
 ): Promise<ChatThread> {
   return invoke("create_chat_thread", {
     provider,
-    connectionId: connectionId ?? null,
+    connectionId,
     model: model ?? null,
     effort: effort ?? null,
   });

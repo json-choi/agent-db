@@ -4,7 +4,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { auth } from "../../../../../../lib/auth";
 import { db } from "../../../../../../lib/db";
 import { env } from "../../../../../../lib/env";
-import { jsonError, mutationAllowed } from "../../../../../../lib/http";
+import { isUuid, jsonError, mutationAllowed, privateJson } from "../../../../../../lib/http";
 import { invitation, member, user, workspaceAuditEvent } from "../../../../../../lib/schema";
 import { authorizeWorkspace } from "../../../../../../lib/workspace-authorization";
 
@@ -18,6 +18,7 @@ function isAssignableRole(value: unknown): value is AssignableRole {
 
 export async function GET(request: Request, context: RouteContext) {
   const { workspaceId } = await context.params;
+  if (!isUuid(workspaceId)) return jsonError("Invalid workspace id", 400);
   const authorization = await authorizeWorkspace(request, workspaceId, "manage");
   if (!authorization.ok) return jsonError(authorization.error, authorization.status);
   const [members, invitations] = await Promise.all([
@@ -42,7 +43,7 @@ export async function GET(request: Request, context: RouteContext) {
       eq(invitation.status, "pending"),
     )).orderBy(desc(invitation.createdAt)),
   ]);
-  return Response.json({
+  return privateJson({
     workspaceId,
     members,
     invitations: invitations.map((item) => ({
@@ -55,6 +56,7 @@ export async function GET(request: Request, context: RouteContext) {
 export async function POST(request: Request, context: RouteContext) {
   if (!mutationAllowed(request, env.appOrigin())) return jsonError("Invalid request origin", 403);
   const { workspaceId } = await context.params;
+  if (!isUuid(workspaceId)) return jsonError("Invalid workspace id", 400);
   const authorization = await authorizeWorkspace(request, workspaceId, "manage");
   if (!authorization.ok) return jsonError(authorization.error, authorization.status);
   const body = (await request.json().catch(() => null)) as { email?: unknown; role?: unknown } | null;
@@ -75,7 +77,7 @@ export async function POST(request: Request, context: RouteContext) {
     redactedSummary: { role: body.role, emailDomain: email.split("@")[1] },
     requestId: crypto.randomUUID(),
   });
-  return Response.json({
+  return privateJson({
     invitation: {
       ...created,
       inviteUrl: `${env.appOrigin()}/accept-invitation/${encodeURIComponent(created.id)}`,
@@ -86,6 +88,7 @@ export async function POST(request: Request, context: RouteContext) {
 export async function PATCH(request: Request, context: RouteContext) {
   if (!mutationAllowed(request, env.appOrigin())) return jsonError("Invalid request origin", 403);
   const { workspaceId } = await context.params;
+  if (!isUuid(workspaceId)) return jsonError("Invalid workspace id", 400);
   const authorization = await authorizeWorkspace(request, workspaceId, "manage");
   if (!authorization.ok) return jsonError(authorization.error, authorization.status);
   const body = (await request.json().catch(() => null)) as { memberId?: unknown; role?: unknown } | null;
@@ -109,5 +112,66 @@ export async function PATCH(request: Request, context: RouteContext) {
     redactedSummary: { from: existing.role, to: body.role },
     requestId: crypto.randomUUID(),
   });
-  return Response.json({ member: updated });
+  return privateJson({ member: updated });
+}
+
+export async function DELETE(request: Request, context: RouteContext) {
+  if (!mutationAllowed(request, env.appOrigin())) return jsonError("Invalid request origin", 403);
+  const { workspaceId } = await context.params;
+  if (!isUuid(workspaceId)) return jsonError("Invalid workspace id", 400);
+  const authorization = await authorizeWorkspace(request, workspaceId, "manage");
+  if (!authorization.ok) return jsonError(authorization.error, authorization.status);
+  const body = (await request.json().catch(() => null)) as {
+    memberId?: unknown;
+    invitationId?: unknown;
+  } | null;
+
+  if (typeof body?.invitationId === "string" && body.invitationId) {
+    const existing = await db.query.invitation.findFirst({
+      where: and(
+        eq(invitation.id, body.invitationId),
+        eq(invitation.organizationId, workspaceId),
+        eq(invitation.status, "pending"),
+      ),
+    });
+    if (!existing) return jsonError("Invitation not found", 404);
+    await auth.api.cancelInvitation({
+      headers: request.headers,
+      body: { invitationId: existing.id },
+    });
+    await db.insert(workspaceAuditEvent).values({
+      organizationId: workspaceId,
+      actorUserId: authorization.session.user.id,
+      action: "member.invite.cancel",
+      resourceType: "invitation",
+      resourceId: existing.id,
+      redactedSummary: { emailDomain: existing.email.split("@")[1] },
+      requestId: crypto.randomUUID(),
+    });
+    return privateJson({ status: true });
+  }
+
+  if (typeof body?.memberId === "string" && body.memberId) {
+    const existing = await db.query.member.findFirst({
+      where: and(eq(member.id, body.memberId), eq(member.organizationId, workspaceId)),
+    });
+    if (!existing) return jsonError("Member not found", 404);
+    if (existing.role === "owner") return jsonError("Owner cannot be removed", 403);
+    await auth.api.removeMember({
+      headers: request.headers,
+      body: { memberIdOrEmail: existing.id, organizationId: workspaceId },
+    });
+    await db.insert(workspaceAuditEvent).values({
+      organizationId: workspaceId,
+      actorUserId: authorization.session.user.id,
+      action: "member.remove",
+      resourceType: "member",
+      resourceId: existing.id,
+      redactedSummary: { previousRole: existing.role },
+      requestId: crypto.randomUUID(),
+    });
+    return privateJson({ status: true });
+  }
+
+  return jsonError("Member or invitation id is required", 400);
 }

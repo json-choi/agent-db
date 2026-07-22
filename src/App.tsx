@@ -34,7 +34,8 @@ import AgentLogDialog from "./components/AgentLogDialog";
 import EngineMark from "./components/EngineMark";
 import { Icon } from "./components/Icon";
 import { ToastProvider, useToast } from "./components/Toast";
-import WorkspaceSwitcher, { WorkspaceAccount } from "./components/WorkspaceSwitcher";
+import WorkspaceAccount from "./components/WorkspaceAccount";
+import WorkspaceSwitcher from "./components/WorkspaceSwitcher";
 import { AgentChatProvider } from "./lib/agentChat";
 import { AgentFeedProvider, useAgentFeed } from "./lib/agentFeed";
 import { useI18n, type I18nKey } from "./lib/i18n";
@@ -775,7 +776,7 @@ function Shell() {
       style={{ gridTemplateColumns: `${sidebarW}px 5px minmax(0, 1fr)` }}
     >
       <DatabaseExplorer
-        workspaceAccount={<WorkspaceAccount onSignedOut={reloadWorkspaceScope} />}
+        workspaceAccount={<WorkspaceAccount onScopeChanged={reloadWorkspaceScope} />}
         workspaceHeader={
           <WorkspaceSwitcher
             onNew={startNewConnection}

@@ -113,7 +113,8 @@ pub(crate) async fn connect_sqlx(
                 .acquire_timeout(acquire)
                 .after_connect(|conn, _meta| {
                     Box::pin(async move {
-                        conn.execute("SET default_transaction_read_only = on").await?;
+                        conn.execute("SET default_transaction_read_only = on")
+                            .await?;
                         Ok(())
                     })
                 })
@@ -150,10 +151,7 @@ pub(crate) async fn connect_sqlx(
                             .execute("SET SESSION transaction_read_only = 1")
                             .await
                             .is_err()
-                            && conn
-                                .execute("SET SESSION tx_read_only = 1")
-                                .await
-                                .is_err()
+                            && conn.execute("SET SESSION tx_read_only = 1").await.is_err()
                         {
                             return Err(sqlx::Error::Configuration(
                                 "read-only pool: server accepts neither `transaction_read_only` \
@@ -245,7 +243,10 @@ mod tests {
 
     #[test]
     fn pg_sslmode_documented_values_ok() {
-        assert!(matches!(pg_ssl_mode("verify-full"), Ok(PgSslMode::VerifyFull)));
+        assert!(matches!(
+            pg_ssl_mode("verify-full"),
+            Ok(PgSslMode::VerifyFull)
+        ));
         // trailing space / mixed case still resolve, not error
         assert!(matches!(pg_ssl_mode("  Require "), Ok(PgSslMode::Require)));
     }
@@ -258,7 +259,10 @@ mod tests {
 
     #[test]
     fn mysql_sslmode_documented_values_ok() {
-        assert!(matches!(mysql_ssl_mode("VERIFY-IDENTITY"), Ok(MySqlSslMode::VerifyIdentity)));
+        assert!(matches!(
+            mysql_ssl_mode("VERIFY-IDENTITY"),
+            Ok(MySqlSslMode::VerifyIdentity)
+        ));
     }
 
     #[test]

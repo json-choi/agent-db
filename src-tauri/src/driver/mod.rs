@@ -262,7 +262,9 @@ pub async fn connect(profile: &ConnectionProfile, secret: &str) -> AppResult<Liv
         ))
     })?;
     Ok(match adapter {
-        RuntimeAdapter::Postgres => Live::Sql(connect_sqlx(Engine::Postgres, profile, secret).await?),
+        RuntimeAdapter::Postgres => {
+            Live::Sql(connect_sqlx(Engine::Postgres, profile, secret).await?)
+        }
         RuntimeAdapter::Mysql => Live::Sql(connect_sqlx(Engine::Mysql, profile, secret).await?),
         RuntimeAdapter::Sqlite => Live::Sql(connect_sqlx(Engine::Sqlite, profile, secret).await?),
         RuntimeAdapter::Mongodb => Live::Mongo(crate::mongo::connect(profile, secret).await?),
@@ -329,7 +331,9 @@ mod tests {
             .unwrap();
         assert_eq!(mongo.engine, Engine::Mongodb);
         assert_eq!(mongo.install_state, DriverInstallState::Installed);
-        assert!(mongo.capabilities.contains(&DriverCapability::DocumentQuery));
+        assert!(mongo
+            .capabilities
+            .contains(&DriverCapability::DocumentQuery));
         assert!(mongo.capabilities.contains(&DriverCapability::Collections));
         // SQL-only capabilities must stay absent — their omission hides SQL UI/MCP.
         assert!(!mongo.capabilities.contains(&DriverCapability::Sql));

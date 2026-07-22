@@ -12,6 +12,7 @@ use chrono::Utc;
 use sqlx::AssertSqlSafe;
 use tauri::State;
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 use crate::audit::{self, RecordArgs};
 use crate::connection::{self, DbPool, Live};
@@ -21,15 +22,17 @@ use crate::introspect;
 use crate::model::{
     Classification, ConnectionProfile, Dashboard, DashboardDraft, DocumentPage, DocumentQuery,
     Engine, ExecOutcome, HistoryEntry, MonitoringStatus, PreviewMode, PreviewReport, QueryKind,
-    QueryResult, SafetySettings,
-    Workspace, WorkspaceAuthState, WorkspaceDeviceAuthorization, WorkspaceFeatureState,
-    WorkspaceLoginPoll, WorkspaceConnectionAccess, WorkspaceKind,
+    QueryResult, SafetySettings, Workspace, WorkspaceAuthState, WorkspaceAuthUser,
+    WorkspaceConnectionAccess, WorkspaceDeviceAuthorization, WorkspaceFeatureState, WorkspaceKind,
+    WorkspaceLoginPoll,
 };
 use crate::monitoring;
 use crate::safety::{classify, decide, preview, GateDecision, PoolRef};
 use crate::state::AppState;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
+
+const MAX_CONNECTION_CREDENTIAL_BYTES: usize = 1 << 16;
 
 /// Borrow a `DbPool` as a `safety::PoolRef` (the L2/L3 entry handle).
 fn pool_ref(db: &DbPool) -> PoolRef<'_> {
@@ -49,7 +52,8 @@ async fn get_live(state: &AppState, id: Uuid) -> AppResult<Live> {
     let profile = state.store.get_connection(id).await?;
     if !profile.workspace_access.can_read() {
         return Err(AppError::Blocked {
-            reason: "your workspace role can view this template but cannot query the database".into(),
+            reason: "your workspace role can view this template but cannot query the database"
+                .into(),
         });
     }
     authorize_shared_connection(state, &profile, false).await?;
@@ -57,8 +61,8 @@ async fn get_live(state: &AppState, id: Uuid) -> AppResult<Live> {
         return Ok(existing.clone());
     }
     // SQLite has no password; PG/MySQL may authenticate via socket/trust with none.
-    let secret = connection::fetch_secret(&id).unwrap_or_default();
-    let live = connection::connect(&profile, &secret).await?;
+    let secret = Zeroizing::new(connection::fetch_profile_secret(&profile)?);
+    let live = connection::connect(&profile, secret.as_str()).await?;
     let handle = live.clone();
     state.connections.lock().unwrap().insert(id, live);
     Ok(handle)
@@ -70,7 +74,17 @@ async fn authorize_shared_connection(
     write: bool,
 ) -> AppResult<()> {
     if profile.workspace_access != WorkspaceConnectionAccess::Local {
+        let account_user_id = state
+            .store
+            .active_workspace_account_id()
+            .await?
+            .ok_or_else(|| {
+                AppError::Config(
+                    "shared connection access requires an active workspace account".into(),
+                )
+            })?;
         crate::workspace_auth::authorize_connection(
+            &account_user_id,
             state.store.active_workspace_id().await?,
             profile.id,
             write,
@@ -78,6 +92,26 @@ async fn authorize_shared_connection(
         .await?;
     }
     Ok(())
+}
+
+/// Snapshot an existing credential only when a rollback may need to restore it.
+/// A dangling reference is treated as an empty slot, while an OS credential-store
+/// access failure must stop the mutation instead of being mistaken for "not found".
+fn secret_snapshot(id: Uuid, referenced: bool) -> AppResult<Option<Zeroizing<String>>> {
+    if !referenced {
+        return Ok(None);
+    }
+    match connection::fetch_secret(&id) {
+        Ok(secret) => Ok(Some(Zeroizing::new(secret))),
+        Err(AppError::NotFound(_)) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn delete_secret_after_rollback(id: Uuid, action: &'static str) {
+    if let Err(error) = connection::delete_secret(&id) {
+        tracing::warn!(credential_id = %id, %error, action, "credential cleanup deferred");
+    }
 }
 
 fn normalize_schema_group(schema_group: Option<String>) -> Option<String> {
@@ -188,38 +222,101 @@ async fn record_run(
 #[tauri::command]
 pub fn workspace_feature_state() -> WorkspaceFeatureState {
     let enabled = std::env::var("DOPEDB_WORKSPACES_ENABLED")
-        .map(|value| !matches!(value.trim().to_ascii_lowercase().as_str(), "0" | "false" | "off"))
+        .map(|value| {
+            !matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "off"
+            )
+        })
         .unwrap_or(true);
     WorkspaceFeatureState { enabled }
 }
 
 #[tauri::command]
 pub async fn workspace_auth_state(state: State<'_, AppState>) -> AppResult<WorkspaceAuthState> {
-    let auth = crate::workspace_auth::auth_state().await?;
-    if auth.authenticated {
-        if let Err(error) = sync_workspace_memberships(&state).await {
-            tracing::warn!(%error, "workspace membership sync deferred after session validation");
+    ensure_active_workspace_account(&state).await?;
+    workspace_auth_state_from_store(&state).await
+}
+
+/// Revalidate the active hosted session and memberships without making initial UI
+/// rendering wait on the OS credential store or network. Cached public identity remains
+/// stable during outages; sensitive resource commands still authorize online.
+#[tauri::command]
+pub async fn refresh_workspace_auth_state(
+    state: State<'_, AppState>,
+) -> AppResult<WorkspaceAuthState> {
+    if state.store.workspace_accounts().await?.is_empty() {
+        if let Some(user) = crate::workspace_auth::migrate_legacy_session().await? {
+            if let Err(error) = sync_account_memberships(&state, &user).await {
+                tracing::warn!(%error, "legacy workspace membership sync deferred");
+            }
+            state.store.activate_workspace_account(&user.id).await?;
         }
-    } else {
-        // Team metadata is only visible while a hosted session is active. Archiving
-        // the local index also restores Personal Workspace when a session expires.
-        state.store.sync_team_workspaces(&[]).await?;
-        state.connections.lock().unwrap().clear();
     }
-    Ok(auth)
+
+    ensure_active_workspace_account(&state).await?;
+    if let Some(user_id) = state.store.active_workspace_account_id().await? {
+        match crate::workspace_auth::auth_user(&user_id).await {
+            Ok(Some(user)) => {
+                if let Err(error) = sync_account_memberships(&state, &user).await {
+                    tracing::warn!(%error, "workspace membership sync deferred after session validation");
+                }
+            }
+            Ok(None) => {
+                state.store.remove_workspace_account(&user_id).await?;
+                state.connections.lock().unwrap().clear();
+                ensure_active_workspace_account(&state).await?;
+            }
+            Err(error) => {
+                // Keep the last verified identity visible during an outage. Every
+                // shared-resource action still performs its own online authorization.
+                tracing::warn!(%error, "workspace session validation deferred");
+            }
+        }
+    }
+    workspace_auth_state_from_store(&state).await
 }
 
 #[tauri::command]
-pub async fn workspace_sign_out(state: State<'_, AppState>) -> AppResult<WorkspaceAuthState> {
-    crate::workspace_auth::sign_out().await?;
-    // Hiding hosted metadata and returning to Personal Workspace are part of the same
-    // desktop logout boundary. Shared DB handles must not survive that scope change.
-    state.store.sync_team_workspaces(&[]).await?;
+pub async fn workspace_sign_out(
+    state: State<'_, AppState>,
+    user_id: Option<String>,
+) -> AppResult<WorkspaceAuthState> {
+    let user_id = match user_id {
+        Some(user_id) => user_id,
+        None => state
+            .store
+            .active_workspace_account_id()
+            .await?
+            .ok_or_else(|| AppError::Config("no workspace account is signed in".into()))?,
+    };
+    crate::workspace_auth::sign_out(&user_id).await?;
+    state.store.remove_workspace_account(&user_id).await?;
     state.connections.lock().unwrap().clear();
-    Ok(WorkspaceAuthState {
-        authenticated: false,
-        user: None,
-    })
+    workspace_auth_state_from_store(&state).await
+}
+
+#[tauri::command]
+pub async fn workspace_sign_out_all(state: State<'_, AppState>) -> AppResult<WorkspaceAuthState> {
+    let accounts = state.store.workspace_accounts().await?;
+    let mut first_error = None;
+    for account in accounts {
+        match crate::workspace_auth::sign_out(&account.user.id).await {
+            Ok(()) => {
+                if let Err(error) = state.store.remove_workspace_account(&account.user.id).await {
+                    first_error.get_or_insert(error);
+                }
+            }
+            Err(error) => {
+                first_error.get_or_insert(error);
+            }
+        }
+    }
+    state.connections.lock().unwrap().clear();
+    if let Some(error) = first_error {
+        return Err(error);
+    }
+    workspace_auth_state_from_store(&state).await
 }
 
 #[tauri::command]
@@ -234,12 +331,18 @@ pub async fn poll_workspace_login(
 ) -> AppResult<WorkspaceLoginPoll> {
     let result = crate::workspace_auth::poll_login(&device_code).await?;
     if result.status == crate::model::WorkspaceLoginPollStatus::SignedIn {
-        if let Err(error) = sync_workspace_memberships(&state).await {
+        let user = result
+            .user
+            .as_ref()
+            .ok_or_else(|| AppError::Network("workspace login did not return an account".into()))?;
+        if let Err(error) = sync_account_memberships(&state, user).await {
             // The session token is already validated and stored. Do not report a
             // successful login as failed merely because the first membership refresh
             // encountered a transient control-plane or local-cache error.
             tracing::warn!(%error, "workspace membership sync deferred after sign-in");
         }
+        state.store.activate_workspace_account(&user.id).await?;
+        state.connections.lock().unwrap().clear();
     }
     Ok(result)
 }
@@ -249,23 +352,88 @@ pub fn workspace_console_url(workspace_id: Option<Uuid>) -> AppResult<String> {
     crate::workspace_auth::console_url(workspace_id)
 }
 
-async fn sync_workspace_memberships(state: &AppState) -> AppResult<()> {
-    let remote = crate::workspace_auth::remote_workspaces().await?;
-    let workspaces = remote
-        .into_iter()
-        .map(|workspace| (workspace.id, workspace.name))
-        .collect::<Vec<_>>();
-    state.store.sync_team_workspaces(&workspaces).await?;
-    let active = state.store.active_workspace().await?;
-    if active.kind == WorkspaceKind::Team {
-        sync_workspace_connections(state, active.id).await?;
+async fn workspace_auth_state_from_store(state: &AppState) -> AppResult<WorkspaceAuthState> {
+    let accounts = state.store.workspace_accounts().await?;
+    let active_account_id = state.store.active_workspace_account_id().await?;
+    let user = active_account_id.and_then(|active_id| {
+        accounts
+            .iter()
+            .find(|account| account.user.id == active_id)
+            .map(|account| account.user.clone())
+    });
+    Ok(WorkspaceAuthState {
+        authenticated: user.is_some(),
+        user,
+        accounts,
+    })
+}
+
+async fn ensure_active_workspace_account(state: &AppState) -> AppResult<()> {
+    let active_account_id = state.store.active_workspace_account_id().await?;
+    let accounts = state.store.workspace_accounts().await?;
+    if active_account_id
+        .as_ref()
+        .is_some_and(|active_id| accounts.iter().any(|account| account.user.id == *active_id))
+    {
+        return Ok(());
+    }
+    if let Some(stale_id) = active_account_id {
+        state.store.remove_workspace_account(&stale_id).await?;
+    } else if let Some(account) = accounts.first() {
+        state
+            .store
+            .activate_workspace_account(&account.user.id)
+            .await?;
     }
     Ok(())
 }
 
-async fn sync_workspace_connections(state: &AppState, workspace_id: Uuid) -> AppResult<()> {
-    match crate::workspace_auth::remote_connections(workspace_id).await {
-        Ok(Some(connections)) => state.store.sync_remote_connections(workspace_id, &connections).await,
+async fn validated_workspace_user(state: &AppState, user_id: &str) -> AppResult<WorkspaceAuthUser> {
+    match crate::workspace_auth::auth_user(user_id).await? {
+        Some(user) => Ok(user),
+        None => {
+            state.store.remove_workspace_account(user_id).await?;
+            state.connections.lock().unwrap().clear();
+            ensure_active_workspace_account(state).await?;
+            Err(AppError::Network(
+                "workspace session is no longer active".into(),
+            ))
+        }
+    }
+}
+
+async fn sync_account_memberships(state: &AppState, user: &WorkspaceAuthUser) -> AppResult<()> {
+    state.store.remember_workspace_account(user).await?;
+    let remote = crate::workspace_auth::remote_workspaces(&user.id).await?;
+    let workspaces = remote
+        .into_iter()
+        .map(|workspace| (workspace.id, workspace.name, workspace.role))
+        .collect::<Vec<_>>();
+    state
+        .store
+        .sync_account_workspaces(user, &workspaces)
+        .await?;
+    let active = state.store.active_workspace().await?;
+    if active.kind == WorkspaceKind::Team
+        && state.store.active_workspace_account_id().await?.as_deref() == Some(user.id.as_str())
+    {
+        sync_workspace_connections(state, &user.id, active.id).await?;
+    }
+    Ok(())
+}
+
+async fn sync_workspace_connections(
+    state: &AppState,
+    account_user_id: &str,
+    workspace_id: Uuid,
+) -> AppResult<()> {
+    match crate::workspace_auth::remote_connections(account_user_id, workspace_id).await {
+        Ok(Some(connections)) => {
+            state
+                .store
+                .sync_remote_connections(workspace_id, account_user_id, &connections)
+                .await
+        }
         Ok(None) => {
             tracing::info!(
                 %workspace_id,
@@ -294,7 +462,29 @@ pub async fn list_workspaces(state: State<'_, AppState>) -> AppResult<Vec<Worksp
 pub async fn refresh_workspace_memberships(
     state: State<'_, AppState>,
 ) -> AppResult<Vec<Workspace>> {
-    sync_workspace_memberships(&state).await?;
+    let accounts = state.store.workspace_accounts().await?;
+    let mut removed_account = false;
+    for account in accounts {
+        match crate::workspace_auth::auth_user(&account.user.id).await {
+            Ok(Some(user)) => sync_account_memberships(&state, &user).await?,
+            Ok(None) => {
+                state
+                    .store
+                    .remove_workspace_account(&account.user.id)
+                    .await?;
+                removed_account = true;
+            }
+            Err(error) => tracing::warn!(
+                user_id = %account.user.id,
+                %error,
+                "workspace account refresh deferred"
+            ),
+        }
+    }
+    ensure_active_workspace_account(&state).await?;
+    if removed_account {
+        state.connections.lock().unwrap().clear();
+    }
     state.store.list_workspaces().await
 }
 
@@ -307,14 +497,53 @@ pub async fn get_active_workspace(state: State<'_, AppState>) -> AppResult<Works
 pub async fn set_active_workspace(
     state: State<'_, AppState>,
     id: Uuid,
+    account_user_id: Option<String>,
 ) -> AppResult<Workspace> {
-    let workspace = state.store.set_active_workspace(id).await?;
+    let target = state
+        .store
+        .list_workspaces()
+        .await?
+        .into_iter()
+        .find(|workspace| workspace.id == id)
+        .ok_or_else(|| AppError::NotFound(format!("workspace {id}")))?;
+    if target.kind == WorkspaceKind::Team {
+        let user_id = account_user_id.as_deref().ok_or_else(|| {
+            AppError::Config("team workspace selection requires an account".into())
+        })?;
+        let user = validated_workspace_user(&state, user_id).await?;
+        sync_account_memberships(&state, &user).await?;
+    }
+    let workspace = state
+        .store
+        .activate_workspace(id, account_user_id.as_deref())
+        .await?;
     // The active resource scope changed as soon as the setting was committed. Clear
     // process-wide handles before any network or local synchronization can fail.
     state.connections.lock().unwrap().clear();
     if workspace.kind == WorkspaceKind::Team {
-        if let Err(error) = sync_workspace_connections(&state, workspace.id).await {
+        let account_user_id = account_user_id.ok_or_else(|| {
+            AppError::Config("team workspace selection requires an account".into())
+        })?;
+        if let Err(error) = sync_workspace_connections(&state, &account_user_id, workspace.id).await
+        {
             tracing::warn!(workspace_id = %workspace.id, %error, "workspace connection sync deferred after switch");
+        }
+    }
+    Ok(workspace)
+}
+
+#[tauri::command]
+pub async fn set_active_workspace_account(
+    state: State<'_, AppState>,
+    user_id: String,
+) -> AppResult<Workspace> {
+    let user = validated_workspace_user(&state, &user_id).await?;
+    sync_account_memberships(&state, &user).await?;
+    let workspace = state.store.activate_workspace_account(&user_id).await?;
+    state.connections.lock().unwrap().clear();
+    if workspace.kind == WorkspaceKind::Team {
+        if let Err(error) = sync_workspace_connections(&state, &user_id, workspace.id).await {
+            tracing::warn!(workspace_id = %workspace.id, %error, "workspace connection sync deferred after account switch");
         }
     }
     Ok(workspace)
@@ -327,6 +556,7 @@ pub async fn copy_connection_to_workspace(
     state: State<'_, AppState>,
     connection_id: Uuid,
     workspace_id: Uuid,
+    account_user_id: String,
 ) -> AppResult<ConnectionProfile> {
     let source = state.store.get_connection(connection_id).await?;
     if source.workspace_access != WorkspaceConnectionAccess::Local {
@@ -341,35 +571,114 @@ pub async fn copy_connection_to_workspace(
         .into_iter()
         .find(|workspace| workspace.id == workspace_id && workspace.kind == WorkspaceKind::Team)
         .ok_or_else(|| AppError::NotFound(format!("team workspace {workspace_id}")))?;
-    if target.id == state.store.active_workspace_id().await? {
+    let current_account = state.store.active_workspace_account_id().await?;
+    if target.id == state.store.active_workspace_id().await?
+        && current_account.as_deref() == Some(account_user_id.as_str())
+    {
         return Err(AppError::Config("choose a different team workspace".into()));
     }
+    let account = state
+        .store
+        .workspace_accounts()
+        .await?
+        .into_iter()
+        .find(|account| {
+            account.user.id == account_user_id
+                && account
+                    .memberships
+                    .iter()
+                    .any(|membership| membership.workspace_id == workspace_id)
+        })
+        .ok_or_else(|| {
+            AppError::NotFound(format!(
+                "workspace {workspace_id} for account {account_user_id}"
+            ))
+        })?;
 
     // Resolve every local prerequisite and snapshot the current remote collection
     // before creating the server resource. This avoids a remote template being left
     // behind merely because a later credential read or collection fetch failed.
     let copied_secret = if source.secret_ref.is_some() {
-        Some(connection::fetch_secret(&source.id)?)
+        Some(Zeroizing::new(connection::fetch_profile_secret(&source)?))
     } else {
         None
     };
-    let mut remote = crate::workspace_auth::remote_connections(workspace_id)
+    let mut remote = crate::workspace_auth::remote_connections(&account.user.id, workspace_id)
         .await?
-        .ok_or_else(|| AppError::Network(
-            "the workspace service has not deployed shared connections yet".into(),
-        ))?;
-    let (mut created, revision) =
-        crate::workspace_auth::share_connection(workspace_id, &source).await?;
-    created.username = source.username.clone();
-    created.extra_params = source.extra_params.clone();
-    if let Some(secret) = copied_secret {
-        connection::store_secret(&created.id, &secret)?;
-        created.secret_ref = Some(created.id.to_string());
+        .ok_or_else(|| {
+            AppError::Network(
+                "the workspace service has not deployed shared connections yet".into(),
+            )
+        })?;
+    let credential_id = copied_secret.as_ref().map(|_| Uuid::new_v4());
+    if let (Some(credential_id), Some(secret)) = (credential_id, copied_secret.as_deref()) {
+        connection::store_secret(&credential_id, secret)?;
     }
-    let result = created.clone();
-    remote.push((created, revision));
-    state.store.sync_remote_connections(workspace_id, &remote).await?;
-    Ok(result)
+    let shared =
+        crate::workspace_auth::share_connection(&account.user.id, workspace_id, &source).await;
+    let (created, revision) = match shared {
+        Ok(created) => created,
+        Err(error) => {
+            if let Some(credential_id) = credential_id {
+                delete_secret_after_rollback(credential_id, "share_connection");
+            }
+            return Err(error);
+        }
+    };
+    remote.push((created.clone(), revision));
+    let credential_ref = credential_id.map(|id| id.to_string());
+    let local_result = async {
+        state
+            .store
+            .sync_remote_connections(workspace_id, &account.user.id, &remote)
+            .await?;
+        state
+            .store
+            .bind_connection_credentials(
+                created.id,
+                &account.user.id,
+                &source.username,
+                &source.extra_params,
+                credential_ref.as_deref(),
+            )
+            .await
+    }
+    .await;
+    match local_result {
+        Ok(profile) => Ok(profile),
+        Err(error) => {
+            if let Some(credential_id) = credential_id {
+                delete_secret_after_rollback(credential_id, "persist_shared_connection");
+            }
+            match crate::workspace_auth::delete_connection(
+                &account.user.id,
+                workspace_id,
+                created.id,
+            )
+            .await
+            {
+                Ok(()) => {
+                    if let Err(cache_error) = state
+                        .store
+                        .purge_remote_connection_cache(workspace_id, created.id)
+                        .await
+                    {
+                        tracing::warn!(
+                            connection_id = %created.id,
+                            %cache_error,
+                            "rolled-back shared connection cache cleanup deferred"
+                        );
+                    }
+                }
+                Err(rollback_error) => tracing::warn!(
+                    connection_id = %created.id,
+                    %rollback_error,
+                    "shared connection rollback deferred"
+                ),
+            }
+            Err(error)
+        }
+    }
 }
 
 /// Bind this member's own DB credential to a shared template. It is stored only in
@@ -381,12 +690,21 @@ pub async fn bind_workspace_connection_credentials(
     username: String,
     password: String,
 ) -> AppResult<ConnectionProfile> {
-    if password.is_empty() {
-        return Err(AppError::Config("password must not be empty".into()));
+    let username = username.trim();
+    if username.len() > 320 || username.chars().any(char::is_control) {
+        return Err(AppError::Config("username is invalid".into()));
     }
+    if password.is_empty() || password.len() > MAX_CONNECTION_CREDENTIAL_BYTES {
+        return Err(AppError::Config(
+            "connection credential is empty or exceeds the size limit".into(),
+        ));
+    }
+    let password = Zeroizing::new(password);
     let profile = state.store.get_connection(id).await?;
     if profile.workspace_access == WorkspaceConnectionAccess::Local {
-        return Err(AppError::Config("connection is not a shared workspace template".into()));
+        return Err(AppError::Config(
+            "connection is not a shared workspace template".into(),
+        ));
     }
     if !profile.workspace_access.can_read() {
         return Err(AppError::Blocked {
@@ -394,18 +712,47 @@ pub async fn bind_workspace_connection_credentials(
         });
     }
     authorize_shared_connection(&state, &profile, false).await?;
-    let previous = connection::fetch_secret(&id).ok();
-    connection::store_secret(&id, &password)?;
-    match state.store.bind_connection_credentials(id, &username).await {
+    let account_user_id = state
+        .store
+        .active_workspace_account_id()
+        .await?
+        .ok_or_else(|| AppError::Config("no active workspace account".into()))?;
+    let credential_id = profile
+        .secret_ref
+        .as_deref()
+        .map(Uuid::parse_str)
+        .transpose()
+        .map_err(|_| AppError::Config("connection secret reference is invalid".into()))?
+        .unwrap_or_else(Uuid::new_v4);
+    let previous = secret_snapshot(credential_id, profile.secret_ref.is_some())?;
+    connection::store_secret(&credential_id, password.as_str())?;
+    let credential_ref = credential_id.to_string();
+    match state
+        .store
+        .bind_connection_credentials(
+            id,
+            &account_user_id,
+            username,
+            &profile.extra_params,
+            Some(&credential_ref),
+        )
+        .await
+    {
         Ok(profile) => {
             state.connections.lock().unwrap().remove(&id);
             Ok(profile)
         }
         Err(error) => {
-            if let Some(secret) = previous {
-                let _ = connection::store_secret(&id, &secret);
+            if let Some(secret) = previous.as_deref() {
+                if let Err(rollback_error) = connection::store_secret(&credential_id, secret) {
+                    tracing::error!(
+                        credential_id = %credential_id,
+                        %rollback_error,
+                        "credential rollback failed"
+                    );
+                }
             } else {
-                let _ = connection::delete_secret(&id);
+                delete_secret_after_rollback(credential_id, "bind_connection_credentials");
             }
             Err(error)
         }
@@ -438,7 +785,8 @@ pub async fn upsert_connection(
     let mut profile = profile;
     if profile.workspace_access != WorkspaceConnectionAccess::Local {
         return Err(AppError::Blocked {
-            reason: "shared templates are edited by workspace editors; bind credentials separately".into(),
+            reason: "shared templates are edited by workspace editors; bind credentials separately"
+                .into(),
         });
     }
     profile.schema_group = normalize_schema_group(profile.schema_group);
@@ -446,12 +794,42 @@ pub async fn upsert_connection(
     crate::driver::validate(&profile)?;
     // Scope validation precedes credential-store writes so a known UUID from another
     // workspace cannot replace that resource's member-local secret as a side effect.
-    state.store.ensure_connection_write_scope(profile.id).await?;
+    state
+        .store
+        .ensure_connection_write_scope(profile.id)
+        .await?;
     let connections = state.store.list_connections().await?;
     validate_schema_group_engine(&profile, &connections)?;
+    let password = password
+        .filter(|password| !password.is_empty())
+        .map(Zeroizing::new);
+    if password
+        .as_ref()
+        .is_some_and(|value| value.len() > MAX_CONNECTION_CREDENTIAL_BYTES)
+    {
+        return Err(AppError::Config(
+            "connection credential exceeds the size limit".into(),
+        ));
+    }
     // Stash any supplied secret in the OS credential store and point the profile at it.
-    if let Some(pw) = password.filter(|p| !p.is_empty()) {
-        connection::store_secret(&profile.id, &pw)?;
+    // If SQLite persistence fails, restore the previous item so no keychain orphan or
+    // credential/profile mismatch survives the command boundary.
+    let previous_secret_id = if password.is_some() {
+        profile
+            .secret_ref
+            .as_deref()
+            .map(Uuid::parse_str)
+            .transpose()
+            .map_err(|_| AppError::Config("connection secret reference is invalid".into()))?
+    } else {
+        None
+    };
+    let previous_secret = secret_snapshot(
+        profile.id,
+        previous_secret_id.is_some_and(|secret_id| secret_id == profile.id),
+    )?;
+    if let Some(password) = password.as_deref() {
+        connection::store_secret(&profile.id, password)?;
         profile.secret_ref = Some(profile.id.to_string());
     }
     // Drop any cached live connection so new credentials/host take effect next use,
@@ -459,7 +837,32 @@ pub async fn upsert_connection(
     // different database — otherwise the stale table list would persist).
     state.connections.lock().unwrap().remove(&profile.id);
     let _ = state.store.clear_schema_cache(profile.id).await;
-    state.store.upsert_connection(&profile).await
+    match state.store.upsert_connection(&profile).await {
+        Ok(profile) => {
+            if let Some(previous_id) = previous_secret_id.filter(|id| *id != profile.id) {
+                delete_secret_after_rollback(previous_id, "replace_connection_credentials");
+            }
+            Ok(profile)
+        }
+        Err(error) => {
+            if password.is_some() {
+                if let Some(previous_secret) = previous_secret.as_deref() {
+                    if let Err(rollback_error) =
+                        connection::store_secret(&profile.id, previous_secret)
+                    {
+                        tracing::error!(
+                            credential_id = %profile.id,
+                            %rollback_error,
+                            "credential rollback failed"
+                        );
+                    }
+                } else {
+                    delete_secret_after_rollback(profile.id, "upsert_connection");
+                }
+            }
+            Err(error)
+        }
+    }
 }
 
 #[tauri::command]
@@ -470,13 +873,18 @@ pub async fn set_connection_schema_group(
 ) -> AppResult<ConnectionProfile> {
     let mut profile = state.store.get_connection(id).await?;
     if profile.workspace_access != WorkspaceConnectionAccess::Local {
-        return Err(AppError::Blocked { reason: "shared template metadata must be changed through the workspace service".into() });
+        return Err(AppError::Blocked {
+            reason: "shared template metadata must be changed through the workspace service".into(),
+        });
     }
     let normalized = normalize_schema_group(schema_group);
     profile.schema_group = normalized.clone();
     let connections = state.store.list_connections().await?;
     validate_schema_group_engine(&profile, &connections)?;
-    state.store.set_connection_schema_group(id, normalized).await
+    state
+        .store
+        .set_connection_schema_group(id, normalized)
+        .await
 }
 
 #[tauri::command]
@@ -530,7 +938,9 @@ pub async fn set_connections_schema_group(
 pub async fn delete_connection(state: State<'_, AppState>, id: Uuid) -> AppResult<()> {
     let profile = state.store.get_connection(id).await?;
     if profile.workspace_access != WorkspaceConnectionAccess::Local {
-        return Err(AppError::Blocked { reason: "shared connections can only be removed by a workspace administrator".into() });
+        return Err(AppError::Blocked {
+            reason: "shared connections can only be removed by a workspace administrator".into(),
+        });
     }
     state.store.delete_connection(id).await?;
     let _ = connection::delete_secret(&id);
@@ -547,8 +957,8 @@ pub async fn test_connection(state: State<'_, AppState>, id: Uuid) -> AppResult<
         });
     }
     authorize_shared_connection(&state, &profile, false).await?;
-    let secret = connection::fetch_secret(&id).unwrap_or_default();
-    let live = connection::connect(&profile, &secret).await?;
+    let secret = Zeroizing::new(connection::fetch_profile_secret(&profile)?);
+    let live = connection::connect(&profile, secret.as_str()).await?;
     live.test().await
 }
 
@@ -560,8 +970,13 @@ pub async fn test_connection_profile(
     profile: ConnectionProfile,
     password: Option<String>,
 ) -> AppResult<()> {
-    let secret = password.unwrap_or_default();
-    let live = connection::connect(&profile, &secret).await?;
+    let secret = Zeroizing::new(password.unwrap_or_default());
+    if secret.len() > MAX_CONNECTION_CREDENTIAL_BYTES {
+        return Err(AppError::Config(
+            "connection credential exceeds the size limit".into(),
+        ));
+    }
+    let live = connection::connect(&profile, secret.as_str()).await?;
     live.test().await
 }
 
@@ -830,8 +1245,17 @@ pub async fn run_sql(
         GateDecision::Block { reason } => {
             let reason = reason.clone();
             record_run(
-                &state, id, engine, &sql, classification.kind, "blocked", "blocked", None, None,
-                Some(reason.clone()), &origin,
+                &state,
+                id,
+                engine,
+                &sql,
+                classification.kind,
+                "blocked",
+                "blocked",
+                None,
+                None,
+                Some(reason.clone()),
+                &origin,
             )
             .await;
             return Err(AppError::Blocked { reason });
@@ -839,8 +1263,17 @@ pub async fn run_sql(
         GateDecision::RequireApproval if !approved => {
             let reason = "this statement modifies data and requires explicit approval".to_string();
             record_run(
-                &state, id, engine, &sql, classification.kind, "blocked", "blocked", None, None,
-                Some(reason.clone()), &origin,
+                &state,
+                id,
+                engine,
+                &sql,
+                classification.kind,
+                "blocked",
+                "blocked",
+                None,
+                None,
+                Some(reason.clone()),
+                &origin,
             )
             .await;
             return Err(AppError::Blocked { reason });
@@ -873,7 +1306,9 @@ pub async fn run_sql(
         )
         .await
         .map_err(|e| {
-            AppError::Config(format!("audit pre-record failed — refusing to run write: {e}"))
+            AppError::Config(format!(
+                "audit pre-record failed — refusing to run write: {e}"
+            ))
         })?;
     }
 
@@ -884,15 +1319,32 @@ pub async fn run_sql(
         Ok(live) => live,
         Err(e) => {
             record_run(
-                &state, id, engine, &sql, classification.kind, "error", "error", None, None,
-                Some(e.to_string()), &origin,
+                &state,
+                id,
+                engine,
+                &sql,
+                classification.kind,
+                "error",
+                "error",
+                None,
+                None,
+                Some(e.to_string()),
+                &origin,
             )
             .await;
             return Err(e);
         }
     };
-    match executor::execute(live, engine, &classification, &sql, &settings, authorized, query_id)
-        .await
+    match executor::execute(
+        live,
+        engine,
+        &classification,
+        &sql,
+        &settings,
+        authorized,
+        query_id,
+    )
+    .await
     {
         Ok(outcome) => {
             // A committed DDL changed the catalog — drop the cached schema so the
@@ -908,16 +1360,34 @@ pub async fn run_sql(
             let duration_ms = outcome.result.as_ref().map(|r| r.duration_ms as i64);
             let action = if outcome.committed { "execute" } else { "read" };
             record_run(
-                &state, id, engine, &sql, classification.kind, action, "ok", row_count,
-                duration_ms, None, &origin,
+                &state,
+                id,
+                engine,
+                &sql,
+                classification.kind,
+                action,
+                "ok",
+                row_count,
+                duration_ms,
+                None,
+                &origin,
             )
             .await;
             Ok(outcome)
         }
         Err(e) => {
             record_run(
-                &state, id, engine, &sql, classification.kind, "error", "error", None, None,
-                Some(e.to_string()), &origin,
+                &state,
+                id,
+                engine,
+                &sql,
+                classification.kind,
+                "error",
+                "error",
+                None,
+                None,
+                Some(e.to_string()),
+                &origin,
             )
             .await;
             Err(e)
@@ -972,8 +1442,17 @@ pub async fn run_document_query(
     };
     if let Some(reason) = blocked_reason {
         record_run(
-            &state, id, engine, &audited, classification.kind, "blocked", "blocked", None, None,
-            Some(reason.clone()), &origin,
+            &state,
+            id,
+            engine,
+            &audited,
+            classification.kind,
+            "blocked",
+            "blocked",
+            None,
+            None,
+            Some(reason.clone()),
+            &origin,
         )
         .await;
         return Err(AppError::Blocked { reason });
@@ -992,16 +1471,34 @@ pub async fn run_document_query(
     match executor::cancel::guard(query_id, executor::cancel::QUERY_TIMEOUT, run).await {
         Ok(page) => {
             record_run(
-                &state, id, engine, &audited, QueryKind::Read, "read", "ok",
-                Some(page.doc_count as i64), Some(page.duration_ms as i64), None, &origin,
+                &state,
+                id,
+                engine,
+                &audited,
+                QueryKind::Read,
+                "read",
+                "ok",
+                Some(page.doc_count as i64),
+                Some(page.duration_ms as i64),
+                None,
+                &origin,
             )
             .await;
             Ok(page)
         }
         Err(e) => {
             record_run(
-                &state, id, engine, &audited, QueryKind::Read, "error", "error", None, None,
-                Some(e.to_string()), &origin,
+                &state,
+                id,
+                engine,
+                &audited,
+                QueryKind::Read,
+                "error",
+                "error",
+                None,
+                None,
+                Some(e.to_string()),
+                &origin,
             )
             .await;
             Err(e)
@@ -1021,7 +1518,12 @@ fn stmt_ok(sql: &str, affected: u64) -> crate::model::ScriptStatement {
 }
 
 fn stmt_err(sql: &str, msg: String) -> crate::model::ScriptStatement {
-    crate::model::ScriptStatement { sql: sql.to_string(), result: None, affected: None, error: Some(msg) }
+    crate::model::ScriptStatement {
+        sql: sql.to_string(),
+        result: None,
+        affected: None,
+        error: Some(msg),
+    }
 }
 
 fn stmt_skipped(sql: &str) -> crate::model::ScriptStatement {
@@ -1052,7 +1554,10 @@ async fn execute_script_tx(
                 Ok(mut tx) => {
                     let mut ok = true;
                     for s in statements {
-                        match sqlx::query(AssertSqlSafe(s.as_str())).execute(&mut *tx).await {
+                        match sqlx::query(AssertSqlSafe(s.as_str()))
+                            .execute(&mut *tx)
+                            .await
+                        {
                             Ok(r) => out.push(stmt_ok(s, r.rows_affected())),
                             Err(e) => {
                                 out.push(stmt_err(s, e.to_string()));
@@ -1124,7 +1629,9 @@ pub async fn run_script(
     // Split authoritatively in the backend; comment-only segments are discarded.
     let statements = crate::sql_script::split_statements(&sql, engine);
     if statements.is_empty() {
-        return Err(AppError::Config("no executable statements in the script".into()));
+        return Err(AppError::Config(
+            "no executable statements in the script".into(),
+        ));
     }
     let kinds: Vec<QueryKind> = statements
         .iter()
@@ -1138,8 +1645,17 @@ pub async fn run_script(
         if !settings.auto_run_reads && !approved {
             let reason = "reads require approval for this connection".to_string();
             record_run(
-                &state, id, engine, &sql, QueryKind::Read, "blocked", "blocked", None, None,
-                Some(reason.clone()), &origin,
+                &state,
+                id,
+                engine,
+                &sql,
+                QueryKind::Read,
+                "blocked",
+                "blocked",
+                None,
+                None,
+                Some(reason.clone()),
+                &origin,
             )
             .await;
             return Err(AppError::Blocked { reason });
@@ -1179,11 +1695,24 @@ pub async fn run_script(
             None => ("ok", None),
         };
         record_run(
-            &state, id, engine, &sql, QueryKind::Read, "script:execute", status, Some(total), None,
-            err, &origin,
+            &state,
+            id,
+            engine,
+            &sql,
+            QueryKind::Read,
+            "script:execute",
+            status,
+            Some(total),
+            None,
+            err,
+            &origin,
         )
         .await;
-        return Ok(ScriptOutcome { statements: out, committed: false, all_reads: true });
+        return Ok(ScriptOutcome {
+            statements: out,
+            committed: false,
+            all_reads: true,
+        });
     }
 
     if !profile.workspace_access.can_write() {
@@ -1200,8 +1729,17 @@ pub async fn run_script(
                       Enable writes in the connection's safety settings to run this script."
             .to_string();
         record_run(
-            &state, id, engine, &sql, QueryKind::Write, "blocked", "blocked", None, None,
-            Some(reason.clone()), &origin,
+            &state,
+            id,
+            engine,
+            &sql,
+            QueryKind::Write,
+            "blocked",
+            "blocked",
+            None,
+            None,
+            Some(reason.clone()),
+            &origin,
         )
         .await;
         return Err(AppError::Blocked { reason });
@@ -1209,8 +1747,17 @@ pub async fn run_script(
     if !approved {
         let reason = "this script modifies data and requires explicit approval".to_string();
         record_run(
-            &state, id, engine, &sql, QueryKind::Write, "blocked", "blocked", None, None,
-            Some(reason.clone()), &origin,
+            &state,
+            id,
+            engine,
+            &sql,
+            QueryKind::Write,
+            "blocked",
+            "blocked",
+            None,
+            None,
+            Some(reason.clone()),
+            &origin,
         )
         .await;
         return Err(AppError::Blocked { reason });
@@ -1242,7 +1789,9 @@ pub async fn run_script(
     )
     .await
     .map_err(|e| {
-        AppError::Config(format!("audit pre-record failed — refusing to run script: {e}"))
+        AppError::Config(format!(
+            "audit pre-record failed — refusing to run script: {e}"
+        ))
     })?;
 
     let live = get_live(&state, id).await?;
@@ -1252,8 +1801,17 @@ pub async fn run_script(
         Ok(live) => live,
         Err(e) => {
             record_run(
-                &state, id, engine, &sql, script_kind, "script:execute", "error", None, None,
-                Some(e.to_string()), &origin,
+                &state,
+                id,
+                engine,
+                &sql,
+                script_kind,
+                "script:execute",
+                "error",
+                None,
+                None,
+                Some(e.to_string()),
+                &origin,
             )
             .await;
             return Err(e);
@@ -1261,18 +1819,29 @@ pub async fn run_script(
     };
     // Wrap the whole transaction in the cancel/timeout guard; a cancel drops the tx
     // future mid-flight (uncommitted → rolled back), same as the single-write path.
-    let tx_fut = async { Ok::<_, AppError>(execute_script_tx(&live.write_pool, &statements).await) };
-    let (rows, committed) = match executor::cancel::guard(query_id, executor::cancel::QUERY_TIMEOUT, tx_fut).await {
-        Ok(v) => v,
-        Err(e) => {
-            record_run(
-                &state, id, engine, &sql, script_kind, "script:execute", "error", None, None,
-                Some(e.to_string()), &origin,
-            )
-            .await;
-            return Err(e);
-        }
-    };
+    let tx_fut =
+        async { Ok::<_, AppError>(execute_script_tx(&live.write_pool, &statements).await) };
+    let (rows, committed) =
+        match executor::cancel::guard(query_id, executor::cancel::QUERY_TIMEOUT, tx_fut).await {
+            Ok(v) => v,
+            Err(e) => {
+                record_run(
+                    &state,
+                    id,
+                    engine,
+                    &sql,
+                    script_kind,
+                    "script:execute",
+                    "error",
+                    None,
+                    None,
+                    Some(e.to_string()),
+                    &origin,
+                )
+                .await;
+                return Err(e);
+            }
+        };
 
     // A committed DDL changed the catalog — drop the cached schema.
     if committed && has_ddl {
@@ -1281,12 +1850,25 @@ pub async fn run_script(
     let total: i64 = rows.iter().filter_map(|s| s.affected).sum();
     let first_err = rows.iter().find_map(|s| s.error.clone());
     record_run(
-        &state, id, engine, &sql, script_kind, "script:execute",
-        if committed { "ok" } else { "error" }, Some(total), None, first_err, &origin,
+        &state,
+        id,
+        engine,
+        &sql,
+        script_kind,
+        "script:execute",
+        if committed { "ok" } else { "error" },
+        Some(total),
+        None,
+        first_err,
+        &origin,
     )
     .await;
 
-    Ok(ScriptOutcome { statements: rows, committed, all_reads: false })
+    Ok(ScriptOutcome {
+        statements: rows,
+        committed,
+        all_reads: false,
+    })
 }
 
 // ── safety settings ──────────────────────────────────────────────────────────
@@ -1577,13 +2159,17 @@ pub async fn detect_agent_clis() -> Vec<crate::agent::CliInfo> {
 /// Claude Code: a static fallback — see `agent::claude_models`). Async + internally
 /// timeout-bounded, same as `detect_agent_clis`.
 #[tauri::command]
-pub async fn list_agent_models(provider: crate::agent::AgentProvider) -> AppResult<Vec<crate::agent::AgentModel>> {
+pub async fn list_agent_models(
+    provider: crate::agent::AgentProvider,
+) -> AppResult<Vec<crate::agent::AgentModel>> {
     crate::agent::list_models_async(provider).await
 }
 
 /// Saved chat threads, most recently updated first.
 #[tauri::command]
-pub async fn list_chat_threads(state: State<'_, AppState>) -> AppResult<Vec<crate::agent::ChatThread>> {
+pub async fn list_chat_threads(
+    state: State<'_, AppState>,
+) -> AppResult<Vec<crate::agent::ChatThread>> {
     state.store.list_chat_threads().await
 }
 
@@ -1598,17 +2184,20 @@ pub async fn get_chat_messages(
 
 /// Create a new (empty) chat thread. The frontend calls this on a draft's first send,
 /// immediately before `send_chat_turn` — an unsent draft never reaches the store.
-/// `connection_id` binds the thread to one DopeDB connection for context injection
-/// (`None` = unscoped); it is fixed at creation and cannot change for this thread.
+/// `connection_id` binds the thread to the globally selected DopeDB connection; it is
+/// fixed at creation and cannot change for this thread. Missing context fails closed.
 #[tauri::command]
 pub async fn create_chat_thread(
     state: State<'_, AppState>,
     provider: crate::agent::AgentProvider,
-    connection_id: Option<Uuid>,
+    connection_id: Uuid,
     model: Option<String>,
     effort: Option<String>,
 ) -> AppResult<crate::agent::ChatThread> {
-    state.store.create_chat_thread(provider, connection_id, model, effort).await
+    state
+        .store
+        .create_chat_thread(provider, connection_id, model, effort)
+        .await
 }
 
 /// Delete a thread; its messages cascade with it.
@@ -1668,8 +2257,14 @@ mod script_tests {
         let path =
             std::env::temp_dir().join(format!("dopedb-script-{tag}-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&path);
-        let opts = SqliteConnectOptions::new().filename(&path).create_if_missing(true);
-        SqlitePoolOptions::new().max_connections(1).connect_with(opts).await.unwrap()
+        let opts = SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(true);
+        SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap()
     }
 
     // Gating decision: pure reads take the read path; any write/DDL/privilege forces
@@ -1687,7 +2282,10 @@ mod script_tests {
     #[tokio::test]
     async fn tx_rolls_back_the_whole_script_on_error() {
         let pool = sqlite("rollback").await;
-        sqlx::raw_sql("CREATE TABLE t (id INTEGER);").execute(&pool).await.unwrap();
+        sqlx::raw_sql("CREATE TABLE t (id INTEGER);")
+            .execute(&pool)
+            .await
+            .unwrap();
         let db = DbPool::Sqlite(pool.clone());
 
         let (rows, committed) = execute_script_tx(
@@ -1703,10 +2301,19 @@ mod script_tests {
 
         assert!(!committed, "a failed statement must not commit");
         assert!(rows[0].error.is_none() && rows[1].error.is_none());
-        assert!(rows[2].error.is_some(), "the bad statement carries the error");
-        assert!(rows[3].error.is_some(), "statements after the failure are skipped");
+        assert!(
+            rows[2].error.is_some(),
+            "the bad statement carries the error"
+        );
+        assert!(
+            rows[3].error.is_some(),
+            "statements after the failure are skipped"
+        );
 
-        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM t").fetch_one(&pool).await.unwrap();
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM t")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(n, 0, "rollback leaves the table empty");
     }
 
@@ -1728,7 +2335,10 @@ mod script_tests {
 
         assert!(committed);
         assert!(rows.iter().all(|r| r.error.is_none()));
-        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM t").fetch_one(&pool).await.unwrap();
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM t")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(n, 2);
     }
 }
@@ -1766,7 +2376,10 @@ mod schema_group_tests {
 
     #[test]
     fn normalizes_empty_and_padded_group_names() {
-        assert_eq!(normalize_schema_group(Some("  Core  ".into())).as_deref(), Some("Core"));
+        assert_eq!(
+            normalize_schema_group(Some("  Core  ".into())).as_deref(),
+            Some("Core")
+        );
         assert_eq!(normalize_schema_group(Some("   ".into())), None);
     }
 

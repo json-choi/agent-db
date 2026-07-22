@@ -78,7 +78,11 @@ async fn table_for(
     Ok(Table {
         schema: None,
         name,
-        kind: if is_view { "view".into() } else { "table".into() },
+        kind: if is_view {
+            "view".into()
+        } else {
+            "table".into()
+        },
         columns,
         foreign_keys: Vec::new(),
         indexes,

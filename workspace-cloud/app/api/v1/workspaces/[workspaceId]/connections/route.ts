@@ -3,7 +3,7 @@
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { db } from "../../../../../../lib/db";
 import { env } from "../../../../../../lib/env";
-import { jsonError, mutationAllowed } from "../../../../../../lib/http";
+import { isUuid, jsonError, mutationAllowed, privateJson } from "../../../../../../lib/http";
 import { workspaceAuditEvent, workspaceConnection } from "../../../../../../lib/schema";
 import { authorizeWorkspace } from "../../../../../../lib/workspace-authorization";
 import { parseSharedConnection, publicConnection } from "../../../../../../lib/workspace-connections";
@@ -12,6 +12,7 @@ type RouteContext = { params: Promise<{ workspaceId: string }> };
 
 export async function GET(request: Request, context: RouteContext) {
   const { workspaceId } = await context.params;
+  if (!isUuid(workspaceId)) return jsonError("Invalid workspace id", 400);
   const authorization = await authorizeWorkspace(request, workspaceId, "view");
   if (!authorization.ok) return jsonError(authorization.error, authorization.status);
   const rows = await db
@@ -22,7 +23,7 @@ export async function GET(request: Request, context: RouteContext) {
       isNull(workspaceConnection.deletedAt),
     ))
     .orderBy(desc(workspaceConnection.updatedAt));
-  return Response.json({
+  return privateJson({
     workspaceId,
     role: authorization.role,
     accessMode: authorization.accessMode,
@@ -37,6 +38,7 @@ export async function GET(request: Request, context: RouteContext) {
 export async function POST(request: Request, context: RouteContext) {
   if (!mutationAllowed(request, env.appOrigin())) return jsonError("Invalid request origin", 403);
   const { workspaceId } = await context.params;
+  if (!isUuid(workspaceId)) return jsonError("Invalid workspace id", 400);
   const authorization = await authorizeWorkspace(request, workspaceId, "write");
   if (!authorization.ok) return jsonError(authorization.error, authorization.status);
   let input;
@@ -45,9 +47,10 @@ export async function POST(request: Request, context: RouteContext) {
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Invalid connection template", 400);
   }
-  const [created] = await db
-    .insert(workspaceConnection)
-    .values({
+  const connectionId = crypto.randomUUID();
+  const [createdRows] = await db.batch([
+    db.insert(workspaceConnection).values({
+      id: connectionId,
       organizationId: workspaceId,
       name: input.name,
       engine: input.engine,
@@ -62,18 +65,23 @@ export async function POST(request: Request, context: RouteContext) {
       environment: input.env,
       schemaGroup: input.schemaGroup,
       createdByUserId: authorization.session.user.id,
-    })
-    .returning();
-  await db.insert(workspaceAuditEvent).values({
-    organizationId: workspaceId,
-    actorUserId: authorization.session.user.id,
-    action: "connection.share",
-    resourceType: "connection",
-    resourceId: created.id,
-    redactedSummary: { name: created.name, engine: created.engine, environment: created.environment },
-    requestId: crypto.randomUUID(),
-  });
-  return Response.json({
+    }).returning(),
+    db.insert(workspaceAuditEvent).values({
+      organizationId: workspaceId,
+      actorUserId: authorization.session.user.id,
+      action: "connection.share",
+      resourceType: "connection",
+      resourceId: connectionId,
+      redactedSummary: {
+        name: input.name,
+        engine: input.engine,
+        environment: input.env,
+      },
+      requestId: crypto.randomUUID(),
+    }),
+  ]);
+  const created = createdRows[0];
+  return privateJson({
     connection: publicConnection(created, authorization.role, authorization.accessMode),
   }, { status: 201 });
 }

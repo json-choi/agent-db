@@ -101,7 +101,17 @@ async fn live_for(state: &AppState, id: Uuid) -> AppResult<Live> {
         });
     }
     if profile.workspace_access != crate::model::WorkspaceConnectionAccess::Local {
+        let account_user_id = state
+            .store
+            .active_workspace_account_id()
+            .await?
+            .ok_or_else(|| {
+                crate::error::AppError::Config(
+                    "shared connection access requires an active workspace account".into(),
+                )
+            })?;
         crate::workspace_auth::authorize_connection(
+            &account_user_id,
             state.store.active_workspace_id().await?,
             profile.id,
             false,
@@ -111,8 +121,8 @@ async fn live_for(state: &AppState, id: Uuid) -> AppResult<Live> {
     if let Some(existing) = state.connections.lock().unwrap().get(&id) {
         return Ok(existing.clone());
     }
-    let secret = crate::connection::fetch_secret(&id).unwrap_or_default();
-    let live = crate::connection::connect(&profile, &secret).await?;
+    let secret = zeroize::Zeroizing::new(crate::connection::fetch_profile_secret(&profile)?);
+    let live = crate::connection::connect(&profile, secret.as_str()).await?;
     let handle = live.clone();
     state.connections.lock().unwrap().insert(id, live);
     Ok(handle)

@@ -102,18 +102,20 @@ pub async fn introspect(pool: &PgPool) -> AppResult<Catalog> {
     for r in sqlx::query(COLS_SQL).fetch_all(pool).await? {
         let schema: String = r.try_get("table_schema")?;
         let name: String = r.try_get("table_name")?;
-        let i = *idx.entry((schema.clone(), name.clone())).or_insert_with(|| {
-            tables.push(Table {
-                schema: Some(schema),
-                name,
-                kind: "table".into(),
-                columns: Vec::new(),
-                foreign_keys: Vec::new(),
-                indexes: Vec::new(),
-                row_estimate: None,
+        let i = *idx
+            .entry((schema.clone(), name.clone()))
+            .or_insert_with(|| {
+                tables.push(Table {
+                    schema: Some(schema),
+                    name,
+                    kind: "table".into(),
+                    columns: Vec::new(),
+                    foreign_keys: Vec::new(),
+                    indexes: Vec::new(),
+                    row_estimate: None,
+                });
+                tables.len() - 1
             });
-            tables.len() - 1
-        });
         let nullable: String = r.try_get("is_nullable")?;
         tables[i].columns.push(Column {
             name: r.try_get("column_name")?,
@@ -155,7 +157,11 @@ pub async fn introspect(pool: &PgPool) -> AppResult<Catalog> {
         let idxs = &mut tables[i].indexes;
         match idxs.last_mut() {
             Some(last) if last.name == iname => last.columns.push(col),
-            _ => idxs.push(Index { name: iname, columns: vec![col], unique }),
+            _ => idxs.push(Index {
+                name: iname,
+                columns: vec![col],
+                unique,
+            }),
         }
     }
 
@@ -214,7 +220,12 @@ fn synthesize_ddl(t: &Table) -> String {
         })
         .collect();
 
-    let pk: Vec<String> = t.columns.iter().filter(|c| c.pk).map(|c| q(&c.name)).collect();
+    let pk: Vec<String> = t
+        .columns
+        .iter()
+        .filter(|c| c.pk)
+        .map(|c| q(&c.name))
+        .collect();
     if !pk.is_empty() {
         lines.push(format!("    PRIMARY KEY ({})", pk.join(", ")));
     }
@@ -230,11 +241,20 @@ fn synthesize_ddl(t: &Table) -> String {
     let _ = write!(out, "\n);");
 
     for i in &t.indexes {
-        let cols = i.columns.iter().map(|c| q(c)).collect::<Vec<_>>().join(", ");
+        let cols = i
+            .columns
+            .iter()
+            .map(|c| q(c))
+            .collect::<Vec<_>>()
+            .join(", ");
         let _ = write!(
             out,
             "\n{} {} ON {} ({});",
-            if i.unique { "CREATE UNIQUE INDEX" } else { "CREATE INDEX" },
+            if i.unique {
+                "CREATE UNIQUE INDEX"
+            } else {
+                "CREATE INDEX"
+            },
             q(&i.name),
             full,
             cols,
@@ -254,9 +274,24 @@ mod tests {
             name: "orders".into(),
             kind: "table".into(),
             columns: vec![
-                Column { name: "id".into(), data_type: "integer".into(), nullable: false, pk: true },
-                Column { name: "user_id".into(), data_type: "integer".into(), nullable: false, pk: false },
-                Column { name: "note".into(), data_type: "text".into(), nullable: true, pk: false },
+                Column {
+                    name: "id".into(),
+                    data_type: "integer".into(),
+                    nullable: false,
+                    pk: true,
+                },
+                Column {
+                    name: "user_id".into(),
+                    data_type: "integer".into(),
+                    nullable: false,
+                    pk: false,
+                },
+                Column {
+                    name: "note".into(),
+                    data_type: "text".into(),
+                    nullable: true,
+                    pk: false,
+                },
             ],
             foreign_keys: vec![ForeignKey {
                 column: "user_id".into(),
@@ -277,6 +312,7 @@ mod tests {
         assert!(ddl.contains("\"note\" text\n") || ddl.contains("\"note\" text,"));
         assert!(ddl.contains("PRIMARY KEY (\"id\")"));
         assert!(ddl.contains("FOREIGN KEY (\"user_id\") REFERENCES \"public\".\"users\" (\"id\")"));
-        assert!(ddl.contains("CREATE INDEX \"idx_orders_user\" ON \"public\".\"orders\" (\"user_id\");"));
+        assert!(ddl
+            .contains("CREATE INDEX \"idx_orders_user\" ON \"public\".\"orders\" (\"user_id\");"));
     }
 }

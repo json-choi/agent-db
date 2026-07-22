@@ -55,23 +55,21 @@ pub async fn run_read(
                 (with_headers(c, pool, sql).await, r, t)
             }
             Pool::Mysql(pool) => {
-                let (c, r, t) =
-                    stream_capped(
-                        sqlx::query(AssertSqlSafe(sql)).fetch(pool),
-                        max,
-                        mysql_value,
-                    )
-                    .await?;
+                let (c, r, t) = stream_capped(
+                    sqlx::query(AssertSqlSafe(sql)).fetch(pool),
+                    max,
+                    mysql_value,
+                )
+                .await?;
                 (with_headers(c, pool, sql).await, r, t)
             }
             Pool::Sqlite(pool) => {
-                let (c, r, t) =
-                    stream_capped(
-                        sqlx::query(AssertSqlSafe(sql)).fetch(pool),
-                        max,
-                        sqlite_value,
-                    )
-                    .await?;
+                let (c, r, t) = stream_capped(
+                    sqlx::query(AssertSqlSafe(sql)).fetch(pool),
+                    max,
+                    sqlite_value,
+                )
+                .await?;
                 (with_headers(c, pool, sql).await, r, t)
             }
         };
@@ -230,9 +228,7 @@ pub(crate) fn pg_value(row: &PgRow, i: usize) -> Value {
         }
         "UUID" => jv(row.try_get::<uuid::Uuid, _>(i).map(|u| u.to_string())),
         "JSON" | "JSONB" => row.try_get::<Value, _>(i).unwrap_or(Value::Null),
-        "TIMESTAMPTZ" => {
-            jv(row.try_get::<DateTime<Utc>, _>(i).map(|t| t.to_rfc3339()))
-        }
+        "TIMESTAMPTZ" => jv(row.try_get::<DateTime<Utc>, _>(i).map(|t| t.to_rfc3339())),
         "TIMESTAMP" => jv(row.try_get::<NaiveDateTime, _>(i).map(iso_dt)),
         "DATE" => jv(row.try_get::<NaiveDate, _>(i).map(|t| t.to_string())),
         "TIME" => jv(row.try_get::<NaiveTime, _>(i).map(|t| t.to_string())),
@@ -293,7 +289,11 @@ fn arr<T>(
     r: Result<Vec<Option<T>>, sqlx::Error>,
     f: impl Fn(T) -> Value,
 ) -> Result<Vec<Value>, sqlx::Error> {
-    r.map(|v| v.into_iter().map(|x| x.map(&f).unwrap_or(Value::Null)).collect())
+    r.map(|v| {
+        v.into_iter()
+            .map(|x| x.map(&f).unwrap_or(Value::Null))
+            .collect()
+    })
 }
 
 /// Decode a PG array into a JSON array of the element rendering. sqlx names array types
@@ -312,7 +312,9 @@ fn pg_array(row: &PgRow, i: usize, ty: &str) -> Value {
             arr(row.try_get(i), |s: String| Value::from(s))
         }
         "UUID" => arr(row.try_get(i), |u: Uuid| Value::from(u.to_string())),
-        "TIMESTAMPTZ" => arr(row.try_get(i), |t: DateTime<Utc>| Value::from(t.to_rfc3339())),
+        "TIMESTAMPTZ" => arr(row.try_get(i), |t: DateTime<Utc>| {
+            Value::from(t.to_rfc3339())
+        }),
         "TIMESTAMP" => arr(row.try_get(i), |t: NaiveDateTime| Value::from(iso_dt(t))),
         "DATE" => arr(row.try_get(i), |t: NaiveDate| Value::from(t.to_string())),
         "TIME" => arr(row.try_get(i), |t: NaiveTime| Value::from(t.to_string())),
@@ -334,7 +336,9 @@ fn pg_enum_array(row: &PgRow, i: usize, ty: &str) -> Value {
         if matches!(inner.kind(), PgTypeKind::Enum(_)) {
             if let Ok(v) = row.try_get_unchecked::<Vec<Option<String>>, _>(i) {
                 return Value::Array(
-                    v.into_iter().map(|x| x.map(Value::from).unwrap_or(Value::Null)).collect(),
+                    v.into_iter()
+                        .map(|x| x.map(Value::from).unwrap_or(Value::Null))
+                        .collect(),
                 );
             }
         }
@@ -385,13 +389,23 @@ fn fmt_interval(iv: &PgInterval) -> String {
     let mut out: Vec<String> = Vec::new();
     let (years, mons) = (iv.months / 12, iv.months % 12);
     if years != 0 {
-        out.push(format!("{years} year{}", if years.abs() == 1 { "" } else { "s" }));
+        out.push(format!(
+            "{years} year{}",
+            if years.abs() == 1 { "" } else { "s" }
+        ));
     }
     if mons != 0 {
-        out.push(format!("{mons} mon{}", if mons.abs() == 1 { "" } else { "s" }));
+        out.push(format!(
+            "{mons} mon{}",
+            if mons.abs() == 1 { "" } else { "s" }
+        ));
     }
     if iv.days != 0 {
-        out.push(format!("{} day{}", iv.days, if iv.days.abs() == 1 { "" } else { "s" }));
+        out.push(format!(
+            "{} day{}",
+            iv.days,
+            if iv.days.abs() == 1 { "" } else { "s" }
+        ));
     }
     if iv.microseconds != 0 || out.is_empty() {
         let sign = if iv.microseconds < 0 { "-" } else { "" };
@@ -402,7 +416,10 @@ fn fmt_interval(iv: &PgInterval) -> String {
             out.push(format!("{sign}{h:02}:{m:02}:{s:02}"));
         } else {
             let frac = format!("{us:06}");
-            out.push(format!("{sign}{h:02}:{m:02}:{s:02}.{}", frac.trim_end_matches('0')));
+            out.push(format!(
+                "{sign}{h:02}:{m:02}:{s:02}.{}",
+                frac.trim_end_matches('0')
+            ));
         }
     }
     out.join(" ")
@@ -466,9 +483,7 @@ fn mysql_decode_route(ty: &str) -> MySqlDecodeRoute {
         return MySqlDecodeRoute::Binary;
     }
     match ty {
-        "TINYINT" | "SMALLINT" | "MEDIUMINT" | "INT" | "BIGINT" => {
-            MySqlDecodeRoute::SignedInteger
-        }
+        "TINYINT" | "SMALLINT" | "MEDIUMINT" | "INT" | "BIGINT" => MySqlDecodeRoute::SignedInteger,
         "FLOAT" => MySqlDecodeRoute::Float32,
         "DOUBLE" => MySqlDecodeRoute::Float64,
         "DECIMAL" | "NEWDECIMAL" => MySqlDecodeRoute::Decimal,
@@ -498,9 +513,7 @@ pub(crate) fn mysql_value(row: &MySqlRow, i: usize) -> Value {
             Ok(d) => Value::String(d.to_string()),
             Err(_) => null_or_marker(row, i, &ty),
         },
-        MySqlDecodeRoute::Text => {
-            jv(row.try_get::<String, _>(i))
-        }
+        MySqlDecodeRoute::Text => jv(row.try_get::<String, _>(i)),
         // SET is textual on the wire, but SQLx 0.8 omits ColumnType::Set from
         // String::compatible. The unchecked get skips only that type guard while
         // retaining SQLx's normal UTF-8 decoder.
@@ -508,12 +521,10 @@ pub(crate) fn mysql_value(row: &MySqlRow, i: usize) -> Value {
             Ok(value) => Value::from(value),
             Err(_) => null_or_marker(row, i, &ty),
         },
-        MySqlDecodeRoute::DateTime => {
-            jv(row.try_get::<chrono::NaiveDateTime, _>(i).map(iso_dt))
-        }
-        MySqlDecodeRoute::Date => {
-            jv(row.try_get::<chrono::NaiveDate, _>(i).map(|t| t.to_string()))
-        }
+        MySqlDecodeRoute::DateTime => jv(row.try_get::<chrono::NaiveDateTime, _>(i).map(iso_dt)),
+        MySqlDecodeRoute::Date => jv(row
+            .try_get::<chrono::NaiveDate, _>(i)
+            .map(|t| t.to_string())),
         MySqlDecodeRoute::Time => match row.try_get::<MySqlTime, _>(i) {
             Ok(t) => Value::from(fmt_mysql_time(&t)),
             Err(_) => mysql_fallback(row, i, &ty),
@@ -581,9 +592,18 @@ mod tests {
 
     #[test]
     fn mysql_year_and_set_use_their_required_decoder_routes() {
-        assert_eq!(mysql_decode_route("YEAR"), MySqlDecodeRoute::UnsignedInteger);
-        assert_eq!(mysql_decode_route("BIGINT UNSIGNED"), MySqlDecodeRoute::UnsignedInteger);
-        assert_eq!(mysql_decode_route("BIGINT"), MySqlDecodeRoute::SignedInteger);
+        assert_eq!(
+            mysql_decode_route("YEAR"),
+            MySqlDecodeRoute::UnsignedInteger
+        );
+        assert_eq!(
+            mysql_decode_route("BIGINT UNSIGNED"),
+            MySqlDecodeRoute::UnsignedInteger
+        );
+        assert_eq!(
+            mysql_decode_route("BIGINT"),
+            MySqlDecodeRoute::SignedInteger
+        );
         assert_eq!(mysql_decode_route("SET"), MySqlDecodeRoute::Set);
     }
 
@@ -599,16 +619,17 @@ mod tests {
             int_json(-9_007_199_254_740_993),
             Value::String("-9007199254740993".into())
         );
-        assert_eq!(
-            uint_json(u64::MAX),
-            Value::String(u64::MAX.to_string())
-        );
+        assert_eq!(uint_json(u64::MAX), Value::String(u64::MAX.to_string()));
         assert_eq!(uint_json(10), Value::from(10u64));
     }
 
     #[test]
     fn interval_formats_psql_style() {
-        let iv = |months, days, microseconds| PgInterval { months, days, microseconds };
+        let iv = |months, days, microseconds| PgInterval {
+            months,
+            days,
+            microseconds,
+        };
         assert_eq!(fmt_interval(&iv(0, 0, 0)), "00:00:00");
         assert_eq!(fmt_interval(&iv(0, 1, 7_380_000_000)), "1 day 02:03:00");
         assert_eq!(fmt_interval(&iv(14, 5, 0)), "1 year 2 mons 5 days");
@@ -624,7 +645,10 @@ mod tests {
     fn range_display_is_canonical() {
         // pg_range delegates to PgRange's Display; lock the "[start,end)" rendering.
         use std::ops::Bound;
-        let r = PgRange { start: Bound::Included(1_i32), end: Bound::Excluded(5_i32) };
+        let r = PgRange {
+            start: Bound::Included(1_i32),
+            end: Bound::Excluded(5_i32),
+        };
         assert_eq!(r.to_string(), "[1,5)");
     }
 
@@ -639,10 +663,19 @@ mod tests {
     fn array_element_name_is_base_minus_suffix() {
         // pg_array strips the "[]" sqlx appends to array display names.
         assert_eq!("INT4[]".strip_suffix("[]"), Some("INT4"));
-        assert_eq!("CALLS_STATUS_ENUM[]".strip_suffix("[]"), Some("CALLS_STATUS_ENUM"));
+        assert_eq!(
+            "CALLS_STATUS_ENUM[]".strip_suffix("[]"),
+            Some("CALLS_STATUS_ENUM")
+        );
         // scalar rendering used by array arms: big int8 elements stay strings, ints stay numbers
-        let elems: Vec<Value> = vec![1_i64, 9_007_199_254_740_993].into_iter().map(int_json).collect();
-        assert_eq!(Value::Array(elems), serde_json::json!([1, "9007199254740993"]));
+        let elems: Vec<Value> = vec![1_i64, 9_007_199_254_740_993]
+            .into_iter()
+            .map(int_json)
+            .collect();
+        assert_eq!(
+            Value::Array(elems),
+            serde_json::json!([1, "9007199254740993"])
+        );
     }
 
     #[test]

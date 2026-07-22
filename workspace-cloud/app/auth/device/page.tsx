@@ -4,6 +4,7 @@ import { headers } from "next/headers";
 import { Brand } from "../../components/Brand";
 import { auth } from "../../../lib/auth";
 import { DeviceApproval } from "./DeviceApproval";
+import { DeviceAccountActions } from "./DeviceAccountActions";
 import { SignInButton } from "../sign-in/SignInButton";
 
 export default async function DevicePage({
@@ -40,6 +41,7 @@ export default async function DevicePage({
         ) : session ? (
           <div>
             <div className="signed-user"><span>{session.user.name.slice(0, 1).toUpperCase()}</span><div><strong>{session.user.name}</strong><small>{session.user.email}</small></div></div>
+            <DeviceAccountActions currentUserId={session.user.id} userCode={userCode} />
             <DeviceApproval userCode={userCode} />
           </div>
         ) : (

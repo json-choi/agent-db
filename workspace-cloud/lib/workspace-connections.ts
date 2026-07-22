@@ -14,7 +14,7 @@ const forbiddenKeys = new Set([
   "url", "username", "extraParams", "certificate", "privateKey",
 ]);
 
-export type SharedConnectionInput = {
+type SharedConnectionInput = {
   name: string;
   engine: (typeof engines)[number];
   provider: (typeof providers)[number];
@@ -33,7 +33,13 @@ function text(value: unknown, max: number, required = false): string | null {
   if (value == null && !required) return null;
   if (typeof value !== "string") throw new Error("Expected text");
   const normalized = value.trim();
-  if ((required && !normalized) || normalized.length > max) throw new Error("Invalid text length");
+  if (
+    (required && !normalized) ||
+    normalized.length > max ||
+    /[\u0000-\u001f\u007f]/.test(normalized)
+  ) {
+    throw new Error("Invalid text value");
+  }
   return normalized || null;
 }
 

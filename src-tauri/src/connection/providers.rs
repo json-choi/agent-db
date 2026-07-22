@@ -60,7 +60,10 @@ pub fn apply_pg_tuning(p: &ConnectionProfile, mut opts: PgConnectOptions) -> PgC
 }
 
 /// Apply MySQL per-provider tuning.
-pub fn apply_mysql_tuning(p: &ConnectionProfile, mut opts: MySqlConnectOptions) -> MySqlConnectOptions {
+pub fn apply_mysql_tuning(
+    p: &ConnectionProfile,
+    mut opts: MySqlConnectOptions,
+) -> MySqlConnectOptions {
     if resolve(p) == Provider::PlanetScale {
         // PlanetScale requires TLS with identity verification.
         opts = opts.ssl_mode(MySqlSslMode::VerifyIdentity);
@@ -102,8 +105,14 @@ mod tests {
 
     #[test]
     fn detects_providers() {
-        assert_eq!(detect(&profile("ep-x-pooler.us-east-2.aws.neon.tech")), Provider::Neon);
-        assert_eq!(detect(&profile("xyz.connect.psdb.cloud")), Provider::PlanetScale);
+        assert_eq!(
+            detect(&profile("ep-x-pooler.us-east-2.aws.neon.tech")),
+            Provider::Neon
+        );
+        assert_eq!(
+            detect(&profile("xyz.connect.psdb.cloud")),
+            Provider::PlanetScale
+        );
         assert_eq!(detect(&profile("localhost")), Provider::Generic);
         let mut planetscale = profile("xyz.connect.psdb.cloud");
         planetscale.engine = Engine::Mysql;

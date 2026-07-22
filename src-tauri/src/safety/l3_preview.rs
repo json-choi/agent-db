@@ -209,8 +209,8 @@ async fn exec_rollback(pool: PoolRef<'_>, sql: &str) -> AppResult<i64> {
             let _ = sqlx::query(AssertSqlSafe(format!(
                 "SET LOCAL statement_timeout = {STATEMENT_TIMEOUT_MS}"
             )))
-                .execute(&mut *conn)
-                .await;
+            .execute(&mut *conn)
+            .await;
             run!(conn)
         }
         PoolRef::Mysql(p) => {
@@ -269,7 +269,8 @@ mod tests {
     #[test]
     fn finds_nested_row_estimate() {
         let v: serde_json::Value =
-            serde_json::from_str(r#"[{"Plan":{"Node Type":"Seq Scan","Plan Rows":1234}}]"#).unwrap();
+            serde_json::from_str(r#"[{"Plan":{"Node Type":"Seq Scan","Plan Rows":1234}}]"#)
+                .unwrap();
         assert_eq!(find_number(&v, &["Plan Rows"]), Some(1234));
     }
 

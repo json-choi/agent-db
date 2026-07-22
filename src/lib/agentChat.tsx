@@ -42,7 +42,7 @@ interface AgentChatValue {
   send: (
     text: string,
     provider: AgentProvider,
-    connectionId: string | null,
+    connectionId: string,
     model?: string,
     effort?: string,
   ) => void;
@@ -142,7 +142,7 @@ export function AgentChatProvider({ children }: { children: ReactNode }) {
     (
       text: string,
       provider: AgentProvider,
-      connectionId: string | null,
+      connectionId: string,
       model?: string,
       effort?: string,
     ) => {
@@ -150,8 +150,8 @@ export function AgentChatProvider({ children }: { children: ReactNode }) {
       const turnId = window.crypto.randomUUID();
       const turnStartIso = new Date().toISOString();
       // Captured once at call time: if the user navigates to a different thread while
-      // createChatThread is still in flight below, this stays the draft's original (null)
-      // value so the late setThreadId doesn't snap the view back to the new draft thread.
+      // createChatThread is still in flight below, this stays the draft's original value
+      // so the late setThreadId doesn't snap the view back to the new draft thread.
       const initialThreadId = threadId;
 
       async function run() {

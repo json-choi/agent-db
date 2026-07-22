@@ -554,8 +554,11 @@ mod tests {
     #[test]
     fn bridge_candidates_include_macos_bundle_resources() {
         let exe = Path::new("/Applications/DopeDB.app/Contents/MacOS/dopedb");
-        assert!(bridge_binary_candidates(exe, "bridge")
-            .contains(&PathBuf::from("/Applications/DopeDB.app/Contents/Resources/bridge")));
+        assert!(
+            bridge_binary_candidates(exe, "bridge").contains(&PathBuf::from(
+                "/Applications/DopeDB.app/Contents/Resources/bridge"
+            ))
+        );
     }
 
     #[cfg(windows)]

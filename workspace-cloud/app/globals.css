@@ -20,6 +20,25 @@
   --ds-control-md: 38px;
   --ds-control-field: 42px;
   --ds-control-lg: 52px;
+  --ds-font-size-2xs: 9px;
+  --ds-font-size-xs: 10px;
+  --ds-font-size-sm: 11px;
+  --ds-font-size-ui: 12px;
+  --ds-line-body: 1.5;
+  --ds-space-1: 4px;
+  --ds-space-2: 8px;
+  --ds-space-3: 12px;
+  --ds-space-4: 16px;
+  --ds-space-5: 20px;
+  --ds-space-6: 24px;
+  --ds-border-width: 1px;
+  --ds-radius-pill: 999px;
+  --ds-icon-xs: 16px;
+  --ds-z-popover: 5;
+  --ds-popover-width: 320px;
+  --ds-popover-height: 430px;
+  --ds-shadow-popover: 0 24px 70px color-mix(in srgb, var(--ds-background) 70%, transparent);
+  --ds-disabled-opacity: .55;
 }
 
 * { box-sizing: border-box; }
@@ -81,8 +100,18 @@ body::before {
 .signed-user div, .user-chip div { display: flex; flex-direction: column; gap: 2px; }
 .signed-user strong, .user-chip strong { font-size: 12px; }
 .signed-user small, .user-chip small, .expiry-note { color: var(--ds-text-muted); font-size: 10px; }
+.device-account-actions { --ds-row-control-size: var(--ds-control-md); margin-top: var(--ds-space-2); display: grid; border-top: var(--ds-border-width) solid var(--ds-border); }
+.device-account-actions > button, .device-account-actions > a { min-height: var(--ds-control-md); display: flex; align-items: center; justify-content: space-between; gap: var(--ds-space-3); padding: 0 var(--ds-space-3); border: 0; border-bottom: var(--ds-border-width) solid var(--ds-border); background: transparent; color: var(--ds-text); cursor: pointer; font-size: var(--ds-font-size-xs); }
+.device-account-actions > button small { overflow: hidden; color: var(--ds-text-muted); text-overflow: ellipsis; white-space: nowrap; }
+.device-account-actions > a { justify-content: flex-start; color: var(--ds-text-muted); }
+.device-account-actions > button:hover:not(:disabled), .device-account-actions > a:hover { color: var(--ds-text); background: var(--ds-surface-raised); }
 .expiry-note { display: block; margin-top: 18px; }
 .success-mark { width: 54px; height: 54px; display: grid; place-items: center; margin-bottom: 38px; background: var(--ds-accent); color: var(--ds-text-inverse); font-size: 23px; }
+.invitation-account-list { margin-top: var(--ds-space-4); display: grid; border-top: var(--ds-border-width) solid var(--ds-border); }
+.invitation-account-list > small { padding: var(--ds-space-3) 0 var(--ds-space-2); color: var(--ds-text-muted); font-size: var(--ds-font-size-2xs); }
+.invitation-account-list > button { min-height: var(--ds-control-field); display: flex; align-items: center; justify-content: space-between; gap: var(--ds-space-3); padding: 0 var(--ds-space-2); border: 0; border-bottom: var(--ds-border-width) solid var(--ds-border); background: transparent; color: var(--ds-text); cursor: pointer; }
+.invitation-account-list > button small { color: var(--ds-text-muted); }
+.invitation-add-account { display: grid; place-items: center; font-size: var(--ds-font-size-sm); }
 
 .console-shell { min-height: 100vh; display: grid; grid-template-columns: 250px minmax(0, 1fr); }
 .console-nav { min-height: 100vh; position: sticky; top: 0; padding: 28px; border-right: 1px solid var(--ds-border); display: flex; flex-direction: column; background: color-mix(in srgb, var(--ds-background) 82%, transparent); }
@@ -91,7 +120,25 @@ body::before {
 .console-nav nav a:last-child { border-bottom: 1px solid var(--ds-border); }
 .console-nav nav a.active { color: var(--ds-text); }
 .console-nav nav span { color: var(--ds-accent); font: 9px monospace; margin-right: 15px; }
-.signout { border: 0; background: none; color: var(--ds-text-muted); padding: 0; margin-top: auto; cursor: pointer; font-size: 11px; }
+.account-switcher { position: relative; margin-top: auto; }
+.account-switcher-trigger { width: 100%; min-height: var(--ds-control-md); display: grid; grid-template-columns: var(--ds-control-sm) minmax(0, 1fr) auto; align-items: center; gap: var(--ds-space-2); padding: 0; border: 0; background: transparent; color: var(--ds-text); cursor: pointer; text-align: left; }
+.account-switcher-trigger > span, .account-switcher-row > button:first-child > span { width: var(--ds-control-sm); height: var(--ds-control-sm); display: grid; place-items: center; border-radius: var(--ds-radius-pill); background: var(--ds-accent); color: var(--ds-text-on-accent); font-size: var(--ds-font-size-xs); font-weight: 800; }
+.account-switcher-trigger strong { overflow: hidden; text-overflow: ellipsis; color: var(--ds-text-muted); font-size: var(--ds-font-size-xs); white-space: nowrap; }
+.account-switcher-trigger i { color: var(--ds-text-muted); font-style: normal; }
+.account-switcher-menu { position: absolute; left: 0; bottom: calc(100% + var(--ds-space-3)); z-index: var(--ds-z-popover); width: min(var(--ds-popover-width), calc(100vw - var(--ds-space-5) - var(--ds-space-5))); max-height: min(var(--ds-popover-height), calc(100vh - var(--ds-space-5) - var(--ds-space-5) - var(--ds-space-5) - var(--ds-space-5))); overflow: auto; padding: var(--ds-space-1); border: var(--ds-border-width) solid var(--ds-border); background: var(--ds-surface); box-shadow: var(--ds-shadow-popover); }
+.account-switcher-row { display: grid; grid-template-columns: minmax(0, 1fr) var(--ds-control-sm); }
+.account-switcher-row > button, .account-switcher-menu > a, .account-signout-all { min-height: var(--ds-control-md); border: 0; background: transparent; color: var(--ds-text); cursor: pointer; }
+.account-switcher-row > button:first-child { min-width: 0; display: grid; grid-template-columns: var(--ds-control-sm) minmax(0, 1fr) var(--ds-icon-xs); align-items: center; gap: var(--ds-space-2); padding: var(--ds-space-1) var(--ds-space-2); text-align: left; }
+.account-switcher-row > button:first-child div { min-width: 0; display: grid; gap: calc(var(--ds-space-1) / 2); }
+.account-switcher-row strong, .account-switcher-row small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-switcher-row strong { font-size: var(--ds-font-size-sm); }.account-switcher-row small { color: var(--ds-text-muted); font-size: var(--ds-font-size-2xs); }
+.account-switcher-row i { color: var(--ds-accent); font-style: normal; }
+.account-revoke { width: var(--ds-control-sm); padding: 0; color: var(--ds-text-muted) !important; }
+.account-switcher-menu > a, .account-signout-all { width: 100%; display: flex; align-items: center; padding: 0 var(--ds-space-2); font-size: var(--ds-font-size-xs); text-align: left; }
+.account-signout-all { color: var(--ds-danger); }
+.account-switcher-row > button:hover:not(:disabled), .account-switcher-menu > a:hover, .account-signout-all:hover:not(:disabled) { background: var(--ds-surface-raised); }
+.account-switcher-menu button:disabled { cursor: wait; opacity: var(--ds-disabled-opacity); }
+.account-switcher-menu > p { margin: var(--ds-space-2); color: var(--ds-danger); font-size: var(--ds-font-size-2xs); line-height: var(--ds-line-body); }
 .console-main { padding: 52px clamp(32px, 6vw, 90px) 90px; max-width: 1320px; width: 100%; }
 .console-header { display: flex; align-items: flex-end; justify-content: space-between; padding-bottom: 40px; border-bottom: 1px solid var(--ds-border); }
 .console-header h1 { font: 400 clamp(40px, 5vw, 68px) Georgia, serif; letter-spacing: -.055em; margin: 14px 0 0; }
@@ -115,10 +162,13 @@ body::before {
 .member-row, .invitation-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--ds-border); }
 .member-row > div, .invitation-row > div { display: grid; gap: 3px; }
 .member-row select, .invite-form select { border: 1px solid var(--ds-border); background: var(--ds-surface-inset); color: var(--ds-text); padding: 8px; }
+.member-actions, .invitation-actions { --ds-row-control-size: var(--ds-control-sm); display: flex !important; align-items: center; gap: var(--ds-space-2) !important; }
+.member-actions button { min-height: var(--ds-control-sm); padding: 0 var(--ds-space-2); border: var(--ds-border-width) solid var(--ds-border); background: transparent; color: var(--ds-danger); cursor: pointer; font-size: var(--ds-font-size-2xs); }
 .invite-form { --ds-row-control-size: var(--ds-control-field); display: grid; grid-template-columns: minmax(0, 1fr) auto auto; }
 .invite-form input { min-width: 0; border: 1px solid var(--ds-border); background: var(--ds-surface-inset); color: var(--ds-text); padding: 10px; }
 .invite-form button, .invitation-row button { border: 0; background: var(--ds-accent); color: var(--ds-text-on-accent); padding: 0 12px; font-size: 10px; font-weight: 800; cursor: pointer; }
-.invitation-row button { padding: 7px 9px; }
+.invitation-row button { min-height: var(--ds-control-sm); padding: 0 var(--ds-space-2); }
+.member-actions button:disabled, .invitation-actions button:disabled { cursor: wait; opacity: var(--ds-disabled-opacity); }
 .invitation-list p { margin: 9px 0 0; line-height: 1.5; }
 .workspace-monogram { width: 48px; height: 48px; display: grid; place-items: center; border: 1px solid color-mix(in srgb, var(--ds-accent) 45%, transparent); color: var(--ds-accent); font: 11px monospace; }
 .workspace-card h3 { margin: 0 0 5px; font-size: 14px; }
@@ -139,6 +189,11 @@ body::before {
 .device-icon { color: var(--ds-accent); }
 .device-row div { display: flex; flex-direction: column; gap: 3px; }
 .device-row strong { font-size: 12px; }.device-row small, .device-row time { color: var(--ds-text-muted); font: 9px monospace; text-transform: uppercase; }
+.device-row > button { min-height: var(--ds-control-sm); padding: 0 var(--ds-space-3); border: var(--ds-border-width) solid var(--ds-border); background: transparent; color: var(--ds-text-muted); cursor: pointer; font-size: var(--ds-font-size-2xs); }
+.device-row > button:hover:not(:disabled) { border-color: var(--ds-accent); color: var(--ds-text); }
+.device-row > button:disabled { cursor: wait; opacity: var(--ds-disabled-opacity); }
+.device-empty, .device-error { margin: 0; padding: var(--ds-space-5) var(--ds-space-1); color: var(--ds-text-muted); font-size: var(--ds-font-size-xs); }
+.device-error { color: var(--ds-danger); }
 
 @media (max-width: 1100px) {
   .workspace-grid {
@@ -156,7 +211,8 @@ body::before {
   .auth-footer span:last-child { display: none; }
   .console-shell { display: block; }
   .console-nav { min-height: auto; height: auto; position: static; border-right: 0; border-bottom: 1px solid var(--ds-border); flex-direction: row; align-items: center; justify-content: space-between; }
-  .console-nav nav, .console-nav form { display: none; }
+  .console-nav nav { display: none; }
+  .account-switcher { width: min(190px, 55vw); margin-top: 0; }
   .console-main { padding: 38px 22px 70px; }
   .console-header { align-items: flex-start; }.user-chip div { display: none; }
   .section-heading { display: block; }.section-heading p { margin-top: 10px; }

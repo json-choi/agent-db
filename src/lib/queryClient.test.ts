@@ -10,15 +10,20 @@ describe("workspace query lifecycle", () => {
     const auth: WorkspaceAuthState = {
       authenticated: true,
       user: { id: "user-1", email: "user@example.com", displayName: "User" },
+      accounts: [],
     };
     client.setQueryData(qk.workspaceAuth(), auth);
     client.setQueryData(qk.catalog("connection-1"), { tables: [] });
+    client.setQueryData(qk.chatThreads(), [{ id: "thread-1" }]);
+    client.setQueryData(qk.chatMessages("thread-1"), [{ id: "message-1" }]);
     client.setQueryData(qk.drivers(), [{ id: "bundled" }]);
 
     await resetWorkspaceResourceQueries(client);
 
     expect(client.getQueryData(qk.workspaceAuth())).toEqual(auth);
     expect(client.getQueryData(qk.catalog("connection-1"))).toBeUndefined();
+    expect(client.getQueryData(qk.chatThreads())).toBeUndefined();
+    expect(client.getQueryData(qk.chatMessages("thread-1"))).toBeUndefined();
     expect(client.getQueryData(qk.drivers())).toEqual([{ id: "bundled" }]);
   });
 });

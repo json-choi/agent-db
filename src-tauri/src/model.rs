@@ -69,11 +69,29 @@ pub struct WorkspaceAuthUser {
     pub display_name: String,
 }
 
+/// One hosted workspace membership attached to a locally remembered account.
+/// This is display/navigation metadata only; the control plane re-authorizes every
+/// shared-resource request against the account's current Better Auth session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceAccountMembership {
+    pub workspace_id: Uuid,
+    pub role: WorkspaceRole,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceAuthAccount {
+    pub user: WorkspaceAuthUser,
+    pub memberships: Vec<WorkspaceAccountMembership>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceAuthState {
     pub authenticated: bool,
     pub user: Option<WorkspaceAuthUser>,
+    pub accounts: Vec<WorkspaceAuthAccount>,
 }
 
 /// Expiring RFC 8628 authorization request. The high-entropy device code is kept
@@ -130,39 +148,6 @@ pub enum WorkspaceRole {
     Owner,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WorkspaceMember {
-    pub id: Uuid,
-    pub workspace_id: Uuid,
-    pub user_id: Option<String>,
-    pub display_name: String,
-    pub role: WorkspaceRole,
-    pub status: String,
-    pub joined_at: DateTime<Utc>,
-}
-
-/// Revision and synchronization metadata shared by workspace resources. Credential
-/// references deliberately remain outside this contract and never enter the outbox.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ResourceScope {
-    pub workspace_id: Uuid,
-    pub remote_id: Option<String>,
-    pub revision: i64,
-    pub sync_status: SyncStatus,
-    pub deleted_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum SyncStatus {
-    Local,
-    Dirty,
-    Synced,
-    Conflict,
-}
-
 /// Cached server authority for a shared connection. Personal connections are Local;
 /// team modes are narrowing permissions and never elevate the target DB credential.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -188,48 +173,6 @@ impl WorkspaceConnectionAccess {
     pub fn can_manage(self) -> bool {
         matches!(self, Self::Manage | Self::Local)
     }
-}
-
-/// Provider-neutral authorization input. Workspace authority narrows provider and
-/// database authority; it never manufactures privileges those systems did not grant.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AuthorizationRequest {
-    pub actor: AuthorizationActor,
-    pub action: String,
-    pub resource: AuthorizationResource,
-    pub explicitly_granted: bool,
-    pub explicitly_denied: bool,
-    pub external_capability_available: bool,
-    pub production_access: bool,
-    pub approval_required: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AuthorizationActor {
-    pub member_id: Uuid,
-    pub workspace_id: Uuid,
-    pub role: WorkspaceRole,
-    pub active: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AuthorizationResource {
-    pub workspace_id: Uuid,
-    pub kind: String,
-    pub id: Uuid,
-    pub parent_id: Option<Uuid>,
-    pub environment: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AuthorizationDecision {
-    pub allowed: bool,
-    pub reason: String,
-    pub approval_required: bool,
 }
 
 /// A saved connection. Secrets never live here — only a `secretRef` pointing at the

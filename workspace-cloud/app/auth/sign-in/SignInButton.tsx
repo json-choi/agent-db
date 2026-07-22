@@ -13,7 +13,7 @@ export function SignInButton({ returnTo }: { returnTo: string }) {
     const result = await authClient.signIn.social({
       provider: "google",
       callbackURL: returnTo,
-      errorCallbackURL: "/auth/sign-in?error=oauth_failed",
+      errorCallbackURL: `/auth/sign-in?error=oauth_failed&returnTo=${encodeURIComponent(returnTo)}`,
     });
     if (result.error) {
       setPending(false);

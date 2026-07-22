@@ -12,12 +12,13 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::connection::keychain::{
-    delete_workspace_session, fetch_workspace_session, store_workspace_session,
+    delete_legacy_workspace_session, delete_workspace_session, fetch_legacy_workspace_session,
+    fetch_workspace_session, store_workspace_session,
 };
 use crate::error::{AppError, AppResult};
 use crate::model::{
-    ConnectionProfile, WorkspaceAuthState, WorkspaceAuthUser, WorkspaceConnectionAccess,
-    WorkspaceDeviceAuthorization, WorkspaceLoginPoll, WorkspaceLoginPollStatus,
+    ConnectionProfile, WorkspaceAuthUser, WorkspaceConnectionAccess, WorkspaceDeviceAuthorization,
+    WorkspaceLoginPoll, WorkspaceLoginPollStatus, WorkspaceRole,
 };
 
 const DEFAULT_CONTROL_PLANE_ORIGIN: &str = "https://app.dopedb.dev";
@@ -60,6 +61,7 @@ struct WorkspacesResponse {
 struct RemoteWorkspaceResponse {
     id: String,
     name: String,
+    role: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -114,6 +116,7 @@ struct SharedConnectionRequest<'a> {
 pub(crate) struct RemoteWorkspace {
     pub id: Uuid,
     pub name: String,
+    pub role: WorkspaceRole,
 }
 
 fn origin() -> AppResult<String> {
@@ -180,9 +183,16 @@ async fn oauth_error(response: Response) -> AppError {
     let body = response.json::<OAuthErrorResponse>().await.ok();
     let detail = body
         .as_ref()
-        .and_then(|value| value.error_description.as_deref().or(value.message.as_deref()))
+        .and_then(|value| {
+            value
+                .error_description
+                .as_deref()
+                .or(value.message.as_deref())
+        })
         .unwrap_or("the control plane rejected the request");
-    AppError::Network(format!("workspace authentication returned {status}: {detail}"))
+    AppError::Network(format!(
+        "workspace authentication returned {status}: {detail}"
+    ))
 }
 
 /// Start a single-use ten-minute device authorization request.
@@ -203,7 +213,9 @@ pub async fn begin_login() -> AppResult<WorkspaceDeviceAuthorization> {
         .map_err(|error| request_error("reading workspace login response", error))?;
     let expected_verification_prefix = format!("{origin}/auth/device?user_code=");
     if !valid_device_code(&value.device_code)
-        || !value.verification_uri_complete.starts_with(&expected_verification_prefix)
+        || !value
+            .verification_uri_complete
+            .starts_with(&expected_verification_prefix)
         || !(1..=60).contains(&value.interval)
         || !(1..=3600).contains(&value.expires_in)
     {
@@ -238,32 +250,51 @@ async fn session_for_token(token: &str) -> AppResult<Option<WorkspaceAuthUser>> 
         .json::<SessionResponse>()
         .await
         .map_err(|error| request_error("reading workspace session", error))?;
+    if Uuid::parse_str(&session.user.id).is_err()
+        || session.user.email.trim().is_empty()
+        || session.user.email.len() > 320
+        || session.user.display_name.trim().is_empty()
+        || session.user.display_name.len() > 120
+    {
+        return Err(AppError::Network(
+            "workspace session returned an invalid user identity".into(),
+        ));
+    }
     Ok(Some(session.user))
 }
 
-/// Validate the session already stored in the OS credential store.
-pub async fn auth_state() -> AppResult<WorkspaceAuthState> {
-    let Some(token) = fetch_workspace_session()? else {
-        return Ok(WorkspaceAuthState {
-            authenticated: false,
-            user: None,
-        });
+/// Validate one account-specific session already stored in the OS credential store.
+pub async fn auth_user(user_id: &str) -> AppResult<Option<WorkspaceAuthUser>> {
+    let Some(token) = fetch_workspace_session(user_id)?.map(Zeroizing::new) else {
+        return Ok(None);
     };
-    let user = session_for_token(&token).await?;
-    if user.is_none() {
-        delete_workspace_session()?;
+    let user = session_for_token(token.as_str()).await?;
+    if user.as_ref().map(|user| user.id.as_str()) != Some(user_id) {
+        delete_workspace_session(user_id)?;
+        return Ok(None);
     }
-    Ok(WorkspaceAuthState {
-        authenticated: user.is_some(),
-        user,
-    })
+    Ok(user)
+}
+
+/// One-time upgrade from the old fixed credential item. The token is validated before
+/// it is copied to its account-specific key, so corrupt legacy state is never retained.
+pub async fn migrate_legacy_session() -> AppResult<Option<WorkspaceAuthUser>> {
+    let Some(token) = fetch_legacy_workspace_session()?.map(Zeroizing::new) else {
+        return Ok(None);
+    };
+    let user = session_for_token(token.as_str()).await?;
+    if let Some(user) = user.as_ref() {
+        store_workspace_session(&user.id, token.as_str())?;
+    }
+    delete_legacy_workspace_session()?;
+    Ok(user)
 }
 
 /// Revoke the current Better Auth session when the control plane is reachable, then
 /// always remove the native client's credential. Remote revocation is best-effort so
 /// losing the network cannot trap someone in a locally signed-in desktop session.
-pub async fn sign_out() -> AppResult<()> {
-    let token = fetch_workspace_session()?.map(Zeroizing::new);
+pub async fn sign_out(user_id: &str) -> AppResult<()> {
+    let token = fetch_workspace_session(user_id)?.map(Zeroizing::new);
     if let Some(token) = token.as_deref() {
         let remote_result = async {
             let origin = origin()?;
@@ -288,25 +319,29 @@ pub async fn sign_out() -> AppResult<()> {
             );
         }
     }
-    delete_workspace_session()
+    delete_workspace_session(user_id)
 }
 
 /// Fetch organization memberships for the stored Bearer session. Only identifiers
 /// and display names enter the local store; Better Auth remains membership authority.
-pub(crate) async fn remote_workspaces() -> AppResult<Vec<RemoteWorkspace>> {
-    let token = fetch_workspace_session()?.ok_or_else(|| {
-        AppError::Config("workspace memberships require an authenticated session".into())
-    })?;
+pub(crate) async fn remote_workspaces(user_id: &str) -> AppResult<Vec<RemoteWorkspace>> {
+    let token = fetch_workspace_session(user_id)?
+        .map(Zeroizing::new)
+        .ok_or_else(|| {
+            AppError::Config("workspace memberships require an authenticated session".into())
+        })?;
     let origin = origin()?;
     let response = client()?
         .get(format!("{origin}/api/v1/workspaces"))
-        .bearer_auth(&token)
+        .bearer_auth(token.as_str())
         .send()
         .await
         .map_err(|error| request_error("loading workspace memberships", error))?;
     if response.status() == StatusCode::UNAUTHORIZED {
-        delete_workspace_session()?;
-        return Err(AppError::Network("workspace session is no longer active".into()));
+        delete_workspace_session(user_id)?;
+        return Err(AppError::Network(
+            "workspace session is no longer active".into(),
+        ));
     }
     if !response.status().is_success() {
         return Err(oauth_error(response).await);
@@ -325,7 +360,19 @@ pub(crate) async fn remote_workspaces() -> AppResult<Vec<RemoteWorkspace>> {
                 "workspace membership returned an invalid name".into(),
             ));
         }
-        workspaces.push(RemoteWorkspace { id, name });
+        let role = match workspace.role.as_deref().unwrap_or("viewer") {
+            "viewer" => WorkspaceRole::Viewer,
+            "analyst" => WorkspaceRole::Analyst,
+            "editor" => WorkspaceRole::Editor,
+            "admin" => WorkspaceRole::Admin,
+            "owner" => WorkspaceRole::Owner,
+            _ => {
+                return Err(AppError::Network(
+                    "workspace membership returned an invalid role".into(),
+                ))
+            }
+        };
+        workspaces.push(RemoteWorkspace { id, name, role });
     }
     Ok(workspaces)
 }
@@ -334,49 +381,63 @@ fn remote_connection(value: RemoteConnectionResponse) -> AppResult<(ConnectionPr
     let id = Uuid::parse_str(&value.id)
         .map_err(|_| AppError::Network("shared connection returned an invalid id".into()))?;
     if value.name.trim().is_empty() || value.name.len() > 120 || value.host.len() > 512 {
-        return Err(AppError::Network("shared connection returned invalid metadata".into()));
+        return Err(AppError::Network(
+            "shared connection returned invalid metadata".into(),
+        ));
     }
     let access = crate::store::parse_workspace_access(value.access_mode)?;
     if matches!(access, WorkspaceConnectionAccess::Local) {
-        return Err(AppError::Network("shared connection returned invalid access".into()));
+        return Err(AppError::Network(
+            "shared connection returned invalid access".into(),
+        ));
     }
     let revision = value.revision;
     if revision < 1 {
-        return Err(AppError::Network("shared connection returned invalid revision".into()));
+        return Err(AppError::Network(
+            "shared connection returned invalid revision".into(),
+        ));
     }
-    Ok((ConnectionProfile {
-        id,
-        name: value.name,
-        engine: crate::store::parse_engine(value.engine)?,
-        provider: crate::store::parse_provider(value.provider)?,
-        driver_id: value.driver_id,
-        host: value.host,
-        port: value.port,
-        database: value.database,
-        // Usernames and all secrets are member-local by design.
-        username: String::new(),
-        sslmode: value.sslmode,
-        extra_params: Default::default(),
-        readonly_default: value.readonly_default,
-        allow_writes: value.allow_writes && access.can_write(),
-        secret_ref: None,
-        env: value.env,
-        schema_group: value.schema_group,
-        workspace_access: access,
-    }, revision))
+    Ok((
+        ConnectionProfile {
+            id,
+            name: value.name,
+            engine: crate::store::parse_engine(value.engine)?,
+            provider: crate::store::parse_provider(value.provider)?,
+            driver_id: value.driver_id,
+            host: value.host,
+            port: value.port,
+            database: value.database,
+            // Usernames and all secrets are member-local by design.
+            username: String::new(),
+            sslmode: value.sslmode,
+            extra_params: Default::default(),
+            readonly_default: value.readonly_default,
+            allow_writes: value.allow_writes && access.can_write(),
+            secret_ref: None,
+            env: value.env,
+            schema_group: value.schema_group,
+            workspace_access: access,
+        },
+        revision,
+    ))
 }
 
 /// Fetch redacted shared templates for a workspace using the OS-stored session.
 pub(crate) async fn remote_connections(
+    user_id: &str,
     workspace_id: Uuid,
 ) -> AppResult<Option<Vec<(ConnectionProfile, i64)>>> {
-    let token = fetch_workspace_session()?.ok_or_else(|| {
-        AppError::Config("shared connections require an authenticated session".into())
-    })?;
+    let token = fetch_workspace_session(user_id)?
+        .map(Zeroizing::new)
+        .ok_or_else(|| {
+            AppError::Config("shared connections require an authenticated session".into())
+        })?;
     let origin = origin()?;
     let response = client()?
-        .get(format!("{origin}/api/v1/workspaces/{workspace_id}/connections"))
-        .bearer_auth(&token)
+        .get(format!(
+            "{origin}/api/v1/workspaces/{workspace_id}/connections"
+        ))
+        .bearer_auth(token.as_str())
         .send()
         .await
         .map_err(|error| request_error("loading shared connections", error))?;
@@ -386,7 +447,7 @@ pub(crate) async fn remote_connections(
         return Ok(None);
     }
     if response.status() == StatusCode::UNAUTHORIZED {
-        delete_workspace_session()?;
+        delete_workspace_session(user_id)?;
     }
     if !response.status().is_success() {
         return Err(oauth_error(response).await);
@@ -405,12 +466,15 @@ pub(crate) async fn remote_connections(
 /// Publish only the non-secret portion of a local connection. The request type has
 /// no credential fields, making accidental serialization of `secret_ref` impossible.
 pub(crate) async fn share_connection(
+    user_id: &str,
     workspace_id: Uuid,
     profile: &ConnectionProfile,
 ) -> AppResult<(ConnectionProfile, i64)> {
-    let token = fetch_workspace_session()?.ok_or_else(|| {
-        AppError::Config("sharing a connection requires an authenticated session".into())
-    })?;
+    let token = fetch_workspace_session(user_id)?
+        .map(Zeroizing::new)
+        .ok_or_else(|| {
+            AppError::Config("sharing a connection requires an authenticated session".into())
+        })?;
     let request = SharedConnectionRequest {
         name: &profile.name,
         engine: crate::store::engine_str(profile.engine),
@@ -427,12 +491,17 @@ pub(crate) async fn share_connection(
     };
     let origin = origin()?;
     let response = client()?
-        .post(format!("{origin}/api/v1/workspaces/{workspace_id}/connections"))
-        .bearer_auth(&token)
+        .post(format!(
+            "{origin}/api/v1/workspaces/{workspace_id}/connections"
+        ))
+        .bearer_auth(token.as_str())
         .json(&request)
         .send()
         .await
         .map_err(|error| request_error("sharing connection", error))?;
+    if response.status() == StatusCode::UNAUTHORIZED {
+        delete_workspace_session(user_id)?;
+    }
     if !response.status().is_success() {
         return Err(oauth_error(response).await);
     }
@@ -445,28 +514,63 @@ pub(crate) async fn share_connection(
     )
 }
 
+/// Roll back a newly shared template when a later local credential/cache step fails.
+/// The server performs the same workspace and RBAC checks as every other mutation.
+pub(crate) async fn delete_connection(
+    user_id: &str,
+    workspace_id: Uuid,
+    connection_id: Uuid,
+) -> AppResult<()> {
+    let token = fetch_workspace_session(user_id)?
+        .map(Zeroizing::new)
+        .ok_or_else(|| {
+            AppError::Config(
+                "deleting a shared connection requires an authenticated session".into(),
+            )
+        })?;
+    let origin = origin()?;
+    let response = client()?
+        .delete(format!(
+            "{origin}/api/v1/workspaces/{workspace_id}/connections/{connection_id}"
+        ))
+        .bearer_auth(token.as_str())
+        .send()
+        .await
+        .map_err(|error| request_error("deleting shared connection", error))?;
+    if response.status() == StatusCode::UNAUTHORIZED {
+        delete_workspace_session(user_id)?;
+    }
+    if response.status().is_success() || response.status() == StatusCode::NOT_FOUND {
+        return Ok(());
+    }
+    Err(oauth_error(response).await)
+}
+
 /// Revalidate a shared connection action against the current Better Auth session,
 /// membership, role, and resource scope immediately before local DB access.
 pub(crate) async fn authorize_connection(
+    user_id: &str,
     workspace_id: Uuid,
     connection_id: Uuid,
     write: bool,
 ) -> AppResult<()> {
-    let token = fetch_workspace_session()?.ok_or_else(|| {
-        AppError::Config("shared connection access requires an authenticated session".into())
-    })?;
+    let token = fetch_workspace_session(user_id)?
+        .map(Zeroizing::new)
+        .ok_or_else(|| {
+            AppError::Config("shared connection access requires an authenticated session".into())
+        })?;
     let origin = origin()?;
     let response = client()?
         .post(format!(
             "{origin}/api/v1/workspaces/{workspace_id}/connections/{connection_id}"
         ))
-        .bearer_auth(&token)
+        .bearer_auth(token.as_str())
         .json(&json!({ "action": if write { "write" } else { "read" } }))
         .send()
         .await
         .map_err(|error| request_error("authorizing shared connection", error))?;
     if response.status() == StatusCode::UNAUTHORIZED {
-        delete_workspace_session()?;
+        delete_workspace_session(user_id)?;
     }
     if !response.status().is_success() {
         return Err(oauth_error(response).await);
@@ -493,20 +597,22 @@ pub async fn poll_login(device_code: &str) -> AppResult<WorkspaceLoginPoll> {
         .map_err(|error| request_error("polling workspace login", error))?;
 
     if response.status().is_success() {
-        let token = response
-            .json::<TokenResponse>()
-            .await
-            .map_err(|error| request_error("reading workspace session token", error))?
-            .access_token;
+        let token = Zeroizing::new(
+            response
+                .json::<TokenResponse>()
+                .await
+                .map_err(|error| request_error("reading workspace session token", error))?
+                .access_token,
+        );
         if token.len() < 20 || token.len() > 4096 || token.chars().any(char::is_whitespace) {
             return Err(AppError::Network(
                 "workspace login returned an invalid session token".into(),
             ));
         }
-        let user = session_for_token(&token).await?.ok_or_else(|| {
+        let user = session_for_token(token.as_str()).await?.ok_or_else(|| {
             AppError::Network("workspace login returned an inactive session".into())
         })?;
-        store_workspace_session(&token)?;
+        store_workspace_session(&user.id, token.as_str())?;
         return Ok(WorkspaceLoginPoll {
             status: WorkspaceLoginPollStatus::SignedIn,
             user: Some(user),
@@ -552,7 +658,9 @@ mod tests {
     #[test]
     fn device_code_validation_rejects_untrusted_input() {
         assert!(!valid_device_code("../../not-a-device-code"));
-        assert!(valid_device_code("aB3dE5gH7jK9mN2pQ4rS6tU8vW0xY1zA3bC5dE7f"));
+        assert!(valid_device_code(
+            "aB3dE5gH7jK9mN2pQ4rS6tU8vW0xY1zA3bC5dE7f"
+        ));
     }
 
     #[test]

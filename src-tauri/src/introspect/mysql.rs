@@ -135,7 +135,10 @@ pub async fn introspect(pool: &MySqlPool, skip_fk: bool) -> AppResult<Catalog> {
 async fn fetch_index_rows(pool: &MySqlPool) -> Result<(Vec<MySqlRow>, bool), sqlx::Error> {
     match sqlx::query(IDX_EXPR_SQL).fetch_all(pool).await {
         Ok(rows) => Ok((rows, true)),
-        Err(_) => sqlx::query(IDX_SQL).fetch_all(pool).await.map(|rows| (rows, false)),
+        Err(_) => sqlx::query(IDX_SQL)
+            .fetch_all(pool)
+            .await
+            .map(|rows| (rows, false)),
     }
 }
 

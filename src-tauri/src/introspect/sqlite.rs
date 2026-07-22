@@ -22,7 +22,12 @@ pub async fn introspect(pool: &SqlitePool) -> AppResult<Catalog> {
     .fetch_all(pool)
     .await?
     .into_iter()
-    .map(|r| Ok((r.try_get::<String, _>("name")?, r.try_get::<String, _>("type")?)))
+    .map(|r| {
+        Ok((
+            r.try_get::<String, _>("name")?,
+            r.try_get::<String, _>("type")?,
+        ))
+    })
     .collect::<AppResult<_>>()?;
 
     let mut tables = Vec::with_capacity(entries.len());
@@ -83,7 +88,11 @@ pub async fn introspect(pool: &SqlitePool) -> AppResult<Catalog> {
                 let cn: Option<String> = ir.try_get("name")?;
                 cols.push(cn.unwrap_or_else(|| "(expression)".into()));
             }
-            indexes.push(Index { name: iname, columns: cols, unique: unique != 0 });
+            indexes.push(Index {
+                name: iname,
+                columns: cols,
+                unique: unique != 0,
+            });
         }
 
         // ponytail: exact COUNT(*) — SQLite has no cheap planner estimate. Fine for
@@ -102,7 +111,11 @@ pub async fn introspect(pool: &SqlitePool) -> AppResult<Catalog> {
         tables.push(Table {
             schema: None,
             name,
-            kind: if ty == "view" { "view".into() } else { "table".into() },
+            kind: if ty == "view" {
+                "view".into()
+            } else {
+                "table".into()
+            },
             columns,
             foreign_keys,
             indexes,

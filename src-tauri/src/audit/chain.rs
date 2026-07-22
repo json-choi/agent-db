@@ -51,7 +51,11 @@ fn canonical(f: &AuditFields) -> String {
     field(crate::store::kind_str(f.kind));
     field(f.action);
     field(f.approved_by.unwrap_or(""));
-    field(&f.affected_estimate.map(|n| n.to_string()).unwrap_or_default());
+    field(
+        &f.affected_estimate
+            .map(|n| n.to_string())
+            .unwrap_or_default(),
+    );
     field(f.error.unwrap_or(""));
     out
 }

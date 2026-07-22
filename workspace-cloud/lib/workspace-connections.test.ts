@@ -36,6 +36,13 @@ describe("parseSharedConnection", () => {
     })).toThrow(/Host must not contain credentials/);
   });
 
+  it("rejects control characters in user-visible metadata", () => {
+    expect(() => parseSharedConnection({
+      ...validTemplate,
+      name: "Analytics\nspoofed",
+    })).toThrow(/Invalid text value/);
+  });
+
   it.each([0, 65536, 12.5])("rejects invalid port %s", (port) => {
     expect(() => parseSharedConnection({ ...validTemplate, port })).toThrow(/Invalid port/);
   });

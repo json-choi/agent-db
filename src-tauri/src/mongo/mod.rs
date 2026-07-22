@@ -40,7 +40,10 @@ impl MongoConnection {
 }
 
 /// Open (and verify with a ping) a MongoDB connection for `profile`.
-pub(crate) async fn connect(profile: &ConnectionProfile, secret: &str) -> AppResult<MongoConnection> {
+pub(crate) async fn connect(
+    profile: &ConnectionProfile,
+    secret: &str,
+) -> AppResult<MongoConnection> {
     let uri = build_uri(profile, secret)?;
     let mut options = ClientOptions::parse(&uri)
         .await
@@ -195,7 +198,10 @@ mod tests {
             encode_component(&fake_password)
         );
         assert_eq!(uri, expected);
-        assert!(expected.contains("p%40ss%2Fw%3Ard"), "special chars must be percent-encoded");
+        assert!(
+            expected.contains("p%40ss%2Fw%3Ard"),
+            "special chars must be percent-encoded"
+        );
     }
 
     #[test]
@@ -218,7 +224,10 @@ mod tests {
         p.host = "db1.example.com:27017,db2.example.com:27018".into();
         p.username = String::new();
         let uri = build_uri(&p, "").unwrap();
-        assert_eq!(uri, "mongodb://db1.example.com:27017,db2.example.com:27018/app");
+        assert_eq!(
+            uri,
+            "mongodb://db1.example.com:27017,db2.example.com:27018/app"
+        );
     }
 
     #[test]
@@ -244,7 +253,10 @@ mod tests {
             ),
             &fake_secret,
         );
-        assert!(!msg.contains("s3cr"), "scrubbed message leaked the secret: {msg}");
+        assert!(
+            !msg.contains("s3cr"),
+            "scrubbed message leaked the secret: {msg}"
+        );
         assert!(msg.contains("***"));
     }
 }

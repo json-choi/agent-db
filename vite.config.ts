@@ -13,5 +13,19 @@ export default defineConfig({
   },
   build: {
     target: "esnext",
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          groups: [
+            {
+              name: "react-vendor",
+              test: /node_modules[\\/](?:react|react-dom|@tanstack[\\/]react-query)[\\/]/,
+              includeDependenciesRecursively: true,
+              priority: 20,
+            },
+          ],
+        },
+      },
+    },
   },
 });

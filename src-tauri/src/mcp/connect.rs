@@ -351,7 +351,9 @@ fn open_named_app(name: &str) -> Result<String, String> {
 
 #[cfg(not(any(target_os = "macos", windows)))]
 fn open_named_app(name: &str) -> Result<String, String> {
-    Err(format!("Opening {name} from DopeDB is not supported on this OS yet"))
+    Err(format!(
+        "Opening {name} from DopeDB is not supported on this OS yet"
+    ))
 }
 
 fn load_codex_config() -> Result<(PathBuf, String, DocumentMut), String> {
@@ -506,7 +508,11 @@ mod tests {
     #[test]
     fn which_in_finds_a_binary_in_a_synthetic_path() {
         let dir = tempfile::tempdir().unwrap();
-        let shim = if cfg!(windows) { "claude.cmd" } else { "claude" };
+        let shim = if cfg!(windows) {
+            "claude.cmd"
+        } else {
+            "claude"
+        };
         std::fs::write(dir.path().join(shim), b"").unwrap();
 
         let path = std::env::join_paths([dir.path()]).unwrap();
@@ -528,7 +534,10 @@ mod tests {
         std::fs::write(dir.path().join("claude.cmd"), b"").unwrap();
 
         let path = std::env::join_paths([dir.path()]).unwrap();
-        assert_eq!(which_in(&path, "claude"), Some(dir.path().join("claude.exe")));
+        assert_eq!(
+            which_in(&path, "claude"),
+            Some(dir.path().join("claude.exe"))
+        );
     }
 
     #[cfg(windows)]

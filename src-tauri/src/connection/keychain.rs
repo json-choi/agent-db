@@ -22,7 +22,7 @@ use crate::error::{AppError, AppResult};
 
 /// Credential-store service name (bundle id). Must match the signed bundle identifier.
 const SERVICE: &str = "capital.launcher.dopedb";
-const WORKSPACE_SESSION_ACCOUNT: &str = "workspace-session";
+const LEGACY_WORKSPACE_SESSION_ACCOUNT: &str = "workspace-session";
 static SESSION_CACHE: LazyLock<Mutex<HashMap<String, Zeroizing<String>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -103,33 +103,35 @@ pub fn delete_secret(connection_id: &Uuid) -> AppResult<()> {
     }
 }
 
-/// Store a Better Auth Bearer session without exposing it to the webview.
-pub fn store_workspace_session(token: &str) -> AppResult<()> {
-    match entry(WORKSPACE_SESSION_ACCOUNT)?.set_password(token) {
+fn workspace_session_account(user_id: &str) -> AppResult<String> {
+    let user_id = Uuid::parse_str(user_id)
+        .map_err(|_| AppError::Config("workspace account id is invalid".into()))?;
+    Ok(format!("workspace-session:{user_id}"))
+}
+
+fn store_workspace_session_account(account: &str, token: &str) -> AppResult<()> {
+    match entry(account)?.set_password(token) {
         Ok(()) => Ok(()),
-        Err(e) if should_fallback(&e) => file_store(WORKSPACE_SESSION_ACCOUNT, token),
+        Err(e) if should_fallback(&e) => file_store(account, token),
         Err(e) => Err(e.into()),
     }?;
-    remember_secret(WORKSPACE_SESSION_ACCOUNT, token);
+    remember_secret(account, token);
     Ok(())
 }
 
-/// Read the stored workspace session. A missing session is normal signed-out state.
-pub fn fetch_workspace_session() -> AppResult<Option<String>> {
-    if let Some(token) = cached_secret(WORKSPACE_SESSION_ACCOUNT) {
+fn fetch_workspace_session_account(account: &str) -> AppResult<Option<String>> {
+    if let Some(token) = cached_secret(account) {
         return Ok(Some(token));
     }
-    let token = match entry(WORKSPACE_SESSION_ACCOUNT)?.get_password() {
+    let token = match entry(account)?.get_password() {
         Ok(token) => Some(token),
-        Err(keyring::Error::NoEntry) if cfg!(debug_assertions) => {
-            match file_fetch(WORKSPACE_SESSION_ACCOUNT) {
-                Ok(token) => Some(token),
-                Err(AppError::NotFound(_)) => None,
-                Err(error) => return Err(error),
-            }
-        }
+        Err(keyring::Error::NoEntry) if cfg!(debug_assertions) => match file_fetch(account) {
+            Ok(token) => Some(token),
+            Err(AppError::NotFound(_)) => None,
+            Err(error) => return Err(error),
+        },
         Err(keyring::Error::NoEntry) => None,
-        Err(e) if should_fallback(&e) => match file_fetch(WORKSPACE_SESSION_ACCOUNT) {
+        Err(e) if should_fallback(&e) => match file_fetch(account) {
             Ok(token) => Some(token),
             Err(AppError::NotFound(_)) => None,
             Err(error) => return Err(error),
@@ -137,23 +139,47 @@ pub fn fetch_workspace_session() -> AppResult<Option<String>> {
         Err(e) => return Err(e.into()),
     };
     if let Some(token) = token.as_deref() {
-        remember_secret(WORKSPACE_SESSION_ACCOUNT, token);
+        remember_secret(account, token);
     }
     Ok(token)
 }
 
-/// Delete the local Better Auth session. Missing state is idempotently signed out.
-pub fn delete_workspace_session() -> AppResult<()> {
-    forget_secret(WORKSPACE_SESSION_ACCOUNT);
-    match entry(WORKSPACE_SESSION_ACCOUNT)?.delete_credential() {
+fn delete_workspace_session_account(account: &str) -> AppResult<()> {
+    forget_secret(account);
+    match entry(account)?.delete_credential() {
         Ok(()) => Ok(()),
         Err(keyring::Error::NoEntry) => {
-            let _ = file_delete(WORKSPACE_SESSION_ACCOUNT);
+            let _ = file_delete(account);
             Ok(())
         }
-        Err(e) if should_fallback(&e) => file_delete(WORKSPACE_SESSION_ACCOUNT),
+        Err(e) if should_fallback(&e) => file_delete(account),
         Err(e) => Err(e.into()),
     }
+}
+
+/// Store one Better Auth Bearer session in an account-specific credential item.
+pub fn store_workspace_session(user_id: &str, token: &str) -> AppResult<()> {
+    store_workspace_session_account(&workspace_session_account(user_id)?, token)
+}
+
+/// Read one account's stored session. A missing item is normal signed-out state.
+pub fn fetch_workspace_session(user_id: &str) -> AppResult<Option<String>> {
+    fetch_workspace_session_account(&workspace_session_account(user_id)?)
+}
+
+/// Delete one local Better Auth session. Missing state is idempotently signed out.
+pub fn delete_workspace_session(user_id: &str) -> AppResult<()> {
+    delete_workspace_session_account(&workspace_session_account(user_id)?)
+}
+
+/// Upgrade helper for releases that stored exactly one session under a fixed account.
+/// Callers validate and copy the token before removing this legacy item.
+pub(crate) fn fetch_legacy_workspace_session() -> AppResult<Option<String>> {
+    fetch_workspace_session_account(LEGACY_WORKSPACE_SESSION_ACCOUNT)
+}
+
+pub(crate) fn delete_legacy_workspace_session() -> AppResult<()> {
+    delete_workspace_session_account(LEGACY_WORKSPACE_SESSION_ACCOUNT)
 }
 
 /// True when the OS credential store is structurally unavailable (for example an
@@ -181,11 +207,25 @@ fn fallback_dir() -> AppResult<std::path::PathBuf> {
         .join("dopedb")
         .join("dev-secrets");
     std::fs::create_dir_all(&dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+    }
     Ok(dir)
 }
 
 fn fallback_path_in(dir: &std::path::Path, account: &str) -> std::path::PathBuf {
-    dir.join(format!("{account}.secret"))
+    // Connection ids were historically stored as their UUID filename. Preserve that
+    // debug-only layout, but encode namespaced session accounts because `:` is not a
+    // valid filename character on Windows and separators must never escape `dir`.
+    let filename =
+        if Uuid::parse_str(account).is_ok() || account == LEGACY_WORKSPACE_SESSION_ACCOUNT {
+            account.to_owned()
+        } else {
+            format!("account-{}", hex::encode(account.as_bytes()))
+        };
+    dir.join(format!("{filename}.secret"))
 }
 
 fn xor(bytes: &[u8]) -> Vec<u8> {
@@ -202,7 +242,22 @@ fn file_store(account: &str, secret: &str) -> AppResult<()> {
 
 fn file_store_at(dir: &std::path::Path, account: &str, secret: &str) -> AppResult<()> {
     let obfuscated = hex::encode(xor(secret.as_bytes()));
-    std::fs::write(fallback_path_in(dir, account), obfuscated)?;
+    let path = fallback_path_in(dir, account);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .mode(0o600)
+            .open(path)?;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        std::io::Write::write_all(&mut file, obfuscated.as_bytes())?;
+        file.sync_all()?;
+    }
+    #[cfg(not(unix))]
+    std::fs::write(path, obfuscated)?;
     Ok(())
 }
 
@@ -254,6 +309,16 @@ mod tests {
 
         file_store_at(dir.path(), &account, secret).expect("store");
         assert_eq!(file_fetch_at(dir.path(), &account).expect("fetch"), secret);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(fallback_path_in(dir.path(), &account))
+                .expect("metadata")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600);
+        }
 
         file_delete_at(dir.path(), &account).expect("delete");
         assert!(
@@ -285,6 +350,28 @@ mod tests {
         assert_eq!(reads.get(), 1);
         forget_secret(&account);
         assert!(cached_secret(&account).is_none());
+    }
+
+    #[test]
+    fn workspace_sessions_have_distinct_validated_credential_accounts() {
+        let first = workspace_session_account("10000000-0000-0000-0000-000000000001").unwrap();
+        let second = workspace_session_account("20000000-0000-0000-0000-000000000002").unwrap();
+
+        assert_ne!(first, second);
+        assert!(first.starts_with("workspace-session:"));
+        assert!(workspace_session_account("../untrusted").is_err());
+    }
+
+    #[test]
+    fn namespaced_fallback_accounts_use_portable_flat_filenames() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let account = workspace_session_account("10000000-0000-0000-0000-000000000001").unwrap();
+        let path = fallback_path_in(dir.path(), &account);
+
+        assert_eq!(path.parent(), Some(dir.path()));
+        let filename = path.file_name().unwrap().to_string_lossy();
+        assert!(!filename.contains(':'));
+        assert!(!filename.contains('/') && !filename.contains('\\'));
     }
 
     /// Real credential stores can require an interactive desktop session, which

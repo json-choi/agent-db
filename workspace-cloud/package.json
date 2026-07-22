@@ -27,5 +27,12 @@
     "@types/react-dom": "^19.2.3",
     "drizzle-kit": "^0.31.10",
     "typescript": "^6.0.3"
+  },
+  "pnpm": {
+    "overrides": {
+      "@esbuild-kit/core-utils>esbuild": "^0.28.1",
+      "postcss": "^8.5.22",
+      "sharp": "^0.35.3"
+    }
   }
 }

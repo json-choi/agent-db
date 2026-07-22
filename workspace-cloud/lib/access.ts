@@ -12,17 +12,17 @@ const statement = {
 } as const;
 
 export const ac = createAccessControl(statement);
-export const viewer = ac.newRole({ ...memberAc.statements, workspace: ["view"] });
-export const analyst = ac.newRole({ ...memberAc.statements, workspace: ["view", "execute"] });
-export const editor = ac.newRole({
+const viewer = ac.newRole({ ...memberAc.statements, workspace: ["view"] });
+const analyst = ac.newRole({ ...memberAc.statements, workspace: ["view", "execute"] });
+const editor = ac.newRole({
   ...memberAc.statements,
   workspace: ["view", "execute", "edit"],
 });
-export const admin = ac.newRole({
+const admin = ac.newRole({
   ...adminAc.statements,
   workspace: ["view", "execute", "edit", "manage"],
 });
-export const owner = ac.newRole({
+const owner = ac.newRole({
   ...ownerAc.statements,
   workspace: ["view", "execute", "edit", "manage", "delete"],
 });

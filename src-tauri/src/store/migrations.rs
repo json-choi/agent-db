@@ -29,6 +29,25 @@ CREATE TABLE IF NOT EXISTS workspace_members (
 );
 CREATE INDEX IF NOT EXISTS idx_workspace_members_workspace
     ON workspace_members(workspace_id, status);
+CREATE INDEX IF NOT EXISTS idx_workspace_members_user_status
+    ON workspace_members(user_id, status, workspace_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_members_remote_identity
+    ON workspace_members(workspace_id, user_id)
+    WHERE user_id IS NOT NULL;
+
+-- Non-secret account index for the unified account/workspace switcher. Better Auth
+-- Bearer tokens stay in per-account OS credential-store entries and never enter SQLite.
+CREATE TABLE IF NOT EXISTS workspace_accounts (
+    user_id           TEXT PRIMARY KEY,
+    email             TEXT NOT NULL,
+    display_name      TEXT NOT NULL,
+    last_workspace_id TEXT,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL,
+    last_used_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_workspace_accounts_last_used
+    ON workspace_accounts(last_used_at DESC);
 
 CREATE TABLE IF NOT EXISTS app_settings (
     key   TEXT PRIMARY KEY,
@@ -68,6 +87,7 @@ CREATE TABLE IF NOT EXISTS connections (
     schema_group      TEXT,                          -- groups dev|staging|prod siblings for schema diff
     workspace_id      TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'
                       REFERENCES workspaces(id),
+    account_user_id   TEXT,                          -- owner of a team-local resource
     remote_id         TEXT,
     revision          INTEGER NOT NULL DEFAULT 1,
     sync_status       TEXT NOT NULL DEFAULT 'local', -- local|dirty|synced|conflict
@@ -76,6 +96,23 @@ CREATE TABLE IF NOT EXISTS connections (
     created_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL
 );
+
+-- Per-account local overlay for a redacted shared connection template. The secret
+-- value itself stays in the OS credential store; this table stores only its opaque
+-- credential-item id, member-local fields, and the last server-verified RBAC view.
+CREATE TABLE IF NOT EXISTS workspace_connection_bindings (
+    connection_id  TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
+    account_user_id TEXT NOT NULL,
+    username       TEXT NOT NULL DEFAULT '',
+    extra_params   TEXT NOT NULL DEFAULT '{}',
+    secret_ref     TEXT,
+    workspace_access TEXT NOT NULL DEFAULT 'view',
+    allow_writes   INTEGER NOT NULL DEFAULT 0,
+    updated_at     TEXT NOT NULL,
+    PRIMARY KEY (connection_id, account_user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_workspace_connection_bindings_account
+    ON workspace_connection_bindings(account_user_id, connection_id);
 
 CREATE TABLE IF NOT EXISTS connection_safety (
     connection_id         TEXT PRIMARY KEY REFERENCES connections(id) ON DELETE CASCADE,
@@ -91,6 +128,7 @@ CREATE TABLE IF NOT EXISTS connection_safety (
 CREATE TABLE IF NOT EXISTS query_history (
     id            TEXT PRIMARY KEY,
     connection_id TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
+    account_scope TEXT NOT NULL DEFAULT 'personal', -- personal or authenticated account id
     sql           TEXT NOT NULL,
     kind          TEXT NOT NULL,
     status        TEXT NOT NULL,           -- ok|error|blocked
@@ -183,22 +221,27 @@ INSERT OR IGNORE INTO sync_state (workspace_id)
 VALUES ('00000000-0000-0000-0000-000000000001');
 
 CREATE TABLE IF NOT EXISTS schema_cache (
-    connection_id   TEXT PRIMARY KEY REFERENCES connections(id) ON DELETE CASCADE,
+    connection_id   TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
+    account_scope   TEXT NOT NULL DEFAULT 'personal',
     introspected_at TEXT NOT NULL,
-    catalog_json    TEXT NOT NULL
+    catalog_json    TEXT NOT NULL,
+    PRIMARY KEY (connection_id, account_scope)
 );
 
 -- In-app agent chat: one row per conversation thread. `cli_session_id` is the
 -- underlying CLI's own resume token (Claude Code `--resume` / Codex `resume <id>`),
 -- persisted here so a conversation survives across app restarts. `model`/`effort`
 -- hold the values used by the most recent turn, seeding the picker on thread switch.
--- `connection_id` binds the thread to one DopeDB connection for context injection
--- (NULL = unscoped, the pre-existing behavior); deliberately no FK so a deleted
--- connection leaves the thread readable instead of cascading it away.
+-- `connection_id` binds every new thread to one DopeDB connection for context
+-- injection. Upgraded databases may retain NULL in historical rows; the UI excludes
+-- those legacy threads. Deliberately no FK so deleting a connection does not erase
+-- its conversation record.
 CREATE TABLE IF NOT EXISTS agent_chat_threads (
     id             TEXT PRIMARY KEY,
     provider       TEXT NOT NULL,
     connection_id  TEXT,
+    workspace_id   TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001',
+    account_scope  TEXT NOT NULL DEFAULT 'personal',
     title          TEXT NOT NULL DEFAULT '',
     cli_session_id TEXT,
     model          TEXT,

@@ -1,6 +1,6 @@
 // Authenticated workspace and device-session console. Server rendering resolves the
 // current Better Auth identity before exposing any organization administration UI.
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "../../lib/auth";
@@ -8,7 +8,8 @@ import { db } from "../../lib/db";
 import { member } from "../../lib/schema";
 import { Brand } from "../components/Brand";
 import { CreateWorkspaceForm } from "./CreateWorkspaceForm";
-import { SignOutButton } from "./SignOutButton";
+import { AccountSwitcher } from "./AccountSwitcher";
+import { ActiveSessions } from "./ActiveSessions";
 import { WorkspaceAccessPanel } from "./WorkspaceAccessPanel";
 
 export const dynamic = "force-dynamic";
@@ -35,16 +36,16 @@ export default async function SettingsPage({
   if (!session) {
     redirect(`/auth/sign-in?returnTo=${encodeURIComponent(settingsPath)}`);
   }
-  const [workspaces, sessions] = await Promise.all([
-    auth.api.listOrganizations({ headers: requestHeaders }),
-    auth.api.listSessions({ headers: requestHeaders }),
-  ]);
-  const workspaceRoles = new Map(await Promise.all(workspaces.map(async (workspace) => {
-    const membership = await db.query.member.findFirst({
-      where: and(eq(member.organizationId, workspace.id), eq(member.userId, session.user.id)),
-    });
-    return [workspace.id, membership?.role ?? "viewer"] as const;
-  })));
+  const workspaces = await auth.api.listOrganizations({ headers: requestHeaders });
+  const roleRows = workspaces.length > 0
+    ? await db.select({ organizationId: member.organizationId, role: member.role })
+        .from(member)
+        .where(and(
+          eq(member.userId, session.user.id),
+          inArray(member.organizationId, workspaces.map((workspace) => workspace.id)),
+        ))
+    : [];
+  const workspaceRoles = new Map(roleRows.map((row) => [row.organizationId, row.role]));
   const focusedWorkspaceId = workspaces.some(
     (workspace) => workspace.id === requestedWorkspaceId,
   )
@@ -62,7 +63,11 @@ export default async function SettingsPage({
       <aside className="console-nav">
         <Brand />
         <nav><a className="active" href="#workspaces"><span>01</span> Workspaces</a><a href="#devices"><span>02</span> Devices</a></nav>
-        <SignOutButton />
+        <AccountSwitcher currentUser={{
+          id: session.user.id,
+          name: session.user.name,
+          email: session.user.email,
+        }} />
       </aside>
       <div className="console-main">
         <header className="console-header"><div><p className="eyebrow">BETTER AUTH / DRIZZLE</p><h1>워크스페이스 설정</h1></div><div className="user-chip"><span>{session.user.name.slice(0, 1).toUpperCase()}</span><div><strong>{session.user.name}</strong><small>{session.user.email}</small></div></div></header>
@@ -95,9 +100,7 @@ export default async function SettingsPage({
         </section>
         <section id="devices" className="console-section">
           <div className="section-heading"><div><span>02</span><h2>Active sessions</h2></div><p>Better Auth가 관리하는 브라우저와 데스크톱 Bearer 세션입니다.</p></div>
-          <div className="device-table">
-            {sessions.map((item) => <div className="device-row" key={item.id}><span className="device-icon">{item.userAgent?.includes("Mozilla") ? "◎" : "▣"}</span><div><strong>{item.userAgent?.includes("Mozilla") ? "Web browser" : "DopeDB desktop"}</strong><small>{item.ipAddress ?? "protected session"}</small></div><time>{item.id === session.session.id ? "현재 세션" : new Date(item.updatedAt).toLocaleDateString("ko-KR")}</time></div>)}
-          </div>
+          <ActiveSessions currentSessionId={session.session.id} />
         </section>
       </div>
     </main>

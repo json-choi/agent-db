@@ -56,16 +56,23 @@ const BANNED_OPERATORS: &[&str] = &["$where", "$function", "$accumulator"];
 /// it never errors — so the existing L4 gate blocks it downstream.
 pub fn classify(query: &DocumentQuery) -> Classification {
     let (collection, violation) = match query {
-        DocumentQuery::Find { collection, filter, projection, sort, .. } => (
+        DocumentQuery::Find {
+            collection,
+            filter,
+            projection,
+            sort,
+            ..
+        } => (
             collection,
             [filter, projection, sort]
                 .into_iter()
                 .flatten()
                 .find_map(banned_operator),
         ),
-        DocumentQuery::Aggregate { collection, pipeline } => {
-            (collection, pipeline_violation(pipeline))
-        }
+        DocumentQuery::Aggregate {
+            collection,
+            pipeline,
+        } => (collection, pipeline_violation(pipeline)),
         DocumentQuery::Count { collection, filter } => {
             (collection, filter.as_ref().and_then(banned_operator))
         }
@@ -132,7 +139,9 @@ fn banned_operator(value: &serde_json::Value) -> Option<String> {
     match value {
         serde_json::Value::Object(map) => map.iter().find_map(|(k, v)| {
             if BANNED_OPERATORS.contains(&k.as_str()) {
-                Some(format!("operator {k:?} (server-side JavaScript) is not allowed"))
+                Some(format!(
+                    "operator {k:?} (server-side JavaScript) is not allowed"
+                ))
             } else {
                 banned_operator(v)
             }
@@ -157,7 +166,14 @@ pub async fn run(
     let max = max_rows.max(1) as usize;
 
     let (documents, truncated) = match query {
-        DocumentQuery::Find { collection, filter, projection, sort, skip, limit } => {
+        DocumentQuery::Find {
+            collection,
+            filter,
+            projection,
+            sort,
+            skip,
+            limit,
+        } => {
             let coll = db.collection::<Document>(collection);
             let mut find = coll
                 .find(to_document(filter.as_ref(), "filter")?)
@@ -181,7 +197,10 @@ pub async fn run(
                 }
             }
         }
-        DocumentQuery::Aggregate { collection, pipeline } => {
+        DocumentQuery::Aggregate {
+            collection,
+            pipeline,
+        } => {
             let stages = pipeline
                 .iter()
                 .map(|s| to_document(Some(s), "pipeline stage"))
@@ -301,7 +320,10 @@ mod tests {
     }
 
     fn aggregate(pipeline: Vec<serde_json::Value>) -> DocumentQuery {
-        DocumentQuery::Aggregate { collection: "users".into(), pipeline }
+        DocumentQuery::Aggregate {
+            collection: "users".into(),
+            pipeline,
+        }
     }
 
     #[test]
@@ -310,7 +332,10 @@ mod tests {
         assert_eq!(cls.kind, QueryKind::Read);
         assert_eq!(cls.tables, vec!["users".to_string()]);
 
-        let cls = classify(&DocumentQuery::Count { collection: "users".into(), filter: None });
+        let cls = classify(&DocumentQuery::Count {
+            collection: "users".into(),
+            filter: None,
+        });
         assert_eq!(cls.kind, QueryKind::Read);
     }
 
@@ -326,7 +351,10 @@ mod tests {
 
     #[test]
     fn write_stages_fail_safe_to_high_risk_writes() {
-        for stage in [json!({ "$out": "evil" }), json!({ "$merge": { "into": "evil" } })] {
+        for stage in [
+            json!({ "$out": "evil" }),
+            json!({ "$merge": { "into": "evil" } }),
+        ] {
             let cls = classify(&aggregate(vec![json!({ "$match": {} }), stage]));
             assert_eq!(cls.kind, QueryKind::Write);
             assert_eq!(cls.risk, RiskLevel::High);
@@ -370,7 +398,10 @@ mod tests {
 
     #[test]
     fn malformed_stages_fail_safe() {
-        assert_eq!(classify(&aggregate(vec![json!("$match")])).kind, QueryKind::Write);
+        assert_eq!(
+            classify(&aggregate(vec![json!("$match")])).kind,
+            QueryKind::Write
+        );
         assert_eq!(
             classify(&aggregate(vec![json!({ "$match": {}, "$limit": 1 })])).kind,
             QueryKind::Write

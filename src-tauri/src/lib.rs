@@ -18,7 +18,6 @@ mod safety;
 mod sql_script;
 mod state;
 mod store;
-pub mod workspace;
 mod workspace_auth;
 
 pub use error::{AppError, AppResult};
@@ -30,8 +29,7 @@ use tauri::Manager;
 pub fn run() {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
@@ -89,7 +87,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::workspace_feature_state,
             commands::workspace_auth_state,
+            commands::refresh_workspace_auth_state,
             commands::workspace_sign_out,
+            commands::workspace_sign_out_all,
             commands::begin_workspace_login,
             commands::poll_workspace_login,
             commands::workspace_console_url,
@@ -97,6 +97,7 @@ pub fn run() {
             commands::refresh_workspace_memberships,
             commands::get_active_workspace,
             commands::set_active_workspace,
+            commands::set_active_workspace_account,
             commands::copy_connection_to_workspace,
             commands::bind_workspace_connection_credentials,
             commands::list_connections,
