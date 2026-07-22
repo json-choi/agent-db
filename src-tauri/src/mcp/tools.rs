@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::{CallToolResult, ContentBlock};
 use rmcp::{tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler};
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -166,10 +166,27 @@ impl DbTools {
 
     /// Open (and cache) a live connection for the given id.
     async fn live(&self, id: Uuid) -> Result<Live, McpError> {
+        // Revalidate active workspace scope before using a cached pool. Workspace
+        // switches clear the cache too, but this keeps the boundary race-free.
+        let profile = self.store.get_connection(id).await.map_err(err)?;
+        if !profile.workspace_access.can_read() {
+            return Err(McpError::invalid_params(
+                "workspace role cannot query this shared connection",
+                None,
+            ));
+        }
+        if profile.workspace_access != crate::model::WorkspaceConnectionAccess::Local {
+            crate::workspace_auth::authorize_connection(
+                self.store.active_workspace_id().await.map_err(err)?,
+                profile.id,
+                false,
+            )
+            .await
+            .map_err(err)?;
+        }
         if let Some(c) = self.conns.lock().unwrap().get(&id) {
             return Ok(c.clone());
         }
-        let profile = self.store.get_connection(id).await.map_err(err)?;
         let secret = connection::fetch_secret(&id).unwrap_or_default();
         let live = connection::connect(&profile, &secret).await.map_err(err)?;
         self.conns.lock().unwrap().insert(id, live.clone());
@@ -362,7 +379,7 @@ impl DbTools {
             })).collect::<Vec<_>>()
         });
         self.emit("agent:result", json!({ "tool": "list_connections", "count": list.len() }));
-        Ok(CallToolResult::success(vec![Content::text(out.to_string())]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(out.to_string())]))
     }
 
     #[tool(description = "List the tables of a DopeDB connection (defaults to the first). Use this instead of shelling out to a DB client. Returns table names, schemas, column counts, and row estimates.")]
@@ -391,7 +408,7 @@ impl DbTools {
             "count": tables.len(),
         }));
         let out = json!({ "connection": profile.name, "tables": tables });
-        Ok(CallToolResult::success(vec![Content::text(out.to_string())]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(out.to_string())]))
     }
 
     #[tool(description = "Describe one table on a DopeDB connection so you can write queries against real column names: columns (name, dataType, nullable, pk), foreign keys, and a row estimate. Accepts a bare or schema-qualified table name.")]
@@ -441,7 +458,7 @@ impl DbTools {
             "table": table.name,
             "columns": table.columns.len(),
         }));
-        Ok(CallToolResult::success(vec![Content::text(out.to_string())]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(out.to_string())]))
     }
 
     #[tool(
@@ -574,7 +591,7 @@ impl DbTools {
             "health": health,
             "nextAction": "Review these notices, then call run_query with this exact planId. If you change the SQL, call plan_query again.",
         });
-        Ok(CallToolResult::success(vec![Content::text(
+        Ok(CallToolResult::success(vec![ContentBlock::text(
             out.to_string(),
         )]))
     }
@@ -778,7 +795,7 @@ impl DbTools {
             "uiMessage": "The full result is visible in the DopeDB app.",
             "dashboardSuggestion": "Ask whether the user wants to save this query as a dashboard. After explicit agreement, call create_dashboard with this exact queryRunId.",
         });
-        Ok(CallToolResult::success(vec![Content::text(
+        Ok(CallToolResult::success(vec![ContentBlock::text(
             out.to_string(),
         )]))
     }
@@ -912,7 +929,7 @@ impl DbTools {
             "truncated": result.truncated,
             "uiMessage": "The full result is visible in the DopeDB app.",
         });
-        Ok(CallToolResult::success(vec![Content::text(
+        Ok(CallToolResult::success(vec![ContentBlock::text(
             out.to_string(),
         )]))
     }
@@ -1029,7 +1046,7 @@ impl DbTools {
             "queryRunId": query_run_id,
             "uiMessage": "The dashboard was saved and is available in the DopeDB app.",
         });
-        Ok(CallToolResult::success(vec![Content::text(
+        Ok(CallToolResult::success(vec![ContentBlock::text(
             out.to_string(),
         )]))
     }
@@ -1064,6 +1081,7 @@ mod tests {
             secret_ref: None,
             env: env.map(str::to_string),
             schema_group: None,
+            workspace_access: crate::model::WorkspaceConnectionAccess::Local,
         }
     }
 

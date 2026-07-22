@@ -6,25 +6,30 @@ import { queryOptions } from "@tanstack/react-query";
 import {
   auditSnapshot,
   auditVerify,
+  workspaceAuthState,
   cancelQuery,
   detectAgentClis,
   getCatalog,
   getChatMessages,
+  getActiveWorkspace,
   getMonitoringStatus,
   listAgentModels,
   listChatThreads,
   listDashboards,
   listDrivers,
   listHistory,
+  listWorkspaces,
   refreshCatalog,
   runDashboard,
   runDocumentQuery,
   runSql,
+  workspaceFeatureState,
 } from "../ipc/commands";
 import { errMessage } from "../ipc/types";
 import type { AgentProvider, CatalogTable, Engine, QueryResult } from "../ipc/types";
 import { buildCountQuery, buildPageQuery, type GridSort } from "./sqlBuild";
 import { tableKey } from "./tableRef";
+import { WORKSPACE_AUTH_RECHECK_MS } from "./workspaceAuthLifecycle";
 
 // Introspection is written to a backend cache that never expires, so the catalog only
 // needs refetching when the user explicitly refreshes it (see invalidateCatalog).
@@ -96,6 +101,8 @@ export const qk = {
   chatThreads: () => ["chatThreads"] as const,
   chatMessages: (threadId: string) => ["chatMessages", threadId] as const,
   agentModels: (provider: AgentProvider) => ["agentModels", provider] as const,
+  workspaceContext: () => ["workspaceContext"] as const,
+  workspaceAuth: () => ["workspaceAuth"] as const,
   tableRows: (args: TableRowsArgs) =>
     [
       "tableRows",
@@ -113,6 +120,33 @@ export const qk = {
   documentCount: (connectionId: string, collection: string) =>
     ["documentCount", connectionId, collection] as const,
 };
+
+export function workspaceContextQuery() {
+  return queryOptions({
+    queryKey: qk.workspaceContext(),
+    staleTime: Infinity,
+    queryFn: async () => {
+      const [feature, workspaces, active] = await Promise.all([
+        workspaceFeatureState(),
+        listWorkspaces(),
+        getActiveWorkspace(),
+      ]);
+      return { feature, workspaces, active };
+    },
+  });
+}
+
+export function workspaceAuthStateQuery() {
+  return queryOptions({
+    queryKey: qk.workspaceAuth(),
+    // Identity is durable UI state, not a loading spinner. Sensitive workspace APIs
+    // still validate the Bearer session and RBAC membership on every request.
+    staleTime: WORKSPACE_AUTH_RECHECK_MS,
+    gcTime: Infinity,
+    retry: false,
+    queryFn: workspaceAuthState,
+  });
+}
 
 export function driversQuery() {
   return queryOptions({

@@ -34,6 +34,7 @@ import AgentResultView from "./components/AgentResultView";
 import EngineMark from "./components/EngineMark";
 import { Icon } from "./components/Icon";
 import { ToastProvider, useToast } from "./components/Toast";
+import WorkspaceSwitcher from "./components/WorkspaceSwitcher";
 import { AgentChatProvider } from "./lib/agentChat";
 import { AgentFeedProvider, useAgentFeed } from "./lib/agentFeed";
 import { useI18n, type I18nKey } from "./lib/i18n";
@@ -762,6 +763,22 @@ function Shell() {
   return (
     <div className="app" style={{ gridTemplateColumns: `${sidebarW}px 5px 1fr` }}>
       <DatabaseExplorer
+        workspaceHeader={
+          <WorkspaceSwitcher
+            onNew={startNewConnection}
+            onChanged={async () => {
+              setSelectedId(null);
+              setSelectedTable(null);
+              setEditing(null);
+              setSettingsOpen(false);
+              setSchemaDiffGroupKey(null);
+              setDashboardFocusId(null);
+              setSafety(null);
+              setConns([]);
+              await refresh();
+            }}
+          />
+        }
         connections={conns}
         selectedId={selectedId}
         selectedTableKey={selectedTable ? tableKey(selectedTable) : null}
@@ -782,9 +799,6 @@ function Shell() {
           setEditing(null);
           setSettingsOpen(false);
           setSchemaDiffGroupKey(group.key);
-        }}
-        onNew={() => {
-          startNewConnection();
         }}
         onEdit={(conn) => {
           setEditing(conn);

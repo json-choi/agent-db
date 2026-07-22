@@ -108,7 +108,13 @@ pub fn classify(sql: &str, engine: Engine) -> AppResult<Classification> {
         no_where,
         tables,
         notes,
-        rollback_safe: matches!(kind, QueryKind::Write),
+        // Only direct DML has the transaction semantics required by L3's
+        // execute-and-ROLLBACK preview. Utility statements and write-like query
+        // forms stay gated but are never preview-executed.
+        rollback_safe: matches!(
+            stmt,
+            Statement::Insert(_) | Statement::Update(_) | Statement::Delete(_)
+        ),
     })
 }
 
@@ -144,8 +150,8 @@ fn classify_stmt(stmt: &Statement, notes: &mut Vec<String>, no_where: &mut bool)
         }
 
         Statement::Insert(_) => QueryKind::Write,
-        Statement::Update { selection, .. } => {
-            *no_where = selection.is_none();
+        Statement::Update(update) => {
+            *no_where = update.selection.is_none();
             QueryKind::Write
         }
         Statement::Delete(del) => {
@@ -184,7 +190,7 @@ fn short_kind(stmt: &Statement) -> &'static str {
     match stmt {
         Statement::Query(_) => "Query",
         Statement::Insert(_) => "Insert",
-        Statement::Update { .. } => "Update",
+        Statement::Update(_) => "Update",
         Statement::Delete(_) => "Delete",
         _ => "Other",
     }
@@ -225,7 +231,7 @@ fn collect_tables(stmt: &Statement, out: &mut Vec<String>) {
         Statement::Query(q) => walk_query(q, out),
         // Only the update target table; the optional `FROM` join sources are a
         // version-fragile AST shape and are UX-only, so we skip them.
-        Statement::Update { table, .. } => walk_twj(table, out),
+        Statement::Update(update) => walk_twj(&update.table, out),
         Statement::Delete(del) => match &del.from {
             FromTable::WithFromKeyword(v) | FromTable::WithoutKeyword(v) => {
                 for twj in v {

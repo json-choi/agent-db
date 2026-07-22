@@ -96,6 +96,7 @@ mod tests {
             secret_ref: None,
             env: None,
             schema_group: None,
+            workspace_access: crate::model::WorkspaceConnectionAccess::Local,
         }
     }
 

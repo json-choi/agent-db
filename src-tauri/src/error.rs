@@ -20,6 +20,10 @@ pub enum AppError {
     #[error("agent error: {0}")]
     Agent(String),
 
+    /// A hosted control-plane request failed or returned an invalid response.
+    #[error("network error: {0}")]
+    Network(String),
+
     /// A safety-layer violation the DB or classifier rejected before execution.
     #[error("safety violation: {0}")]
     Safety(String),
@@ -57,6 +61,7 @@ impl AppError {
             AppError::Db(_) => "db",
             AppError::Mongo(_) => "db",
             AppError::Agent(_) => "agent",
+            AppError::Network(_) => "network",
             AppError::Safety(_) => "safety",
             AppError::Parse(_) => "parse",
             AppError::Keychain(_) => "keychain",

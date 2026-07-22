@@ -39,7 +39,7 @@ DopeDB(도프디비)는 **AI 에이전트에게 안전한 데이터베이스 통
 
 필요한 도구:
 
-- Rust stable 1.82 이상
+- Rust stable 1.94 이상
 - Node.js 24
 - pnpm 10.26.1
 - macOS 빌드용 Xcode Command Line Tools

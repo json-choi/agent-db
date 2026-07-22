@@ -1,8 +1,8 @@
 [package]
 name = "dopedb"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
-rust-version = "1.82"
+rust-version = "1.94"
 description = "Cross-platform, agent-driven database client (local MCP server)"
 authors = ["Jaesong Choi"]
 license = "MIT"
@@ -21,7 +21,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = ["macos-private-api"] }
 tokio = { version = "1", features = ["full"] }
-sqlx = { version = "0.8", features = [
+sqlx = { version = "0.9", features = [
     "runtime-tokio",
     "tls-rustls-ring",
     "postgres",
@@ -39,28 +39,29 @@ sqlx = { version = "0.8", features = [
     "mac_address", # MACADDR    -> MacAddress
     "bit-vec",     # BIT/VARBIT -> BitVec
 ] }
-# ~3.2: 3.3+ raises the required rustc above this crate's rust-version (1.82).
-mongodb = "~3.2"
-sqlparser = "0.52"
+mongodb = "3.8"
+sqlparser = "0.62"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
-sha2 = "0.10"
+sha2 = "0.11"
 hex = "0.4"
-keyring = { version = "3", features = ["apple-native", "windows-native"] }
+keyring = "4.1"
 dirs = "6"
 toml_edit = "0.25"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 futures = "0.3"
-rmcp = { version = "1.8", features = ["server", "transport-streamable-http-server", "macros", "schemars"] }
+rmcp = { version = "2.2", features = ["server", "transport-streamable-http-server", "macros", "schemars"] }
 axum = "0.8.9"
-tokio-util = "0.7.18"
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls"] }
+tokio-util = "0.7.19"
 dashmap = "6.2.1"
 schemars = "1.2.1"
-tauri-plugin-dialog = "2.7.1"
+tauri-plugin-dialog = "2.7.2"
+tauri-plugin-opener = "2.5.4"
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-process = "2.3.1"

@@ -31,6 +31,7 @@ function connection(
     secretRef: null,
     env: null,
     schemaGroup: null,
+    workspaceAccess: "local",
     ...options,
   };
 }

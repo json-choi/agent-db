@@ -278,6 +278,7 @@ function blank(): ConnectionProfile {
     secretRef: null,
     env: null,
     schemaGroup: null,
+    workspaceAccess: "local",
   };
 }
 

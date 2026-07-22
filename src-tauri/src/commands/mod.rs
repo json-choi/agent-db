@@ -9,6 +9,7 @@
 //! DB's own read-only session) remains the authoritative stop.
 
 use chrono::Utc;
+use sqlx::AssertSqlSafe;
 use tauri::State;
 use uuid::Uuid;
 
@@ -21,6 +22,8 @@ use crate::model::{
     Classification, ConnectionProfile, Dashboard, DashboardDraft, DocumentPage, DocumentQuery,
     Engine, ExecOutcome, HistoryEntry, MonitoringStatus, PreviewMode, PreviewReport, QueryKind,
     QueryResult, SafetySettings,
+    Workspace, WorkspaceAuthState, WorkspaceDeviceAuthorization, WorkspaceFeatureState,
+    WorkspaceLoginPoll, WorkspaceConnectionAccess, WorkspaceKind,
 };
 use crate::monitoring;
 use crate::safety::{classify, decide, preview, GateDecision, PoolRef};
@@ -41,16 +44,40 @@ fn pool_ref(db: &DbPool) -> PoolRef<'_> {
 /// Never holds the connections lock across an `.await`: it either clones an existing
 /// handle out under the lock, or opens a fresh one and inserts the clone afterwards.
 async fn get_live(state: &AppState, id: Uuid) -> AppResult<Live> {
+    // Validate the active workspace before consulting the process-wide pool cache.
+    // This closes the switch boundary even if a command races with cache eviction.
+    let profile = state.store.get_connection(id).await?;
+    if !profile.workspace_access.can_read() {
+        return Err(AppError::Blocked {
+            reason: "your workspace role can view this template but cannot query the database".into(),
+        });
+    }
+    authorize_shared_connection(state, &profile, false).await?;
     if let Some(existing) = state.connections.lock().unwrap().get(&id) {
         return Ok(existing.clone());
     }
-    let profile = state.store.get_connection(id).await?;
     // SQLite has no password; PG/MySQL may authenticate via socket/trust with none.
     let secret = connection::fetch_secret(&id).unwrap_or_default();
     let live = connection::connect(&profile, &secret).await?;
     let handle = live.clone();
     state.connections.lock().unwrap().insert(id, live);
     Ok(handle)
+}
+
+async fn authorize_shared_connection(
+    state: &AppState,
+    profile: &ConnectionProfile,
+    write: bool,
+) -> AppResult<()> {
+    if profile.workspace_access != WorkspaceConnectionAccess::Local {
+        crate::workspace_auth::authorize_connection(
+            state.store.active_workspace_id().await?,
+            profile.id,
+            write,
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 fn normalize_schema_group(schema_group: Option<String>) -> Option<String> {
@@ -156,6 +183,219 @@ async fn record_run(
 
 // ── connection CRUD ──────────────────────────────────────────────────────────
 
+// ── workspace context ────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn workspace_feature_state() -> WorkspaceFeatureState {
+    let enabled = std::env::var("DOPEDB_WORKSPACES_ENABLED")
+        .map(|value| !matches!(value.trim().to_ascii_lowercase().as_str(), "0" | "false" | "off"))
+        .unwrap_or(true);
+    WorkspaceFeatureState { enabled }
+}
+
+#[tauri::command]
+pub async fn workspace_auth_state(state: State<'_, AppState>) -> AppResult<WorkspaceAuthState> {
+    let auth = crate::workspace_auth::auth_state().await?;
+    if auth.authenticated {
+        if let Err(error) = sync_workspace_memberships(&state).await {
+            tracing::warn!(%error, "workspace membership sync deferred after session validation");
+        }
+    } else {
+        // Team metadata is only visible while a hosted session is active. Archiving
+        // the local index also restores Personal Workspace when a session expires.
+        state.store.sync_team_workspaces(&[]).await?;
+        state.connections.lock().unwrap().clear();
+    }
+    Ok(auth)
+}
+
+#[tauri::command]
+pub async fn begin_workspace_login() -> AppResult<WorkspaceDeviceAuthorization> {
+    crate::workspace_auth::begin_login().await
+}
+
+#[tauri::command]
+pub async fn poll_workspace_login(
+    state: State<'_, AppState>,
+    device_code: String,
+) -> AppResult<WorkspaceLoginPoll> {
+    let result = crate::workspace_auth::poll_login(&device_code).await?;
+    if result.status == crate::model::WorkspaceLoginPollStatus::SignedIn {
+        if let Err(error) = sync_workspace_memberships(&state).await {
+            // The session token is already validated and stored. Do not report a
+            // successful login as failed merely because the first membership refresh
+            // encountered a transient control-plane or local-cache error.
+            tracing::warn!(%error, "workspace membership sync deferred after sign-in");
+        }
+    }
+    Ok(result)
+}
+
+async fn sync_workspace_memberships(state: &AppState) -> AppResult<()> {
+    let remote = crate::workspace_auth::remote_workspaces().await?;
+    let workspaces = remote
+        .into_iter()
+        .map(|workspace| (workspace.id, workspace.name))
+        .collect::<Vec<_>>();
+    state.store.sync_team_workspaces(&workspaces).await?;
+    let active = state.store.active_workspace().await?;
+    if active.kind == WorkspaceKind::Team {
+        sync_workspace_connections(state, active.id).await?;
+    }
+    Ok(())
+}
+
+async fn sync_workspace_connections(state: &AppState, workspace_id: Uuid) -> AppResult<()> {
+    match crate::workspace_auth::remote_connections(workspace_id).await {
+        Ok(Some(connections)) => state.store.sync_remote_connections(workspace_id, &connections).await,
+        Ok(None) => {
+            tracing::info!(
+                %workspace_id,
+                "shared connection API is not deployed yet; keeping the local workspace cache"
+            );
+            Ok(())
+        }
+        Err(error) => {
+            // Switching is local and remains usable during a control-plane outage.
+            // Shared execution still requires a fresh online authorization, so this
+            // stale cache cannot broaden database access.
+            tracing::warn!(%workspace_id, %error, "workspace connection sync deferred");
+            Ok(())
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn list_workspaces(state: State<'_, AppState>) -> AppResult<Vec<Workspace>> {
+    state.store.list_workspaces().await
+}
+
+/// Explicitly refresh hosted memberships without changing the cached authentication
+/// presentation. The desktop calls this after returning from the web settings page.
+#[tauri::command]
+pub async fn refresh_workspace_memberships(
+    state: State<'_, AppState>,
+) -> AppResult<Vec<Workspace>> {
+    sync_workspace_memberships(&state).await?;
+    state.store.list_workspaces().await
+}
+
+#[tauri::command]
+pub async fn get_active_workspace(state: State<'_, AppState>) -> AppResult<Workspace> {
+    state.store.active_workspace().await
+}
+
+#[tauri::command]
+pub async fn set_active_workspace(
+    state: State<'_, AppState>,
+    id: Uuid,
+) -> AppResult<Workspace> {
+    let workspace = state.store.set_active_workspace(id).await?;
+    // The active resource scope changed as soon as the setting was committed. Clear
+    // process-wide handles before any network or local synchronization can fail.
+    state.connections.lock().unwrap().clear();
+    if workspace.kind == WorkspaceKind::Team {
+        if let Err(error) = sync_workspace_connections(&state, workspace.id).await {
+            tracing::warn!(workspace_id = %workspace.id, %error, "workspace connection sync deferred after switch");
+        }
+    }
+    Ok(workspace)
+}
+
+/// Copy a local connection into a team workspace. Only its redacted template crosses
+/// the network; the caller's credential is duplicated locally under the remote UUID.
+#[tauri::command]
+pub async fn copy_connection_to_workspace(
+    state: State<'_, AppState>,
+    connection_id: Uuid,
+    workspace_id: Uuid,
+) -> AppResult<ConnectionProfile> {
+    let source = state.store.get_connection(connection_id).await?;
+    if source.workspace_access != WorkspaceConnectionAccess::Local {
+        return Err(AppError::Config(
+            "only a local connection can be copied into a workspace".into(),
+        ));
+    }
+    let target = state
+        .store
+        .list_workspaces()
+        .await?
+        .into_iter()
+        .find(|workspace| workspace.id == workspace_id && workspace.kind == WorkspaceKind::Team)
+        .ok_or_else(|| AppError::NotFound(format!("team workspace {workspace_id}")))?;
+    if target.id == state.store.active_workspace_id().await? {
+        return Err(AppError::Config("choose a different team workspace".into()));
+    }
+
+    // Resolve every local prerequisite and snapshot the current remote collection
+    // before creating the server resource. This avoids a remote template being left
+    // behind merely because a later credential read or collection fetch failed.
+    let copied_secret = if source.secret_ref.is_some() {
+        Some(connection::fetch_secret(&source.id)?)
+    } else {
+        None
+    };
+    let mut remote = crate::workspace_auth::remote_connections(workspace_id)
+        .await?
+        .ok_or_else(|| AppError::Network(
+            "the workspace service has not deployed shared connections yet".into(),
+        ))?;
+    let (mut created, revision) =
+        crate::workspace_auth::share_connection(workspace_id, &source).await?;
+    created.username = source.username.clone();
+    created.extra_params = source.extra_params.clone();
+    if let Some(secret) = copied_secret {
+        connection::store_secret(&created.id, &secret)?;
+        created.secret_ref = Some(created.id.to_string());
+    }
+    let result = created.clone();
+    remote.push((created, revision));
+    state.store.sync_remote_connections(workspace_id, &remote).await?;
+    Ok(result)
+}
+
+/// Bind this member's own DB credential to a shared template. It is stored only in
+/// the OS credential store and is never sent to the control plane.
+#[tauri::command]
+pub async fn bind_workspace_connection_credentials(
+    state: State<'_, AppState>,
+    id: Uuid,
+    username: String,
+    password: String,
+) -> AppResult<ConnectionProfile> {
+    if password.is_empty() {
+        return Err(AppError::Config("password must not be empty".into()));
+    }
+    let profile = state.store.get_connection(id).await?;
+    if profile.workspace_access == WorkspaceConnectionAccess::Local {
+        return Err(AppError::Config("connection is not a shared workspace template".into()));
+    }
+    if !profile.workspace_access.can_read() {
+        return Err(AppError::Blocked {
+            reason: "your workspace role cannot execute this connection".into(),
+        });
+    }
+    authorize_shared_connection(&state, &profile, false).await?;
+    let previous = connection::fetch_secret(&id).ok();
+    connection::store_secret(&id, &password)?;
+    match state.store.bind_connection_credentials(id, &username).await {
+        Ok(profile) => {
+            state.connections.lock().unwrap().remove(&id);
+            Ok(profile)
+        }
+        Err(error) => {
+            if let Some(secret) = previous {
+                let _ = connection::store_secret(&id, &secret);
+            } else {
+                let _ = connection::delete_secret(&id);
+            }
+            Err(error)
+        }
+    }
+}
+
+// ── connection CRUD ──────────────────────────────────────────────────────────
+
 #[tauri::command]
 pub fn list_drivers() -> Vec<crate::driver::DriverDescriptor> {
     crate::driver::list()
@@ -178,9 +418,17 @@ pub async fn upsert_connection(
     password: Option<String>,
 ) -> AppResult<ConnectionProfile> {
     let mut profile = profile;
+    if profile.workspace_access != WorkspaceConnectionAccess::Local {
+        return Err(AppError::Blocked {
+            reason: "shared templates are edited by workspace editors; bind credentials separately".into(),
+        });
+    }
     profile.schema_group = normalize_schema_group(profile.schema_group);
     // Reject stale or incompatible explicit driver choices before persisting the profile.
     crate::driver::validate(&profile)?;
+    // Scope validation precedes credential-store writes so a known UUID from another
+    // workspace cannot replace that resource's member-local secret as a side effect.
+    state.store.ensure_connection_write_scope(profile.id).await?;
     let connections = state.store.list_connections().await?;
     validate_schema_group_engine(&profile, &connections)?;
     // Stash any supplied secret in the OS credential store and point the profile at it.
@@ -202,8 +450,11 @@ pub async fn set_connection_schema_group(
     id: Uuid,
     schema_group: Option<String>,
 ) -> AppResult<ConnectionProfile> {
-    let normalized = normalize_schema_group(schema_group);
     let mut profile = state.store.get_connection(id).await?;
+    if profile.workspace_access != WorkspaceConnectionAccess::Local {
+        return Err(AppError::Blocked { reason: "shared template metadata must be changed through the workspace service".into() });
+    }
+    let normalized = normalize_schema_group(schema_group);
     profile.schema_group = normalized.clone();
     let connections = state.store.list_connections().await?;
     validate_schema_group_engine(&profile, &connections)?;
@@ -259,6 +510,10 @@ pub async fn set_connections_schema_group(
 
 #[tauri::command]
 pub async fn delete_connection(state: State<'_, AppState>, id: Uuid) -> AppResult<()> {
+    let profile = state.store.get_connection(id).await?;
+    if profile.workspace_access != WorkspaceConnectionAccess::Local {
+        return Err(AppError::Blocked { reason: "shared connections can only be removed by a workspace administrator".into() });
+    }
     state.store.delete_connection(id).await?;
     let _ = connection::delete_secret(&id);
     state.connections.lock().unwrap().remove(&id);
@@ -268,6 +523,12 @@ pub async fn delete_connection(state: State<'_, AppState>, id: Uuid) -> AppResul
 #[tauri::command]
 pub async fn test_connection(state: State<'_, AppState>, id: Uuid) -> AppResult<()> {
     let profile = state.store.get_connection(id).await?;
+    if !profile.workspace_access.can_read() {
+        return Err(AppError::Blocked {
+            reason: "your workspace role cannot test this shared connection".into(),
+        });
+    }
+    authorize_shared_connection(&state, &profile, false).await?;
     let secret = connection::fetch_secret(&id).unwrap_or_default();
     let live = connection::connect(&profile, &secret).await?;
     live.test().await
@@ -465,6 +726,19 @@ pub async fn preview_sql(
     let classification = classify(&sql, profile.engine)?;
     let needs_write_pool = !matches!(classification.kind, QueryKind::Read);
 
+    if needs_write_pool && !profile.workspace_access.can_write() {
+        return Ok(PreviewReport {
+            mode: PreviewMode::Skipped,
+            estimated_rows: None,
+            exact_rows: None,
+            plan: None,
+            note: Some("workspace role is read-only — write preview skipped".into()),
+        });
+    }
+    if needs_write_pool {
+        authorize_shared_connection(&state, &profile, true).await?;
+    }
+
     // A write/DDL preview runs a real execute+rollback (takes row locks, fires
     // triggers/NOTIFY). Never do that on a writes-disabled connection — skip it.
     if needs_write_pool && !settings.allow_writes {
@@ -523,6 +797,14 @@ pub async fn run_sql(
     let engine = profile.engine;
     let origin = origin.unwrap_or_else(|| "manual".into());
     let is_write = !matches!(classification.kind, QueryKind::Read);
+    if is_write && !profile.workspace_access.can_write() {
+        return Err(AppError::Blocked {
+            reason: "your workspace role grants read-only database access".into(),
+        });
+    }
+    if is_write {
+        authorize_shared_connection(&state, &profile, true).await?;
+    }
 
     // L4 policy decision (writes off / multi-statement → hard block).
     let decision = decide(&settings, &classification);
@@ -752,7 +1034,7 @@ async fn execute_script_tx(
                 Ok(mut tx) => {
                     let mut ok = true;
                     for s in statements {
-                        match sqlx::query(s).execute(&mut *tx).await {
+                        match sqlx::query(AssertSqlSafe(s.as_str())).execute(&mut *tx).await {
                             Ok(r) => out.push(stmt_ok(s, r.rows_affected())),
                             Err(e) => {
                                 out.push(stmt_err(s, e.to_string()));
@@ -886,6 +1168,13 @@ pub async fn run_script(
         return Ok(ScriptOutcome { statements: out, committed: false, all_reads: true });
     }
 
+    if !profile.workspace_access.can_write() {
+        return Err(AppError::Blocked {
+            reason: "your workspace role grants read-only database access".into(),
+        });
+    }
+    authorize_shared_connection(&state, &profile, true).await?;
+
     // ── write/DDL path: one transaction, all-or-nothing ───────────────────────
     // Same gates as run_sql: writes must be enabled AND the run explicitly approved.
     if !settings.allow_writes {
@@ -1001,6 +1290,11 @@ pub async fn set_safety(
     // cap once cast to usize downstream. Bound both to sane ranges. Mirrors the
     // .min(...) the MCP read path applies.
     let mut settings = settings;
+    let profile = state.store.get_connection(id).await?;
+    if !profile.workspace_access.can_write() {
+        settings.allow_writes = false;
+    }
+    authorize_shared_connection(&state, &profile, settings.allow_writes).await?;
     settings.max_rows = settings.max_rows.clamp(1, 100_000);
     settings.exec_preview_row_limit = settings.exec_preview_row_limit.clamp(0, 1_000_000);
     state.store.set_safety(id, &settings).await
@@ -1041,6 +1335,12 @@ pub async fn set_postgres_monitoring(
     approved: bool,
 ) -> AppResult<MonitoringStatus> {
     let profile = state.store.get_connection(id).await?;
+    if !profile.workspace_access.can_write() {
+        return Err(AppError::Blocked {
+            reason: "your workspace role cannot change database monitoring grants".into(),
+        });
+    }
+    authorize_shared_connection(&state, &profile, true).await?;
     if !matches!(profile.engine, Engine::Postgres) {
         return Err(AppError::Config(
             "pg_monitor is only available for PostgreSQL connections".into(),
@@ -1173,6 +1473,7 @@ pub async fn audit_verify(
     state: State<'_, AppState>,
     connection_id: Uuid,
 ) -> AppResult<serde_json::Value> {
+    state.store.get_connection(connection_id).await?;
     let (ok, first_bad_index) = audit::verify_chain(&state.store, connection_id).await?;
     Ok(serde_json::json!({ "ok": ok, "firstBadIndex": first_bad_index }))
 }
@@ -1183,6 +1484,7 @@ pub async fn audit_snapshot(
     state: State<'_, AppState>,
     connection_id: Uuid,
 ) -> AppResult<serde_json::Value> {
+    state.store.get_connection(connection_id).await?;
     let (entries, ok, first_bad_index) = audit::snapshot(&state.store, connection_id).await?;
     Ok(serde_json::json!({
         "entries": entries,
@@ -1440,6 +1742,7 @@ mod schema_group_tests {
             secret_ref: None,
             env: None,
             schema_group: group.map(str::to_string),
+            workspace_access: crate::model::WorkspaceConnectionAccess::Local,
         }
     }
 

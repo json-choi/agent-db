@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use sqlx::mysql::MySqlRow;
-use sqlx::{MySqlPool, Row};
+use sqlx::{AssertSqlSafe, MySqlPool, Row};
 
 use crate::error::{AppError, AppResult};
 
@@ -164,7 +164,7 @@ fn push_index_part(
 /// (returns `CREATE VIEW`). The table name is backtick-quoted (identifiers escaped).
 pub async fn table_ddl(pool: &MySqlPool, table: &str) -> AppResult<String> {
     let quoted = format!("`{}`", table.replace('`', "``"));
-    let row = sqlx::query(&format!("SHOW CREATE TABLE {quoted}"))
+    let row = sqlx::query(AssertSqlSafe(format!("SHOW CREATE TABLE {quoted}")))
         .fetch_one(pool)
         .await?;
     // Column 1 is "Create Table" (or "Create View"); fetch by index to cover both.

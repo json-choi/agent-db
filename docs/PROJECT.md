@@ -81,7 +81,7 @@ MCP annotations and prompts are treated as hints, not security boundaries.
 
 Required local tools:
 
-- Rust stable 1.82 or newer
+- Rust stable 1.94 or newer
 - Node.js 24
 - pnpm 10.26.1
 - Xcode Command Line Tools
@@ -151,14 +151,14 @@ The local updater key path used during setup was `~/.tauri/dopedb-updater.key`. 
 
 ## Dependency Policy
 
-Use the latest compatible patch/minor versions by default. Major upgrades are allowed when they compile cleanly and do not change security boundaries.
+Use the latest stable compatible library versions, including major releases, and
+update the affected safety tests whenever an upgrade changes parser, database, MCP,
+or credential-store behavior. The desktop currently builds with TypeScript 7; the
+two Next.js apps use TypeScript 6.0.3 because Next.js 16.2.11 cannot load TypeScript
+7's new API yet.
 
-Current deliberate holds:
+Current non-library tooling hold:
 
-- `sqlx 0.9`: requires Rust 1.94, while the app currently supports Rust 1.82.
-- `rmcp 2.x`: API migration should be reviewed separately because it touches the MCP server boundary.
-- `keyring 4.x`: review migration separately because it touches credential storage.
-- `sqlparser 0.62`: review parser behavior separately because it affects SQL classification.
 - `pnpm 11`: current supply-chain policy rejected a same-day transitive package in the site lockfile; stay on pnpm 10.26.1 until that policy is intentionally configured.
 
 ## macOS Distribution

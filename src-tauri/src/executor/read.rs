@@ -18,7 +18,7 @@ use sqlx::postgres::types::{Oid, PgInterval, PgMoney, PgRange, PgTimeTz};
 use sqlx::postgres::{PgRow, PgTypeKind};
 use sqlx::sqlite::SqliteRow;
 use sqlx::types::Decimal;
-use sqlx::{Column, Executor, Row, TypeInfo, ValueRef};
+use sqlx::{AssertSqlSafe, Column, Executor, Row, SqlSafeStr, TypeInfo, ValueRef};
 use uuid::Uuid;
 
 // PG-only decoders enabled via confirmed, TLS-agnostic sqlx features (see Cargo.toml).
@@ -49,17 +49,29 @@ pub async fn run_read(
     let inner = async {
         let (columns, rows, truncated) = match &live.read_pool {
             Pool::Postgres(pool) => {
-                let (c, r, t) = stream_capped(sqlx::query(sql).fetch(pool), max, pg_value).await?;
+                let (c, r, t) =
+                    stream_capped(sqlx::query(AssertSqlSafe(sql)).fetch(pool), max, pg_value)
+                        .await?;
                 (with_headers(c, pool, sql).await, r, t)
             }
             Pool::Mysql(pool) => {
                 let (c, r, t) =
-                    stream_capped(sqlx::query(sql).fetch(pool), max, mysql_value).await?;
+                    stream_capped(
+                        sqlx::query(AssertSqlSafe(sql)).fetch(pool),
+                        max,
+                        mysql_value,
+                    )
+                    .await?;
                 (with_headers(c, pool, sql).await, r, t)
             }
             Pool::Sqlite(pool) => {
                 let (c, r, t) =
-                    stream_capped(sqlx::query(sql).fetch(pool), max, sqlite_value).await?;
+                    stream_capped(
+                        sqlx::query(AssertSqlSafe(sql)).fetch(pool),
+                        max,
+                        sqlite_value,
+                    )
+                    .await?;
                 (with_headers(c, pool, sql).await, r, t)
             }
         };
@@ -84,7 +96,11 @@ where
     E: Executor<'e>,
 {
     if cols.is_empty() {
-        ex.describe(sql).await.ok().map(describe_cols).unwrap_or_default()
+        ex.describe(AssertSqlSafe(sql).into_sql_str())
+            .await
+            .ok()
+            .map(describe_cols)
+            .unwrap_or_default()
     } else {
         cols
     }

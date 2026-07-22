@@ -7,6 +7,26 @@ import { listen } from "@tauri-apps/api/event";
 import type { Dashboard } from "../ipc/types";
 import { qk } from "./queries";
 
+const WORKSPACE_RESOURCE_QUERY_ROOTS = new Set([
+  "catalog",
+  "history",
+  "audit",
+  "monitoring",
+  "dashboards",
+  "dashboardRun",
+  "tableRows",
+  "documentRows",
+  "documentCount",
+]);
+
+/** Clear only data tied to the previous workspace; identity and global catalogs stay warm. */
+export async function resetWorkspaceResourceQueries(queryClient: QueryClient) {
+  const isWorkspaceResource = (query: { queryKey: readonly unknown[] }) =>
+    WORKSPACE_RESOURCE_QUERY_ROOTS.has(String(query.queryKey[0]));
+  await queryClient.cancelQueries({ predicate: isWorkspaceResource });
+  queryClient.removeQueries({ predicate: isWorkspaceResource });
+}
+
 function createQueryClient() {
   return new QueryClient({
     defaultOptions: {

@@ -15,7 +15,7 @@
 
 use std::time::{Duration, Instant};
 
-use sqlx::Executor;
+use sqlx::{AssertSqlSafe, Executor, SqlSafeStr};
 use tokio::time::timeout;
 
 use crate::error::{AppError, AppResult};
@@ -46,16 +46,28 @@ pub async fn run_read_only(pool: PoolRef<'_>, sql: &str, max_rows: u64) -> AppRe
                     .execute(&mut *conn)
                     .await?;
                 let _ =
-                    sqlx::query(&format!("SET LOCAL statement_timeout = {STATEMENT_TIMEOUT_MS}"))
+                    sqlx::query(AssertSqlSafe(format!(
+                        "SET LOCAL statement_timeout = {STATEMENT_TIMEOUT_MS}"
+                    )))
                         .execute(&mut *conn)
                         .await;
-                guarded(stream_capped(sqlx::query(sql).fetch(&mut *conn), max, pg_value)).await
+                guarded(stream_capped(
+                    sqlx::query(AssertSqlSafe(sql)).fetch(&mut *conn),
+                    max,
+                    pg_value,
+                ))
+                .await
             }
             .await;
             let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
             let (c, r, t) = res.map_err(|e| map_readonly(engine, e))?;
             let c = if c.is_empty() {
-                (&mut *conn).describe(sql).await.ok().map(describe_cols).unwrap_or_default()
+                (&mut *conn)
+                    .describe(AssertSqlSafe(sql).into_sql_str())
+                    .await
+                    .ok()
+                    .map(describe_cols)
+                    .unwrap_or_default()
             } else {
                 c
             };
@@ -64,21 +76,31 @@ pub async fn run_read_only(pool: PoolRef<'_>, sql: &str, max_rows: u64) -> AppRe
         PoolRef::Mysql(p) => {
             let mut conn = p.acquire().await?;
             let res = async {
-                let _ = sqlx::query(&format!(
+                let _ = sqlx::query(AssertSqlSafe(format!(
                     "SET SESSION max_execution_time = {STATEMENT_TIMEOUT_MS}"
-                ))
+                )))
                 .execute(&mut *conn)
                 .await;
                 sqlx::query("START TRANSACTION READ ONLY")
                     .execute(&mut *conn)
                     .await?;
-                guarded(stream_capped(sqlx::query(sql).fetch(&mut *conn), max, mysql_value)).await
+                guarded(stream_capped(
+                    sqlx::query(AssertSqlSafe(sql)).fetch(&mut *conn),
+                    max,
+                    mysql_value,
+                ))
+                .await
             }
             .await;
             let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
             let (c, r, t) = res.map_err(|e| map_readonly(engine, e))?;
             let c = if c.is_empty() {
-                (&mut *conn).describe(sql).await.ok().map(describe_cols).unwrap_or_default()
+                (&mut *conn)
+                    .describe(AssertSqlSafe(sql).into_sql_str())
+                    .await
+                    .ok()
+                    .map(describe_cols)
+                    .unwrap_or_default()
             } else {
                 c
             };
@@ -91,7 +113,12 @@ pub async fn run_read_only(pool: PoolRef<'_>, sql: &str, max_rows: u64) -> AppRe
                 sqlx::query("PRAGMA query_only = ON")
                     .execute(&mut *conn)
                     .await?;
-                guarded(stream_capped(sqlx::query(sql).fetch(&mut *conn), max, sqlite_value)).await
+                guarded(stream_capped(
+                    sqlx::query(AssertSqlSafe(sql)).fetch(&mut *conn),
+                    max,
+                    sqlite_value,
+                ))
+                .await
             }
             .await;
             let _ = sqlx::query("PRAGMA query_only = OFF").execute(&mut *conn).await;
@@ -100,7 +127,12 @@ pub async fn run_read_only(pool: PoolRef<'_>, sql: &str, max_rows: u64) -> AppRe
             // prepared statement's metadata so an empty grid still has headers.
             // `describe` prepares without executing — safe on the read-only conn.
             let c = if c.is_empty() {
-                (&mut *conn).describe(sql).await.ok().map(describe_cols).unwrap_or_default()
+                (&mut *conn)
+                    .describe(AssertSqlSafe(sql).into_sql_str())
+                    .await
+                    .ok()
+                    .map(describe_cols)
+                    .unwrap_or_default()
             } else {
                 c
             };

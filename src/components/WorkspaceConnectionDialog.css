@@ -1,0 +1,49 @@
+.workspace-connection-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--ds-z-modal);
+  display: grid;
+  place-items: center;
+  padding: var(--ds-space-4);
+  overflow: auto;
+  background: var(--ds-overlay);
+  backdrop-filter: var(--ds-glass-filter-soft);
+  -webkit-backdrop-filter: var(--ds-glass-filter-soft);
+}
+
+.workspace-connection-dialog {
+  width: min(440px, 100%);
+  max-height: calc(100dvh - (var(--ds-space-4) * 2));
+  overflow: auto;
+  background-image: var(--ds-glass-sheen);
+  background-clip: padding-box;
+  backdrop-filter: var(--ds-glass-filter);
+  -webkit-backdrop-filter: var(--ds-glass-filter);
+}
+
+.workspace-connection-description {
+  margin: 0;
+  color: var(--ds-text-muted);
+  font-size: var(--ds-font-size-ui);
+  line-height: var(--ds-line-body);
+  overflow-wrap: anywhere;
+}
+
+.workspace-connection-error {
+  padding: var(--ds-space-2);
+  border-left: var(--ds-border-width-strong) solid var(--ds-danger);
+  background: var(--ds-danger-bg);
+  line-height: var(--ds-line-body);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 520px) {
+  .workspace-connection-overlay {
+    padding: var(--ds-space-3);
+  }
+
+  .workspace-connection-dialog {
+    width: 100%;
+    max-height: calc(100dvh - (var(--ds-space-3) * 2));
+  }
+}
