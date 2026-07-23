@@ -30,6 +30,7 @@ const SQLITE_CONNECTION_NAME: &str = "phase0-sqlite";
 struct SqliteHarness {
     store: Store,
     tools: DbTools,
+    connections: ConnectionManager,
     connection_id: Uuid,
     events: RecordedToolEvents,
     directory: TempDir,
@@ -94,11 +95,12 @@ impl SqliteHarness {
         let connections = ConnectionManager::new(store.clone());
         let services =
             crate::services::ApplicationServices::new(store.clone(), connections.clone());
-        let (tools, events) = DbTools::new_for_test(store.clone(), connections, services);
+        let (tools, events) = DbTools::new_for_test(store.clone(), services);
 
         Self {
             store,
             tools,
+            connections,
             connection_id,
             events,
             directory,
@@ -111,8 +113,7 @@ impl SqliteHarness {
 
     async fn close(self) {
         let mutation = self
-            .tools
-            .conns
+            .connections
             .begin_connection_mutation(self.connection_id, ConnectionAccess::Read)
             .await
             .unwrap();
@@ -121,11 +122,13 @@ impl SqliteHarness {
         let Self {
             store,
             tools,
+            connections,
             events,
             directory,
             ..
         } = self;
         drop(tools);
+        drop(connections);
         drop(events);
         store.pool().close().await;
         drop(store);
@@ -435,11 +438,8 @@ async fn sqlite_read_flow_matches_phase_zero_golden() {
 #[tokio::test]
 async fn query_plan_is_shared_and_single_use_across_mcp_handlers() {
     let harness = SqliteHarness::new().await;
-    let (other_handler, _) = DbTools::new_for_test(
-        harness.store.clone(),
-        harness.tools.conns.clone(),
-        harness.tools.services.clone(),
-    );
+    let (other_handler, _) =
+        DbTools::new_for_test(harness.store.clone(), harness.tools.services.clone());
     let plan = tool_json(
         harness
             .tools
@@ -478,7 +478,11 @@ async fn query_plan_is_shared_and_single_use_across_mcp_handlers() {
 #[tokio::test]
 async fn execution_failure_adapter_emits_the_exact_error_result() {
     let harness = SqliteHarness::new().await;
-    let context = harness.tools.pin(harness.connection_id).await.unwrap();
+    let context = harness
+        .connections
+        .pin(harness.connection_id, ConnectionAccess::Read)
+        .await
+        .unwrap();
     let plan_id = Uuid::new_v4();
     harness.tools.services.query.seed_plan_for_test(
         plan_id,
@@ -538,7 +542,11 @@ async fn execution_failure_adapter_emits_the_exact_error_result() {
 #[tokio::test]
 async fn consent_history_failure_adapter_never_emits_success_rows() {
     let harness = SqliteHarness::new().await;
-    let context = harness.tools.pin(harness.connection_id).await.unwrap();
+    let context = harness
+        .connections
+        .pin(harness.connection_id, ConnectionAccess::Read)
+        .await
+        .unwrap();
     let plan_id = Uuid::new_v4();
     harness.tools.services.query.seed_plan_for_test(
         plan_id,
@@ -624,6 +632,352 @@ async fn consent_history_failure_adapter_never_emits_success_rows() {
     harness.close().await;
 }
 
+#[tokio::test]
+async fn document_on_sql_emits_only_the_legacy_tool_call() {
+    let harness = SqliteHarness::new().await;
+    let query = DocumentQuery::Count {
+        collection: "users".into(),
+        filter: None,
+    };
+    let query_text = serde_json::to_string(&query).unwrap();
+
+    let error = harness
+        .tools
+        .run_document_query(Parameters(RunDocumentQueryArgs {
+            connection: harness.selector(),
+            query,
+            max_rows: None,
+        }))
+        .await
+        .unwrap_err();
+    let wire = serde_json::to_value(error).unwrap();
+    assert_eq!(wire["code"], -32602);
+    assert_eq!(
+        wire["message"],
+        "run_document_query only works on MongoDB connections — use plan_query/run_query for SQL engines"
+    );
+
+    {
+        let events = harness.events.lock().unwrap();
+        assert_eq!(
+            events.as_slice(),
+            [json!({
+                "event": "agent:tool_call",
+                "payload": {
+                    "tool": "run_document_query",
+                    "connection": SQLITE_CONNECTION_NAME,
+                    "connectionId": harness.connection_id,
+                    "sql": query_text,
+                },
+            })]
+        );
+    }
+    assert!(harness
+        .store
+        .list_history(harness.connection_id)
+        .await
+        .unwrap()
+        .is_empty());
+
+    harness.close().await;
+}
+
+#[tokio::test]
+async fn missing_document_selector_emits_nothing_and_writes_no_ledger() {
+    let harness = SqliteHarness::new().await;
+
+    let error = harness
+        .tools
+        .run_document_query(Parameters(RunDocumentQueryArgs {
+            connection: Some("missing".into()),
+            query: DocumentQuery::Count {
+                collection: "users".into(),
+                filter: None,
+            },
+            max_rows: None,
+        }))
+        .await
+        .unwrap_err();
+    let wire = serde_json::to_value(error).unwrap();
+    assert_eq!(wire["code"], -32602);
+    assert_eq!(wire["message"], "no connection matching 'missing'");
+    assert!(harness.events.lock().unwrap().is_empty());
+    let audit_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_log")
+        .fetch_one(harness.store.pool())
+        .await
+        .unwrap();
+    let history_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM query_history")
+        .fetch_one(harness.store.pool())
+        .await
+        .unwrap();
+    assert_eq!(audit_count, 0);
+    assert_eq!(history_count, 0);
+
+    harness.close().await;
+}
+
+#[tokio::test]
+async fn document_pin_failure_keeps_only_the_tool_call_event() {
+    let harness = SqliteHarness::new().await;
+    sqlx::query("UPDATE connections SET workspace_access = 'view' WHERE id = ?")
+        .bind(harness.connection_id.to_string())
+        .execute(harness.store.pool())
+        .await
+        .unwrap();
+    let query = DocumentQuery::Count {
+        collection: "users".into(),
+        filter: None,
+    };
+    let query_text = serde_json::to_string(&query).unwrap();
+
+    let error = harness
+        .tools
+        .run_document_query(Parameters(RunDocumentQueryArgs {
+            connection: harness.selector(),
+            query,
+            max_rows: None,
+        }))
+        .await
+        .unwrap_err();
+    let wire = serde_json::to_value(error).unwrap();
+    assert_eq!(wire["code"], -32603);
+    assert_eq!(
+        wire["message"],
+        "blocked: workspace role cannot execute this connection"
+    );
+    {
+        let events = harness.events.lock().unwrap();
+        assert_eq!(
+            events.as_slice(),
+            [json!({
+                "event": "agent:tool_call",
+                "payload": {
+                    "tool": "run_document_query",
+                    "connection": SQLITE_CONNECTION_NAME,
+                    "connectionId": harness.connection_id,
+                    "sql": query_text,
+                },
+            })]
+        );
+    }
+    let (audit_entries, chain_ok, first_bad) =
+        audit::snapshot(&harness.store, harness.connection_id)
+            .await
+            .unwrap();
+    assert!(chain_ok);
+    assert_eq!(first_bad, None);
+    assert!(audit_entries.is_empty());
+    assert!(harness
+        .store
+        .list_history(harness.connection_id)
+        .await
+        .unwrap()
+        .is_empty());
+    sqlx::query("UPDATE connections SET workspace_access = 'local' WHERE id = ?")
+        .bind(harness.connection_id.to_string())
+        .execute(harness.store.pool())
+        .await
+        .unwrap();
+
+    harness.close().await;
+}
+
+#[tokio::test]
+async fn document_setup_failure_keeps_only_the_tool_call_event() {
+    let harness = SqliteHarness::new().await;
+    let mongo_id = Uuid::parse_str(MONGO_CONNECTION_ID).unwrap();
+    let mut mongo = profile(mongo_id, "phase0-mongo", Engine::Mongodb, "app".into());
+    mongo.driver_id = Some("missing-document-driver".into());
+    harness.store.upsert_connection(&mongo).await.unwrap();
+    let query = DocumentQuery::Count {
+        collection: "events".into(),
+        filter: None,
+    };
+    let query_text = serde_json::to_string(&query).unwrap();
+
+    let error = harness
+        .tools
+        .run_document_query(Parameters(RunDocumentQueryArgs {
+            connection: Some("phase0-mongo".into()),
+            query,
+            max_rows: None,
+        }))
+        .await
+        .unwrap_err();
+    let wire = serde_json::to_value(error).unwrap();
+    assert_eq!(wire["code"], -32603);
+    assert_eq!(
+        wire["message"],
+        "config error: unknown database driver \"missing-document-driver\""
+    );
+    {
+        let events = harness.events.lock().unwrap();
+        assert_eq!(
+            events.as_slice(),
+            [json!({
+                "event": "agent:tool_call",
+                "payload": {
+                    "tool": "run_document_query",
+                    "connection": "phase0-mongo",
+                    "connectionId": mongo_id,
+                    "sql": query_text,
+                },
+            })]
+        );
+    }
+    let (audit_entries, chain_ok, first_bad) =
+        audit::snapshot(&harness.store, mongo_id).await.unwrap();
+    assert!(chain_ok);
+    assert_eq!(first_bad, None);
+    assert!(audit_entries.is_empty());
+    assert!(harness
+        .store
+        .list_history(mongo_id)
+        .await
+        .unwrap()
+        .is_empty());
+
+    harness.close().await;
+}
+
+#[tokio::test]
+async fn document_write_rejection_preserves_result_event_and_no_history() {
+    let harness = SqliteHarness::new().await;
+    let mongo_id = Uuid::parse_str(MONGO_CONNECTION_ID).unwrap();
+    harness
+        .store
+        .upsert_connection(&profile(
+            mongo_id,
+            "phase0-mongo",
+            Engine::Mongodb,
+            "app".into(),
+        ))
+        .await
+        .unwrap();
+    let query = DocumentQuery::Aggregate {
+        collection: "events".into(),
+        pipeline: vec![json!({ "$out": "copied_events" })],
+    };
+    let query_text = serde_json::to_string(&query).unwrap();
+    let message = "aggregate stage \"$out\" is not in the read-only allowlist";
+
+    let error = harness
+        .tools
+        .run_document_query(Parameters(RunDocumentQueryArgs {
+            connection: Some("phase0-mongo".into()),
+            query,
+            max_rows: None,
+        }))
+        .await
+        .unwrap_err();
+    let wire = serde_json::to_value(error).unwrap();
+    assert_eq!(wire["code"], -32602);
+    assert_eq!(wire["message"], message);
+
+    {
+        let events = harness.events.lock().unwrap();
+        assert_eq!(
+            events.as_slice(),
+            [
+                json!({
+                    "event": "agent:tool_call",
+                    "payload": {
+                        "tool": "run_document_query",
+                        "connection": "phase0-mongo",
+                        "connectionId": mongo_id,
+                        "sql": query_text,
+                    },
+                }),
+                json!({
+                    "event": "agent:result",
+                    "payload": {
+                        "tool": "run_document_query",
+                        "connection": "phase0-mongo",
+                        "connectionId": mongo_id,
+                        "sql": query_text,
+                        "error": message,
+                    },
+                }),
+            ]
+        );
+    }
+
+    let (audit_entries, chain_ok, first_bad) =
+        audit::snapshot(&harness.store, mongo_id).await.unwrap();
+    assert!(chain_ok);
+    assert_eq!(first_bad, None);
+    assert_eq!(audit_entries.len(), 1);
+    assert_eq!(audit_entries[0].action, "mcp:run_document_query");
+    assert_eq!(audit_entries[0].sql, query_text);
+    assert_eq!(audit_entries[0].kind, QueryKind::Write);
+    assert_eq!(audit_entries[0].error.as_deref(), Some(message));
+    assert!(harness
+        .store
+        .list_history(mongo_id)
+        .await
+        .unwrap()
+        .is_empty());
+
+    harness.close().await;
+}
+
+#[test]
+fn document_response_keeps_full_cells_while_event_preview_is_capped() {
+    let connection_id = Uuid::parse_str(MONGO_CONNECTION_ID).unwrap();
+    let query = DocumentQuery::Find {
+        collection: "events".into(),
+        filter: None,
+        projection: None,
+        sort: None,
+        skip: None,
+        limit: None,
+    };
+    let large = "x".repeat(CELL_PREVIEW_MAX + 100);
+    let page = DocumentPage {
+        documents: vec![json!({ "large": large })],
+        doc_count: 1,
+        truncated: false,
+        duration_ms: 7,
+    };
+
+    let response = document_query_payload("phase0-mongo", connection_id, &query, &page);
+    assert_eq!(
+        response,
+        json!({
+            "connection": "phase0-mongo",
+            "connectionId": connection_id,
+            "query": query,
+            "documents": [{ "large": large }],
+            "docCount": 1,
+            "truncated": false,
+            "uiMessage": "The full result is visible in the DopeDB app.",
+        })
+    );
+
+    let query_text = serde_json::to_string(&query).unwrap();
+    let event = document_success_event_payload("phase0-mongo", connection_id, &query_text, &page);
+    let mut preview = page.documents[0]
+        .to_string()
+        .chars()
+        .take(CELL_PREVIEW_MAX)
+        .collect::<String>();
+    preview.push('…');
+    assert_eq!(
+        event,
+        json!({
+            "tool": "run_document_query",
+            "connection": "phase0-mongo",
+            "connectionId": connection_id,
+            "sql": query_text,
+            "columns": ["document"],
+            "rows": [[preview]],
+            "rowCount": 1,
+            "truncated": false,
+            "durationMs": 7,
+        })
+    );
+}
+
 #[test]
 fn pure_payloads_match_phase_zero_golden() {
     let mut prod = profile(
@@ -692,7 +1046,12 @@ fn pure_payloads_match_phase_zero_golden() {
             "risk": classification.risk,
             "tables": classification.tables,
         },
-        "payload": document_query_payload(&mongo_profile, &query, &page),
+        "payload": document_query_payload(
+            &mongo_profile.name,
+            mongo_profile.id,
+            &query,
+            &page,
+        ),
     });
 
     let fixture = fixture_success();
@@ -769,7 +1128,11 @@ async fn mcp_owned_errors_match_phase_zero_golden() {
         .unwrap_err();
     actual.push(error_case("usedPlan", error));
 
-    let context = harness.tools.pin(harness.connection_id).await.unwrap();
+    let context = harness
+        .connections
+        .pin(harness.connection_id, ConnectionAccess::Read)
+        .await
+        .unwrap();
     let expired_id = Uuid::parse_str("018f1111-2222-7333-8444-555566667779").unwrap();
     harness.tools.services.query.seed_plan_for_test(
         expired_id,
@@ -854,7 +1217,11 @@ async fn mcp_owned_errors_match_phase_zero_golden() {
         .unwrap_err();
     actual.push(error_case("missingQueryRun", error));
 
-    let context = harness.tools.pin(harness.connection_id).await.unwrap();
+    let context = harness
+        .connections
+        .pin(harness.connection_id, ConnectionAccess::Read)
+        .await
+        .unwrap();
     let pin = context.pin().clone();
     drop(context);
     let manual_run_id = Uuid::parse_str("018f1111-2222-7333-8444-555566667781").unwrap();

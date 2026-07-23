@@ -7,7 +7,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 #[cfg(test)]
 use std::sync::Mutex;
-use std::time::Duration;
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock};
@@ -18,29 +17,29 @@ use serde_json::json;
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
+#[cfg(test)]
 use chrono::Utc;
 
 use crate::audit::{self, RecordArgs};
-use crate::connection::{ConnectionAccess, ConnectionContext, ConnectionManager};
 use crate::error::AppError;
-use crate::model::{
-    ConnectionProfile, DashboardKind, DocumentPage, DocumentQuery, Engine, HistoryEntry, QueryKind,
-};
-use crate::safety;
+#[cfg(test)]
+use crate::model::{ConnectionProfile, HistoryEntry};
+use crate::model::{DashboardKind, DocumentPage, DocumentQuery, Engine, QueryKind};
+#[cfg(test)]
+use crate::services::MAX_AGENT_ROWS;
 use crate::services::{
     AgentConnectionSummary, AgentDashboardCommitError, AgentDashboardPrepareError,
-    AgentDashboardPresentation, AgentQueryInvocationOrigin, AgentQueryPlanError,
-    AgentQueryPlanRequest, AgentQueryRunError, AgentQueryRunPrepareError, ApplicationServices,
-    CatalogReadPolicy, LegacyConnectionResolutionError, MAX_AGENT_ROWS, QUERY_PLAN_TTL,
+    AgentDashboardPresentation, AgentDocumentReadError, AgentDocumentReadRequest,
+    AgentQueryInvocationOrigin, AgentQueryPlanError, AgentQueryPlanRequest, AgentQueryRunError,
+    AgentQueryRunPrepareError, ApplicationServices, CatalogReadPolicy,
+    LegacyConnectionResolutionError, QUERY_PLAN_TTL,
 };
-use crate::store::{PinnedConnection, Store};
+use crate::store::Store;
 
 #[derive(Clone)]
 pub(crate) struct DbTools {
     store: Store,
     events: ToolEventSink,
-    /// Scope-aware connection manager shared with the UI and other agent transports.
-    conns: ConnectionManager,
     /// Transport-neutral application services shared with the Tauri adapter.
     services: ApplicationServices,
 }
@@ -167,32 +166,21 @@ fn connection_list_payload(connections: &[AgentConnectionSummary]) -> serde_json
 }
 
 impl DbTools {
-    pub(crate) fn new(
-        store: Store,
-        app: AppHandle,
-        conns: ConnectionManager,
-        services: ApplicationServices,
-    ) -> Self {
+    pub(crate) fn new(store: Store, app: AppHandle, services: ApplicationServices) -> Self {
         Self {
             store,
             events: ToolEventSink::tauri(app),
-            conns,
             services,
         }
     }
 
     #[cfg(test)]
-    fn new_for_test(
-        store: Store,
-        conns: ConnectionManager,
-        services: ApplicationServices,
-    ) -> (Self, RecordedToolEvents) {
+    fn new_for_test(store: Store, services: ApplicationServices) -> (Self, RecordedToolEvents) {
         let (events, recorded) = ToolEventSink::recording();
         (
             Self {
                 store,
                 events,
-                conns,
                 services,
             },
             recorded,
@@ -218,45 +206,6 @@ impl DbTools {
                     McpError::invalid_params(format!("no connection matching '{selector}'"), None)
                 }
             })
-    }
-
-    /// Pin the active workspace/account authority without opening the target DB.
-    async fn pin(&self, id: Uuid) -> Result<ConnectionContext, McpError> {
-        self.conns
-            .pin(id, ConnectionAccess::Read)
-            .await
-            .map_err(err)
-    }
-
-    /// Persist one MCP query-history row and return its durable consent handle.
-    async fn history(
-        &self,
-        pin: &PinnedConnection,
-        sql: &str,
-        status: &str,
-        rows: Option<i64>,
-        dur_ms: Option<i64>,
-        error: Option<String>,
-    ) -> Result<Uuid, AppError> {
-        let id = Uuid::new_v4();
-        self.store
-            .insert_history_if_current(
-                pin,
-                &HistoryEntry {
-                    id,
-                    connection_id: pin.connection_id,
-                    sql: sql.to_string(),
-                    kind: QueryKind::Read,
-                    status: status.to_string(),
-                    row_count: rows,
-                    duration_ms: dur_ms,
-                    error,
-                    executed_at: Utc::now(),
-                    origin: "agent".into(),
-                },
-            )
-            .await?;
-        Ok(id)
     }
 
     /// Best-effort audit record for an MCP tool call. Origin is encoded in `action`
@@ -316,18 +265,43 @@ fn truncate_cells(rows: &[Vec<serde_json::Value>]) -> Vec<Vec<serde_json::Value>
 }
 
 fn document_query_payload(
-    profile: &ConnectionProfile,
+    connection_name: &str,
+    connection_id: Uuid,
     query: &DocumentQuery,
     result: &DocumentPage,
 ) -> serde_json::Value {
     json!({
-        "connection": &profile.name,
-        "connectionId": profile.id,
+        "connection": connection_name,
+        "connectionId": connection_id,
         "query": query,
         "documents": &result.documents,
         "docCount": result.doc_count,
         "truncated": result.truncated,
         "uiMessage": "The full result is visible in the DopeDB app.",
+    })
+}
+
+fn document_success_event_payload(
+    connection_name: &str,
+    connection_id: Uuid,
+    query_text: &str,
+    result: &DocumentPage,
+) -> serde_json::Value {
+    let rows = result
+        .documents
+        .iter()
+        .map(|document| vec![document.clone()])
+        .collect::<Vec<_>>();
+    json!({
+        "tool": "run_document_query",
+        "connection": connection_name,
+        "connectionId": connection_id,
+        "sql": query_text,
+        "columns": ["document"],
+        "rows": truncate_cells(&rows),
+        "rowCount": result.doc_count,
+        "truncated": result.truncated,
+        "durationMs": result.duration_ms,
     })
 }
 
@@ -767,155 +741,80 @@ impl DbTools {
         Parameters(args): Parameters<RunDocumentQueryArgs>,
     ) -> Result<CallToolResult, McpError> {
         let resolved = self.resolve_conn(&args.connection).await?;
-        // The audit/history/feed `sql` slot carries the serialized typed request.
-        let query_text = serde_json::to_string(&args.query).map_err(|e| err(e.into()))?;
+        let request = AgentDocumentReadRequest::try_new(
+            resolved.id,
+            args.query,
+            args.max_rows,
+            AgentQueryInvocationOrigin::Mcp,
+        )
+        .map_err(err)?;
         self.emit(
             "agent:tool_call",
             json!({
                 "tool": "run_document_query",
                 "connection": resolved.name,
                 "connectionId": resolved.id,
-                "sql": query_text,
+                "sql": request.query_text(),
             }),
         );
-        let context = self.pin(resolved.id).await?;
-        let operation_pin = context.pin().clone();
-        let profile = context.pin().profile.clone();
-        if !profile.engine.is_document() {
-            return Err(McpError::invalid_params(
-                "run_document_query only works on MongoDB connections — use plan_query/run_query for SQL engines",
-                None,
-            ));
-        }
-
-        // Typed L1 equivalent: the request tree is validated against the read-only
-        // stage allowlist; anything else fail-safes to a blocked write.
-        let cls = crate::mongo::query::classify(&args.query);
-        if !matches!(cls.kind, QueryKind::Read) {
-            let msg = cls
-                .notes
-                .first()
-                .cloned()
-                .unwrap_or_else(|| "document writes are not supported over MCP".into());
-            self.audit(
-                profile.id,
-                profile.engine,
-                &query_text,
-                cls.kind,
-                "mcp:run_document_query",
-                Some(msg.clone()),
-            )
-            .await;
-            self.emit(
-                "agent:result",
-                json!({
-                    "tool": "run_document_query",
-                    "connection": profile.name,
-                    "connectionId": profile.id,
-                    "sql": query_text,
-                    "error": msg,
-                }),
-            );
-            return Err(McpError::invalid_params(msg, None));
-        }
-
-        let settings = self.store.get_safety(profile.id).await.map_err(err)?;
-        let cap = args
-            .max_rows
-            .unwrap_or(settings.max_rows)
-            .min(MAX_AGENT_ROWS);
-        let live = context.connect().await.map_err(err)?;
-        let result = match crate::mongo::query::run(
-            live.live().mongo().map_err(err)?,
-            &args.query,
-            cap,
-            Duration::from_millis(safety::STATEMENT_TIMEOUT_MS),
-        )
-        .await
-        {
-            Ok(page) => page,
-            Err(e) => {
-                let message = e.to_string();
-                self.audit(
-                    profile.id,
-                    profile.engine,
-                    &query_text,
-                    QueryKind::Read,
-                    "mcp:run_document_query",
-                    Some(message.clone()),
-                )
-                .await;
-                if let Err(history_error) = self
-                    .history(
-                        &operation_pin,
-                        &query_text,
-                        "error",
-                        None,
-                        None,
-                        Some(message.clone()),
-                    )
-                    .await
-                {
-                    tracing::error!(
-                        "MCP failed-document-query history insert failed: {history_error}"
-                    );
-                }
+        let receipt = match self.services.document.run_agent_read(request).await {
+            Ok(receipt) => receipt,
+            Err(AgentDocumentReadError::NonDocumentConnection) => {
+                return Err(McpError::invalid_params(
+                    "run_document_query only works on MongoDB connections — use plan_query/run_query for SQL engines",
+                    None,
+                ));
+            }
+            Err(AgentDocumentReadError::Rejected(rejected)) => {
+                let context = rejected.event_context();
+                let message = rejected.message().to_string();
                 self.emit(
                     "agent:result",
                     json!({
                         "tool": "run_document_query",
-                        "connection": profile.name,
-                        "connectionId": profile.id,
-                        "sql": query_text,
+                        "connection": context.connection_name,
+                        "connectionId": context.connection_id,
+                        "sql": context.query_text,
                         "error": message,
                     }),
                 );
-                return Err(err(e));
+                return Err(McpError::invalid_params(rejected.into_message(), None));
+            }
+            Err(AgentDocumentReadError::Application(error)) => return Err(err(error)),
+            Err(AgentDocumentReadError::Execution(failure)) => {
+                let context = failure.event_context();
+                let message = failure.error().to_string();
+                self.emit(
+                    "agent:result",
+                    json!({
+                        "tool": "run_document_query",
+                        "connection": context.connection_name,
+                        "connectionId": context.connection_id,
+                        "sql": context.query_text,
+                        "error": message,
+                    }),
+                );
+                return Err(err(failure.into_error()));
             }
         };
+        let result = receipt.result();
 
-        self.audit(
-            profile.id,
-            profile.engine,
-            &query_text,
-            QueryKind::Read,
-            "mcp:run_document_query",
-            None,
-        )
-        .await;
-        if let Err(e) = self
-            .history(
-                &operation_pin,
-                &query_text,
-                "ok",
-                Some(result.doc_count as i64),
-                Some(result.duration_ms as i64),
-                None,
-            )
-            .await
-        {
-            tracing::error!("MCP document-query history insert failed: {e}");
-        }
-
-        // The live feed renders a columns/rows grid — one document per row.
-        let feed_rows: Vec<Vec<serde_json::Value>> =
-            result.documents.iter().map(|d| vec![d.clone()]).collect();
         self.emit(
             "agent:result",
-            json!({
-                "tool": "run_document_query",
-                "connection": profile.name,
-                "connectionId": profile.id,
-                "sql": query_text,
-                "columns": ["document"],
-                "rows": truncate_cells(&feed_rows),
-                "rowCount": result.doc_count,
-                "truncated": result.truncated,
-                "durationMs": result.duration_ms,
-            }),
+            document_success_event_payload(
+                &result.context.connection_name,
+                result.context.connection_id,
+                &result.context.query_text,
+                &result.page,
+            ),
         );
 
-        let out = document_query_payload(&profile, &args.query, &result);
+        let out = document_query_payload(
+            &result.context.connection_name,
+            result.context.connection_id,
+            &result.query,
+            &result.page,
+        );
         Ok(CallToolResult::success(vec![ContentBlock::text(
             out.to_string(),
         )]))
@@ -1056,6 +955,7 @@ mod tests {
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
     use super::*;
+    use crate::connection::ConnectionManager;
     use crate::model::{WorkspaceConnectionAccess, WorkspaceCredentialMode};
     use crate::store::TEST_SCHEMA;
 
@@ -1131,7 +1031,7 @@ mod tests {
 
         let connections = ConnectionManager::new(store.clone());
         let services = ApplicationServices::new(store.clone(), connections.clone());
-        let (tools, events) = DbTools::new_for_test(store.clone(), connections, services);
+        let (tools, events) = DbTools::new_for_test(store.clone(), services);
         (tools, events, store, connection_id, query_run_id)
     }
 

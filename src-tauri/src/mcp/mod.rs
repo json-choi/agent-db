@@ -23,15 +23,10 @@ use rmcp::transport::streamable_http_server::StreamableHttpService;
 use tauri::AppHandle;
 use uuid::Uuid;
 
-use crate::connection::ConnectionManager;
 use crate::services::ApplicationServices;
 use crate::state::McpRuntime;
 use crate::store::Store;
 use tools::DbTools;
-
-/// Shared live-connection cache — the SAME instance as `AppState.connections`, so a
-/// connection edit/delete evicts the agent's cached pool too.
-pub type SharedConns = ConnectionManager;
 
 /// Fixed loopback port for the Streamable HTTP MCP endpoint.
 pub const MCP_PORT: u16 = 7686;
@@ -352,19 +347,11 @@ pub async fn serve_mcp(
     app: AppHandle,
     store: Store,
     token: String,
-    conns: SharedConns,
     services: ApplicationServices,
     runtime: Arc<Mutex<McpRuntime>>,
 ) -> std::io::Result<()> {
     let service = StreamableHttpService::new(
-        move || {
-            Ok::<_, std::io::Error>(DbTools::new(
-                store.clone(),
-                app.clone(),
-                conns.clone(),
-                services.clone(),
-            ))
-        },
+        move || Ok::<_, std::io::Error>(DbTools::new(store.clone(), app.clone(), services.clone())),
         Arc::new(LocalSessionManager::default()),
         Default::default(),
     );
@@ -442,7 +429,6 @@ pub async fn serve_stdio_bridge(
     app: AppHandle,
     store: Store,
     token: String,
-    conns: SharedConns,
     services: ApplicationServices,
     runtime: Arc<Mutex<McpRuntime>>,
 ) -> std::io::Result<()> {
@@ -470,7 +456,6 @@ pub async fn serve_stdio_bridge(
         };
         let store = store.clone();
         let app = app.clone();
-        let conns = conns.clone();
         let services = services.clone();
         let token = token.clone();
         tokio::spawn(async move {
@@ -486,7 +471,7 @@ pub async fn serve_stdio_bridge(
                 tracing::warn!("bridge auth failed — dropping connection");
                 return; // unauthenticated — drop the connection
             }
-            let handler = DbTools::new(store, app, conns, services);
+            let handler = DbTools::new(store, app, services);
             match rmcp::serve_server(handler, (reader, w)).await {
                 Ok(service) => {
                     let _ = service.waiting().await;

@@ -55,27 +55,23 @@ pub fn run() {
             let st = app.state::<state::AppState>();
             let store = st.store.clone();
             let token = st.mcp_token.clone();
-            // Share the SAME live-connection map + runtime-status cell as AppState, so
-            // connection edits/deletes evict the agent's pools and the UI can tell
-            // "actually listening" from "config exists".
-            let conns = st.connections.clone();
+            // ApplicationServices owns the same scope-aware connection manager as
+            // AppState; runtime status remains shared so the UI can report the
+            // listener that is actually active.
             let services = st.services.clone();
             let runtime = st.mcp_runtime.clone();
             let handle = app.handle().clone();
             // HTTP endpoint (Claude Code / Cursor / …).
             {
-                let (store, token, handle, conns, services, runtime) = (
+                let (store, token, handle, services, runtime) = (
                     store.clone(),
                     token.clone(),
                     handle.clone(),
-                    conns.clone(),
                     services.clone(),
                     runtime.clone(),
                 );
                 tauri::async_runtime::spawn(async move {
-                    if let Err(e) =
-                        mcp::serve_mcp(handle, store, token, conns, services, runtime).await
-                    {
+                    if let Err(e) = mcp::serve_mcp(handle, store, token, services, runtime).await {
                         tracing::error!("MCP HTTP server failed: {e}");
                     }
                 });
@@ -83,7 +79,7 @@ pub fn run() {
             // Raw TCP listener the stdio bridge dials (Claude Desktop).
             tauri::async_runtime::spawn(async move {
                 if let Err(e) =
-                    mcp::serve_stdio_bridge(handle, store, token, conns, services, runtime).await
+                    mcp::serve_stdio_bridge(handle, store, token, services, runtime).await
                 {
                     tracing::error!("MCP stdio-bridge failed: {e}");
                 }

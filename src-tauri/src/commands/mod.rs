@@ -19,15 +19,17 @@ use crate::connection::{self, ConnectionAccess, ConnectionLease, DbPool};
 use crate::error::{AppError, AppResult};
 use crate::executor;
 use crate::model::{
-    Classification, ConnectionProfile, Dashboard, DashboardDraft, DocumentPage, DocumentQuery,
-    Engine, ExecOutcome, HistoryEntry, MonitoringStatus, PlatformFeatureFlags, PreviewMode,
-    PreviewReport, QueryKind, QueryResult, SafetySettings, Workspace, WorkspaceAuthState,
-    WorkspaceAuthUser, WorkspaceConnectionAccess, WorkspaceCredentialMode,
-    WorkspaceDeviceAuthorization, WorkspaceFeatureState, WorkspaceKind, WorkspaceLoginPoll,
+    Classification, ConnectionProfile, Dashboard, DashboardDraft, DocumentQuery, Engine,
+    ExecOutcome, HistoryEntry, MonitoringStatus, PlatformFeatureFlags, PreviewMode, PreviewReport,
+    QueryKind, QueryResult, SafetySettings, Workspace, WorkspaceAuthState, WorkspaceAuthUser,
+    WorkspaceConnectionAccess, WorkspaceCredentialMode, WorkspaceDeviceAuthorization,
+    WorkspaceFeatureState, WorkspaceKind, WorkspaceLoginPoll,
 };
 use crate::monitoring;
 use crate::safety::{classify, decide, preview, GateDecision, PoolRef};
-use crate::services::CatalogReadPolicy;
+use crate::services::{
+    CatalogReadPolicy, DesktopDocumentReadError, DesktopDocumentReadRequest, DocumentReadReceipt,
+};
 use crate::state::AppState;
 use crate::store::PinnedConnection;
 
@@ -1409,120 +1411,19 @@ pub async fn run_document_query(
     approved: bool,
     query_id: Option<Uuid>,
     origin: Option<String>,
-) -> AppResult<DocumentPage> {
-    let operation_scope = state.connections.begin_operation_scope().await;
-    let operation_pin = operation_scope.pin_connection(id).await?;
-    let profile = operation_pin.profile.clone();
-    if !profile.engine.is_document() {
-        return Err(AppError::Config(
-            "document queries are only available on MongoDB connections".into(),
-        ));
-    }
-    let settings = state.store.get_safety(id).await?;
-    let classification = crate::mongo::query::classify(&query);
-    let origin = origin.unwrap_or_else(|| "manual".into());
-    // The audit/history `sql` column carries the serialized typed request.
-    let audited = serde_json::to_string(&query)?;
-
-    let blocked_reason = if !matches!(classification.kind, QueryKind::Read) {
-        Some(
-            classification
-                .notes
-                .first()
-                .cloned()
-                .unwrap_or_else(|| "document writes are not supported".into()),
-        )
-    } else {
-        match decide(&settings, &classification) {
-            GateDecision::Block { reason } => Some(reason),
-            GateDecision::RequireApproval if !approved => {
-                Some("this query requires explicit approval".into())
-            }
-            _ => None,
-        }
-    };
-    if let Some(reason) = blocked_reason {
-        record_run(
-            &state,
-            &operation_pin,
-            &audited,
-            classification.kind,
-            "blocked",
-            "blocked",
-            None,
-            None,
-            Some(reason.clone()),
-            &origin,
-        )
-        .await;
-        return Err(AppError::Blocked { reason });
-    }
-
-    let live = match operation_scope
-        .connect(operation_pin.clone(), ConnectionAccess::Read)
+) -> AppResult<DocumentReadReceipt> {
+    state
+        .services
+        .document
+        .run_desktop_read(DesktopDocumentReadRequest {
+            connection_id: id,
+            query,
+            approved,
+            query_id,
+            origin,
+        })
         .await
-    {
-        Ok(live) => live,
-        Err(e) => {
-            record_run(
-                &state,
-                &operation_pin,
-                &audited,
-                classification.kind,
-                "error",
-                "error",
-                None,
-                None,
-                Some(e.to_string()),
-                &origin,
-            )
-            .await;
-            return Err(e);
-        }
-    };
-    let max_rows = settings.max_rows.clamp(1, 100_000);
-    // maxTimeMS mirrors the wall-clock guard so a dropped client future cannot
-    // leave a runaway server-side operation behind.
-    let run = crate::mongo::query::run(
-        live.live().mongo()?,
-        &query,
-        max_rows,
-        executor::cancel::QUERY_TIMEOUT,
-    );
-    match executor::cancel::guard(query_id, executor::cancel::QUERY_TIMEOUT, run).await {
-        Ok(page) => {
-            record_run(
-                &state,
-                &operation_pin,
-                &audited,
-                QueryKind::Read,
-                "read",
-                "ok",
-                Some(page.doc_count as i64),
-                Some(page.duration_ms as i64),
-                None,
-                &origin,
-            )
-            .await;
-            Ok(page)
-        }
-        Err(e) => {
-            record_run(
-                &state,
-                &operation_pin,
-                &audited,
-                QueryKind::Read,
-                "error",
-                "error",
-                None,
-                None,
-                Some(e.to_string()),
-                &origin,
-            )
-            .await;
-            Err(e)
-        }
-    }
+        .map_err(DesktopDocumentReadError::into_error)
 }
 
 // ── multi-statement script execution ─────────────────────────────────────────
