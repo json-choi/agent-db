@@ -19,9 +19,10 @@ use tokio::io::AsyncBufReadExt;
 use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
 
+use crate::connection::ConnectionManager;
 use crate::error::{AppError, AppResult};
 use crate::executor::cancel;
-use crate::introspect::Catalog;
+use crate::introspect::{self, Catalog};
 use crate::mcp::connect;
 use crate::model::ConnectionProfile;
 use crate::store::Store;
@@ -331,6 +332,7 @@ pub async fn send_turn(
     app: AppHandle,
     state: ChatState,
     store: Store,
+    connections: ConnectionManager,
     mcp_token: String,
     mcp_url: String,
     thread_id: Uuid,
@@ -363,7 +365,19 @@ pub async fn send_turn(
     let cli_message = match (thread.connection_id, resume.is_none()) {
         (Some(conn_id), true) => match store.get_connection(conn_id).await {
             Ok(profile) => {
-                let catalog_json = store.get_schema_cache(conn_id).await.unwrap_or(None);
+                let catalog_json =
+                    match introspect::load_cached_catalog(&store, &connections, conn_id).await {
+                        Ok(Some(catalog)) => serde_json::to_string(&catalog).ok(),
+                        Ok(None) => None,
+                        Err(error) => {
+                            tracing::warn!(
+                                connection_id = %conn_id,
+                                %error,
+                                "chat schema cache unavailable after authorization"
+                            );
+                            None
+                        }
+                    };
                 format!(
                     "{}\n\n{message}",
                     build_context_block(&profile, catalog_json.as_deref())

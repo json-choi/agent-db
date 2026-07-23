@@ -7,6 +7,7 @@ const {
   authorizeWorkspaceMock,
   batchMock,
   claimRevocationGateMock,
+  clearRevocationGateMock,
   connectionFindFirstMock,
   releaseRevocationGateClaimMock,
   revokeActiveLeasesMock,
@@ -25,6 +26,7 @@ const {
     authorizeWorkspaceMock: vi.fn(),
     batchMock: vi.fn(),
     claimRevocationGateMock: vi.fn(),
+    clearRevocationGateMock: vi.fn(),
     connectionFindFirstMock: vi.fn(),
     releaseRevocationGateClaimMock: vi.fn(),
     revokeActiveLeasesMock: vi.fn(),
@@ -70,6 +72,7 @@ vi.mock("../../../../../../../../lib/providers/gcp-cloud-sql", () => ({
 }));
 vi.mock("../../../../../../../../lib/revocation-gates", () => ({
   claimRevocationGate: claimRevocationGateMock,
+  clearRevocationGate: clearRevocationGateMock,
   releaseRevocationGateClaim: releaseRevocationGateClaimMock,
   revocationGateLockKey: vi.fn((target: {
     kind: string;
@@ -161,6 +164,7 @@ beforeEach(() => {
   });
   validateManagedProviderResourceMock.mockResolvedValue(undefined);
   claimRevocationGateMock.mockResolvedValue(claim);
+  clearRevocationGateMock.mockResolvedValue(true);
   releaseRevocationGateClaimMock.mockResolvedValue(true);
   revokeActiveLeasesMock.mockResolvedValue({ revoked: 1, deferred: 0 });
   batchMock.mockResolvedValue([
@@ -183,6 +187,50 @@ describe("managed access revocation gate", () => {
     await expect(response.json()).resolves.toEqual({
       error: "Another connection access change is already in progress",
     });
+    expect(revokeActiveLeasesMock).not.toHaveBeenCalled();
+    expect(batchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a claim that does not follow the validated connection revision", async () => {
+    claimRevocationGateMock.mockResolvedValue({
+      ...claim,
+      connectionRevision: 10,
+    });
+
+    const response = await PUT(
+      mutationRequest({ mode: "member_local" }),
+      context,
+    );
+
+    expect(response.status).toBe(409);
+    expect(clearRevocationGateMock).toHaveBeenCalledWith(
+      expect.objectContaining({ connectionRevision: 10 }),
+    );
+    expect(releaseRevocationGateClaimMock).not.toHaveBeenCalled();
+    expect(revokeActiveLeasesMock).not.toHaveBeenCalled();
+    expect(batchMock).not.toHaveBeenCalled();
+  });
+
+  it("releases only a stale takeover claim on a revision mismatch", async () => {
+    claimRevocationGateMock.mockResolvedValue({
+      ...claim,
+      firstPending: false,
+      connectionRevision: 10,
+    });
+
+    const response = await PUT(
+      mutationRequest({ mode: "member_local" }),
+      context,
+    );
+
+    expect(response.status).toBe(409);
+    expect(releaseRevocationGateClaimMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        firstPending: false,
+        connectionRevision: 10,
+      }),
+    );
+    expect(clearRevocationGateMock).not.toHaveBeenCalled();
     expect(revokeActiveLeasesMock).not.toHaveBeenCalled();
     expect(batchMock).not.toHaveBeenCalled();
   });
@@ -245,5 +293,13 @@ describe("managed access revocation gate", () => {
       revocationClaimedAt: null,
       revocationClaimId: null,
     }));
+    const values = updateSetMock.mock.calls.at(0)?.at(0) as
+      | { revision?: SQL }
+      | undefined;
+    expect(values?.revision).toBeDefined();
+    const revision = new PgDialect().sqlToQuery(values!.revision!);
+    expect(revision.sql.replace(/\s+/g, " ")).toContain(
+      "\"workspace_connection\".\"revision\" + 1",
+    );
   });
 });

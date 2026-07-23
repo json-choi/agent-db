@@ -67,6 +67,8 @@ VALUES
      CURRENT_TIMESTAMP);
 INSERT OR IGNORE INTO app_settings (key, value)
 VALUES ('active_workspace_id', '00000000-0000-0000-0000-000000000001');
+INSERT OR IGNORE INTO app_settings (key, value)
+VALUES ('active_scope_generation', '0');
 
 CREATE TABLE IF NOT EXISTS connections (
     id                TEXT PRIMARY KEY,
@@ -109,6 +111,7 @@ CREATE TABLE IF NOT EXISTS workspace_connection_bindings (
     secret_ref     TEXT,
     workspace_access TEXT NOT NULL DEFAULT 'view',
     allow_writes   INTEGER NOT NULL DEFAULT 0,
+    revision       INTEGER NOT NULL DEFAULT 1,
     updated_at     TEXT NOT NULL,
     PRIMARY KEY (connection_id, account_user_id)
 );
@@ -227,6 +230,23 @@ CREATE TABLE IF NOT EXISTS schema_cache (
     introspected_at TEXT NOT NULL,
     catalog_json    TEXT NOT NULL,
     PRIMARY KEY (connection_id, account_scope)
+);
+
+-- Security-scoped Catalog V2 cache. Keep the legacy table above intact so an older
+-- desktop binary can still start after a rollback. Legacy rows are deliberately not
+-- copied here because they cannot prove workspace, connection, or binding revision.
+CREATE TABLE IF NOT EXISTS schema_cache_v2 (
+    workspace_id          TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    account_scope         TEXT NOT NULL,
+    connection_id         TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
+    connection_revision   INTEGER NOT NULL,
+    binding_revision      INTEGER NOT NULL,
+    binding_updated_at    TEXT NOT NULL DEFAULT '',
+    catalog_schema_version INTEGER NOT NULL,
+    fingerprint           TEXT NOT NULL,
+    captured_at           TEXT NOT NULL,
+    catalog_json          TEXT NOT NULL,
+    PRIMARY KEY (workspace_id, account_scope, connection_id)
 );
 
 -- In-app agent chat: one row per conversation thread. `cli_session_id` is the

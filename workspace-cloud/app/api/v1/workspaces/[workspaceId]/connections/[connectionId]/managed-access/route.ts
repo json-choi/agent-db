@@ -20,6 +20,7 @@ import { vercelOidcToken } from "../../../../../../../../lib/providers/gcp-cloud
 import { ProviderRequestError } from "../../../../../../../../lib/providers/provider-types";
 import {
   claimRevocationGate,
+  clearRevocationGate,
   releaseRevocationGateClaim,
   revocationGateLockKey,
 } from "../../../../../../../../lib/revocation-gates";
@@ -104,6 +105,18 @@ export async function PUT(request: Request, context: RouteContext) {
   if (!claim) {
     return jsonError("Another connection access change is already in progress", 409);
   }
+  const expectedClaimRevision = connection.revision + (claim.firstPending ? 1 : 0);
+  if (claim.connectionRevision !== expectedClaimRevision) {
+    await (
+      claim.firstPending
+        ? clearRevocationGate(claim)
+        : releaseRevocationGateClaim(claim)
+    ).catch(() => false);
+    return jsonError(
+      "Connection changed concurrently. Retry the access update.",
+      409,
+    );
+  }
   let revocation;
   try {
     revocation = await revokeActiveLeases({
@@ -163,11 +176,15 @@ export async function PUT(request: Request, context: RouteContext) {
       revocationPendingAt: null,
       revocationClaimedAt: null,
       revocationClaimId: null,
+      // Invalidate snapshots fetched after the revocation gate opened but before
+      // this credential-mode/provider mutation commits.
+      revision: sql`${workspaceConnection.revision} + 1`,
       updatedAt,
     }).where(and(
       eq(workspaceConnection.id, connectionId),
       eq(workspaceConnection.organizationId, workspaceId),
       eq(workspaceConnection.revocationClaimId, claim.claimId),
+      eq(workspaceConnection.revision, expectedClaimRevision),
       isNull(workspaceConnection.deletedAt),
       integrationReady,
     )).returning(),

@@ -2,13 +2,15 @@ import { PgDialect } from "drizzle-orm/pg-core";
 import type { SQL } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { executeMock } = vi.hoisted(() => ({
+const { batchMock, executeMock } = vi.hoisted(() => ({
+  batchMock: vi.fn(),
   executeMock: vi.fn(),
 }));
 
 vi.mock("server-only", () => ({}));
 vi.mock("./db", () => ({
   db: {
+    batch: batchMock,
     execute: executeMock,
   },
 }));
@@ -71,9 +73,18 @@ function orderedLockKeys(params: unknown[]) {
   ));
 }
 
+function managedBatch(actionRows: unknown[]) {
+  executeMock.mockImplementation((query: unknown) => query);
+  batchMock.mockResolvedValue([
+    { rows: [{}] },
+    { rows: actionRows },
+  ]);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.useRealTimers();
+  batchMock.mockResolvedValue([]);
   executeMock.mockResolvedValue({ rows: [] });
 });
 
@@ -81,7 +92,7 @@ describe("durable revocation gate SQL", () => {
   it("uses a UUID owner as the release CAS token", async () => {
     const pendingAt = new Date("2026-07-23T12:00:00.000Z");
     executeMock
-      .mockResolvedValueOnce({ rows: [{ pendingAt }] })
+      .mockResolvedValueOnce({ rows: [{ pendingAt, memberRole: "analyst" }] })
       .mockResolvedValueOnce({ rows: [{ id: memberId }] });
 
     const claim = await claimRevocationGate({
@@ -94,6 +105,7 @@ describe("durable revocation gate SQL", () => {
     expect(claim?.claimId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
     );
+    expect(claim?.memberRole).toBe("analyst");
     await expect(releaseRevocationGateClaim(claim!)).resolves.toBe(true);
 
     const claimSql = compiledCall(0);
@@ -102,6 +114,9 @@ describe("durable revocation gate SQL", () => {
     );
     expect(claimSql.sql).toContain(
       'target."revocation_claim_id" IS NULL OR target."revocation_claimed_at" <',
+    );
+    expect(claimSql.sql).toContain(
+      'target."role" AS "memberRole"',
     );
     expect(claimSql.sql).toContain("pg_advisory_xact_lock(hashtextextended(");
     expect(claimSql.params).toContain(claim?.claimId);
@@ -150,33 +165,42 @@ describe("durable revocation gate SQL", () => {
   });
 
   it("takes member, connection, and integration advisory locks in one fixed order", async () => {
-    executeMock.mockResolvedValue({ rows: [{ status: "blocked" }] });
+    managedBatch([{ status: "blocked" }]);
 
     await expect(reserveManagedLeaseIfUnblocked(authority)).resolves.toBe("blocked");
 
-    const query = compiledCall();
-    expect(query.sql.indexOf("member_gate_lock AS")).toBeLessThan(
-      query.sql.indexOf("connection_gate_lock AS"),
+    const lockQuery = compiledCall(0);
+    const actionQuery = compiledCall(1);
+    expect(lockQuery.sql.indexOf("member_gate_lock AS")).toBeLessThan(
+      lockQuery.sql.indexOf("connection_gate_lock AS"),
     );
-    expect(query.sql.indexOf("connection_gate_lock AS")).toBeLessThan(
-      query.sql.indexOf("integration_gate_lock AS"),
+    expect(lockQuery.sql.indexOf("connection_gate_lock AS")).toBeLessThan(
+      lockQuery.sql.indexOf("integration_gate_lock AS"),
     );
-    expect(query.sql).toContain("FROM member_gate_lock");
-    expect(query.sql).toContain("FROM connection_gate_lock");
-    expect(orderedLockKeys(query.params).slice(0, 3)).toEqual([
+    expect(lockQuery.sql).toContain("FROM member_gate_lock");
+    expect(lockQuery.sql).toContain("FROM connection_gate_lock");
+    expect(lockQuery.sql.match(/pg_advisory_xact_lock_shared\(/g)).toHaveLength(3);
+    expect(lockQuery.sql).not.toContain("pg_try_advisory_xact_lock");
+    expect(orderedLockKeys(lockQuery.params).slice(0, 3)).toEqual([
       `member:${workspaceId}:target-user`,
       `connection:${workspaceId}:${connectionId}`,
       `integration:${workspaceId}:${integrationId}`,
     ]);
+    expect(actionQuery.sql).not.toContain("advisory_xact_lock");
+    expect(actionQuery.sql).toContain('authority AS ( SELECT 1 AS "allowed"');
+    expect(batchMock).toHaveBeenCalledOnce();
+    expect(batchMock.mock.calls[0]?.[0]).toHaveLength(2);
   });
 
-  it("reserves an authority-checked active slot and pending lease in one statement", async () => {
-    executeMock.mockResolvedValue({ rows: [{ status: "reserved" }] });
+  it("reserves an authority-checked active slot from the post-lock snapshot", async () => {
+    managedBatch([{ status: "reserved" }]);
 
     await expect(reserveManagedLeaseIfUnblocked(authority)).resolves.toBe("reserved");
 
-    const query = compiledCall().sql;
-    expect(executeMock).toHaveBeenCalledOnce();
+    const query = compiledCall(1).sql;
+    expect(executeMock).toHaveBeenCalledTimes(2);
+    expect(compiledCall(0).sql).toContain("pg_advisory_xact_lock_shared");
+    expect(query).not.toContain("advisory_xact_lock");
     expect(query).toContain('authority AS ( SELECT 1 AS "allowed"');
     expect(query).toContain('"workspace_control"."member"."role" =');
     expect(query).toContain('"workspace_control"."member"."role" IN');
@@ -201,13 +225,13 @@ describe("durable revocation gate SQL", () => {
   });
 
   it("finalizes only the exact live reservation under unchanged authority", async () => {
-    executeMock.mockResolvedValue({ rows: [{ id: leaseId }] });
+    managedBatch([{ id: leaseId }]);
 
     await expect(
       finalizeManagedLeaseIfUnblocked(authority, providerLease),
     ).resolves.toBe(true);
 
-    const query = compiledCall().sql;
+    const query = compiledCall(1).sql;
     expect(query).toContain(
       'lease."id" =',
     );
@@ -226,16 +250,20 @@ describe("durable revocation gate SQL", () => {
     expect(query).toContain(
       '"workspace_control"."workspace_connection"."revision" =',
     );
+    expect(query).not.toContain("advisory_xact_lock");
+    expect(compiledCall(0).sql.match(
+      /pg_advisory_xact_lock_shared\(/g,
+    )).toHaveLength(3);
   });
 
   it("delivers only the exact finalized, unrevoked, unexpired lease", async () => {
-    executeMock.mockResolvedValue({ rows: [{ id: leaseId }] });
+    managedBatch([{ id: leaseId }]);
 
     await expect(
       managedLeaseStillDeliverable(authority, providerLease),
     ).resolves.toBe(true);
 
-    const query = compiledCall().sql;
+    const query = compiledCall(1).sql;
     expect(query).toContain('lease."external_credential_id" =');
     expect(query).toContain('lease."external_credential_kind" =');
     expect(query).toContain('lease."external_credential_kind" <> \'pending\'');
@@ -249,10 +277,47 @@ describe("durable revocation gate SQL", () => {
     expect(query).toContain(
       '"workspace_control"."workspace_provider_integration"."revoked_at" IS NULL',
     );
-    expect(orderedLockKeys(compiledCall().params).slice(0, 3)).toEqual([
+    expect(query).not.toContain("advisory_xact_lock");
+    expect(compiledCall(0).sql.match(
+      /pg_advisory_xact_lock_shared\(/g,
+    )).toHaveLength(3);
+    expect(orderedLockKeys(compiledCall(0).params).slice(0, 3)).toEqual([
       `member:${workspaceId}:target-user`,
       `connection:${workspaceId}:${connectionId}`,
       `integration:${workspaceId}:${integrationId}`,
     ]);
+  });
+
+  it("guards a GCP one-time IAM token with the same fresh-snapshot transaction", async () => {
+    managedBatch([{ id: leaseId }]);
+    const gcpAuthority = {
+      ...authority,
+      provider: "gcpCloudSql",
+      accessMode: "read" as const,
+    };
+    const gcpLease = {
+      ...providerLease,
+      username: "dopedb-read@example.iam",
+      password: "one-time-gcp-iam-token",
+      accessMode: "read" as const,
+      externalCredentialId: leaseId,
+      externalCredentialKind: "iamToken" as const,
+    };
+
+    await expect(
+      managedLeaseStillDeliverable(gcpAuthority, gcpLease),
+    ).resolves.toBe(true);
+
+    const lockQuery = compiledCall(0);
+    const actionQuery = compiledCall(1);
+    expect(lockQuery.sql.match(/pg_advisory_xact_lock_shared\(/g)).toHaveLength(3);
+    expect(lockQuery.sql).not.toContain("pg_try_advisory_xact_lock");
+    expect(actionQuery.sql).not.toContain("advisory_xact_lock");
+    expect(actionQuery.params).toEqual(expect.arrayContaining([
+      "gcpCloudSql",
+      "iamToken",
+      leaseId,
+    ]));
+    expect(actionQuery.sql).not.toContain("one-time-gcp-iam-token");
   });
 });

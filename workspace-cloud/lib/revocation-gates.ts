@@ -11,7 +11,10 @@ import {
   workspaceCredentialLease,
   workspaceProviderIntegration,
 } from "./schema";
-import type { WorkspaceRoleName } from "./workspace-permissions";
+import {
+  isWorkspaceRole,
+  type WorkspaceRoleName,
+} from "./workspace-permissions";
 import type {
   ManagedAccessMode,
   ManagedProviderLease,
@@ -50,11 +53,13 @@ export type RevocationGateClaim = RevocationGateTarget & {
   pendingAt: Date;
   firstPending: boolean;
   connectionRevision?: number;
+  memberRole?: WorkspaceRoleName;
 };
 
 type ClaimedRow = {
   pendingAt: Date | string;
   connectionRevision?: number | string;
+  memberRole?: string;
 };
 
 export function revocationGateLockKey(target: RevocationGateTarget) {
@@ -81,9 +86,11 @@ function parsedClaim(
   const revision = row.connectionRevision == null
     ? undefined
     : Number(row.connectionRevision);
+  const memberRole = row.memberRole;
   if (
     Number.isNaN(pendingAt.valueOf())
     || (revision !== undefined && !Number.isSafeInteger(revision))
+    || (memberRole !== undefined && !isWorkspaceRole(memberRole))
   ) {
     throw new Error("Invalid revocation gate claim");
   }
@@ -94,6 +101,7 @@ function parsedClaim(
     pendingAt,
     firstPending: pendingAt.valueOf() === claimedAt.valueOf(),
     ...(revision === undefined ? {} : { connectionRevision: revision }),
+    ...(memberRole === undefined ? {} : { memberRole }),
   };
 }
 
@@ -124,7 +132,8 @@ export async function claimRevocationGate(
             target."revocation_claim_id" IS NULL
             OR target."revocation_claimed_at" < ${staleBefore}
           )
-        RETURNING target."revocation_pending_at" AS "pendingAt"
+        RETURNING target."revocation_pending_at" AS "pendingAt",
+                  target."role" AS "memberRole"
       )
       SELECT * FROM claimed
     `);
@@ -327,25 +336,26 @@ function authorityPredicate(input: ManagedLeaseAuthority) {
   `;
 }
 
-function authorityLocks(input: ManagedLeaseAuthority) {
+function authorityLockStatement(input: ManagedLeaseAuthority) {
   return sql`
-    member_gate_lock AS (
-      SELECT pg_advisory_xact_lock(
+    member_gate_lock AS MATERIALIZED (
+      SELECT pg_advisory_xact_lock_shared(
         hashtextextended(${memberGateKey(input)}, 0)
       )
     ),
-    connection_gate_lock AS (
-      SELECT pg_advisory_xact_lock(
+    connection_gate_lock AS MATERIALIZED (
+      SELECT pg_advisory_xact_lock_shared(
         hashtextextended(${connectionGateKey(input)}, 0)
       )
       FROM member_gate_lock
     ),
-    integration_gate_lock AS (
-      SELECT pg_advisory_xact_lock(
+    integration_gate_lock AS MATERIALIZED (
+      SELECT pg_advisory_xact_lock_shared(
         hashtextextended(${integrationGateKey(input)}, 0)
       )
       FROM connection_gate_lock
     )
+    SELECT 1 AS "locked" FROM integration_gate_lock
   `;
 }
 
@@ -353,12 +363,12 @@ export async function reserveManagedLeaseIfUnblocked(
   input: ManagedLeaseAuthority,
 ) {
   const pendingExpiresAt = new Date(Date.now() + PENDING_LEASE_SECONDS * 1_000);
-  const result = await db.execute<{ status: string }>(sql`
-    WITH ${authorityLocks(input)},
-    authority AS (
+  const [, result] = await db.batch([
+    db.execute(sql`WITH ${authorityLockStatement(input)}`),
+    db.execute<{ status: string }>(sql`
+    WITH authority AS (
       SELECT 1 AS "allowed"
-      FROM ${member}, ${workspaceConnection}, ${workspaceProviderIntegration},
-           integration_gate_lock
+      FROM ${member}, ${workspaceConnection}, ${workspaceProviderIntegration}
       WHERE ${authorityPredicate(input)}
     ),
     free_slots AS (
@@ -395,7 +405,8 @@ export async function reserveManagedLeaseIfUnblocked(
       WHEN NOT EXISTS (SELECT 1 FROM authority) THEN 'blocked'
       ELSE 'limit'
     END AS "status"
-  `);
+  `),
+  ]);
   const status = result.rows[0]?.status;
   if (status !== "reserved" && status !== "blocked" && status !== "limit") {
     throw new Error("Invalid managed lease reservation result");
@@ -409,14 +420,14 @@ export async function finalizeManagedLeaseIfUnblocked(
 ) {
   const expiresAt = new Date(lease.expiresAt);
   if (Number.isNaN(expiresAt.valueOf())) return false;
-  const result = await db.execute<{ id: string }>(sql`
-    WITH ${authorityLocks(input)}
+  const [, result] = await db.batch([
+    db.execute(sql`WITH ${authorityLockStatement(input)}`),
+    db.execute<{ id: string }>(sql`
     UPDATE ${workspaceCredentialLease} AS lease
     SET "external_credential_id" = ${lease.externalCredentialId},
         "external_credential_kind" = ${lease.externalCredentialKind},
         "expires_at" = ${expiresAt}
-    FROM ${member}, ${workspaceConnection}, ${workspaceProviderIntegration},
-         integration_gate_lock
+    FROM ${member}, ${workspaceConnection}, ${workspaceProviderIntegration}
     WHERE ${authorityPredicate(input)}
       AND lease."id" = ${input.leaseId}::uuid
       AND lease."organization_id" = ${input.organizationId}
@@ -430,7 +441,8 @@ export async function finalizeManagedLeaseIfUnblocked(
       AND lease."expires_at" > CURRENT_TIMESTAMP
       AND ${expiresAt} > CURRENT_TIMESTAMP
     RETURNING lease."id"::text AS "id"
-  `);
+  `),
+  ]);
   return result.rows.length === 1;
 }
 
@@ -440,11 +452,12 @@ export async function managedLeaseStillDeliverable(
 ) {
   const expiresAt = new Date(lease.expiresAt);
   if (Number.isNaN(expiresAt.valueOf())) return false;
-  const result = await db.execute<{ id: string }>(sql`
-    WITH ${authorityLocks(input)}
+  const [, result] = await db.batch([
+    db.execute(sql`WITH ${authorityLockStatement(input)}`),
+    db.execute<{ id: string }>(sql`
     SELECT lease."id"::text AS "id"
     FROM ${member}, ${workspaceConnection}, ${workspaceProviderIntegration},
-         ${workspaceCredentialLease} AS lease, integration_gate_lock
+         ${workspaceCredentialLease} AS lease
     WHERE ${authorityPredicate(input)}
       AND lease."id" = ${input.leaseId}::uuid
       AND lease."organization_id" = ${input.organizationId}
@@ -460,6 +473,7 @@ export async function managedLeaseStillDeliverable(
       AND lease."expires_at" > CURRENT_TIMESTAMP
       AND lease."revoked_at" IS NULL
     LIMIT 1
-  `);
+  `),
+  ]);
   return result.rows.length === 1;
 }

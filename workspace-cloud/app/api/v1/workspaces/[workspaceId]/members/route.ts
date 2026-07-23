@@ -8,6 +8,7 @@ import { isUuid, jsonError, mutationAllowed, privateJson } from "../../../../../
 import { revokeActiveLeases } from "../../../../../../lib/provider-integrations";
 import {
   claimRevocationGate,
+  clearRevocationGate,
   releaseRevocationGateClaim,
   renewRevocationGateClaim,
 } from "../../../../../../lib/revocation-gates";
@@ -106,7 +107,6 @@ export async function PATCH(request: Request, context: RouteContext) {
     where: and(eq(member.id, memberId), eq(member.organizationId, workspaceId)),
   });
   if (!existing) return jsonError("Member not found", 404);
-  if (existing.role === "owner") return jsonError("Owner role cannot be changed here", 403);
   const claim = await claimRevocationGate({
     kind: "member",
     organizationId: workspaceId,
@@ -116,12 +116,28 @@ export async function PATCH(request: Request, context: RouteContext) {
   if (!claim) {
     return jsonError("Another member access change is already in progress", 409);
   }
+  if (claim.kind !== "member" || !claim.memberRole) {
+    await (
+      claim.firstPending
+        ? clearRevocationGate(claim)
+        : releaseRevocationGateClaim(claim)
+    ).catch(() => false);
+    return jsonError("Member access changed concurrently. Retry the update.", 409);
+  }
+  if (claim.memberRole === "owner") {
+    await (
+      claim.firstPending
+        ? clearRevocationGate(claim)
+        : releaseRevocationGateClaim(claim)
+    ).catch(() => false);
+    return jsonError("Owner role cannot be changed here", 403);
+  }
   let revocation = { revoked: 0, deferred: 0 };
   try {
-    if (existing.role !== body.role || !claim.firstPending) {
+    if (claim.memberRole !== body.role || !claim.firstPending) {
       revocation = await revokeActiveLeases({
         organizationId: workspaceId,
-        userId: existing.userId,
+        userId: claim.userId,
       });
     }
   } catch (error) {
@@ -139,6 +155,13 @@ export async function PATCH(request: Request, context: RouteContext) {
   if (!renewedClaim) {
     return jsonError("Member access changed concurrently. Retry the update.", 409);
   }
+  if (
+    renewedClaim.kind !== "member"
+    || renewedClaim.memberRole !== claim.memberRole
+  ) {
+    await releaseRevocationGateClaim(renewedClaim).catch(() => false);
+    return jsonError("Member access changed concurrently. Retry the update.", 409);
+  }
   const result = await db.execute<{
     id: string;
     organizationId: string;
@@ -154,7 +177,8 @@ export async function PATCH(request: Request, context: RouteContext) {
           "revocation_claim_id" = NULL
       WHERE target."id" = ${memberId}
         AND target."organization_id" = ${workspaceId}
-        AND target."user_id" = ${existing.userId}
+        AND target."user_id" = ${renewedClaim.userId}
+        AND target."role" = ${renewedClaim.memberRole}
         AND target."role" <> 'owner'
         AND target."revocation_claim_id" = ${renewedClaim.claimId}::uuid
       RETURNING target."id", target."organization_id", target."user_id",
@@ -168,7 +192,7 @@ export async function PATCH(request: Request, context: RouteContext) {
              ${authorization.session.user.id}, 'member.role.update', 'member',
              updated_member."id",
              jsonb_build_object(
-               'from', ${existing.role},
+               'from', ${renewedClaim.memberRole},
                'to', updated_member."role",
                'revokedLeases', ${revocation.revoked},
                'deferredRevocations', ${revocation.deferred}
@@ -234,7 +258,6 @@ export async function DELETE(request: Request, context: RouteContext) {
       where: and(eq(member.id, body.memberId), eq(member.organizationId, workspaceId)),
     });
     if (!existing) return jsonError("Member not found", 404);
-    if (existing.role === "owner") return jsonError("Owner cannot be removed", 403);
     const claim = await claimRevocationGate({
       kind: "member",
       organizationId: workspaceId,
@@ -244,11 +267,27 @@ export async function DELETE(request: Request, context: RouteContext) {
     if (!claim) {
       return jsonError("Another member access change is already in progress", 409);
     }
+    if (claim.kind !== "member" || !claim.memberRole) {
+      await (
+        claim.firstPending
+          ? clearRevocationGate(claim)
+          : releaseRevocationGateClaim(claim)
+      ).catch(() => false);
+      return jsonError("Member access changed concurrently. Retry removal.", 409);
+    }
+    if (claim.memberRole === "owner") {
+      await (
+        claim.firstPending
+          ? clearRevocationGate(claim)
+          : releaseRevocationGateClaim(claim)
+      ).catch(() => false);
+      return jsonError("Owner cannot be removed", 403);
+    }
     let revocation;
     try {
       revocation = await revokeActiveLeases({
         organizationId: workspaceId,
-        userId: existing.userId,
+        userId: claim.userId,
       });
     } catch (error) {
       await releaseRevocationGateClaim(claim).catch(() => false);
@@ -265,12 +304,20 @@ export async function DELETE(request: Request, context: RouteContext) {
     if (!renewedClaim) {
       return jsonError("Member access changed concurrently. Retry removal.", 409);
     }
+    if (
+      renewedClaim.kind !== "member"
+      || renewedClaim.memberRole !== claim.memberRole
+    ) {
+      await releaseRevocationGateClaim(renewedClaim).catch(() => false);
+      return jsonError("Member access changed concurrently. Retry removal.", 409);
+    }
     const result = await db.execute<{ id: string }>(sql`
       WITH deleted_member AS (
         DELETE FROM ${member} AS target
         WHERE target."id" = ${existing.id}
           AND target."organization_id" = ${workspaceId}
-          AND target."user_id" = ${existing.userId}
+          AND target."user_id" = ${renewedClaim.userId}
+          AND target."role" = ${renewedClaim.memberRole}
           AND target."role" <> 'owner'
           AND target."revocation_claim_id" = ${renewedClaim.claimId}::uuid
         RETURNING target."id", target."organization_id", target."role"

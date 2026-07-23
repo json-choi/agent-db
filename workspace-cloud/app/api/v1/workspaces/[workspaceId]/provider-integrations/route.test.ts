@@ -14,6 +14,7 @@ const {
   claimMock,
   executeMock,
   findIntegrationMock,
+  inspectNeonCredentialMock,
   insertMock,
   releaseMock,
   revokeLeasesMock,
@@ -26,6 +27,7 @@ const {
   claimMock: vi.fn(),
   executeMock: vi.fn((statement: unknown): unknown => ({ statement })),
   findIntegrationMock: vi.fn(),
+  inspectNeonCredentialMock: vi.fn(),
   insertMock: vi.fn(),
   releaseMock: vi.fn(),
   revokeLeasesMock: vi.fn(),
@@ -94,7 +96,7 @@ vi.mock("../../../../../../lib/providers/planetscale", () => ({
   PlanetScaleRequestError: class PlanetScaleRequestError extends Error {},
 }));
 vi.mock("../../../../../../lib/providers/neon", () => ({
-  inspectNeonCredential: vi.fn(),
+  inspectNeonCredential: inspectNeonCredentialMock,
 }));
 vi.mock("../../../../../../lib/providers/gcp-cloud-sql", () => ({
   validateGcpCloudSqlCredential: validateGcpMock,
@@ -144,6 +146,25 @@ function request() {
   );
 }
 
+function neonRequest() {
+  return new Request(
+    `https://app.example/api/v1/workspaces/${workspaceId}/provider-integrations`,
+    {
+      method: "POST",
+      headers: {
+        origin: "https://app.example",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        provider: "neon",
+        configuration: {
+          apiKey: "neon-api-key-with-sufficient-length",
+        },
+      }),
+    },
+  );
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   selectResults.splice(0);
@@ -158,6 +179,12 @@ beforeEach(() => {
   revokeLeasesMock.mockResolvedValue({ revoked: 0, deferred: 0 });
   releaseMock.mockResolvedValue(true);
   findIntegrationMock.mockResolvedValue(undefined);
+  inspectNeonCredentialMock.mockResolvedValue({
+    displayName: "Neon · Example",
+    externalAccountId: "neon:v2:user:subject:scope",
+    projectCount: 1,
+    scopeFingerprint: "0123456789abcdef0123456789abcdef",
+  });
   updateMock.mockReset()
     .mockImplementationOnce(() => updateBuilder({ kind: "prepared" }) as never)
     .mockImplementationOnce(() => updateBuilder({ kind: "cleared" }) as never);
@@ -238,6 +265,7 @@ describe("GCP provider principal claims", () => {
       { rows: [] },
       { rows: [] },
       { rows: [] },
+      { rows: [] },
       [{ id: integrationId }],
     ]);
 
@@ -257,6 +285,18 @@ describe("GCP provider principal claims", () => {
         + "\"workspace_provider_principal_claim\"")
       && query.includes("VALUES")
     ))).toBe(true);
+    expect(statements.some((query) => (
+      query.includes("UPDATE \"workspace_control\".\"workspace_connection\"")
+      && query.includes("\"revision\" = connection.\"revision\" + 1")
+      && query.includes("\"provider_integration_id\" = integration.\"id\"")
+      && query.includes("\"revocation_claim_id\" =")
+    ))).toBe(true);
+    const batchEntries = batchMock.mock.calls[0]?.[0] as unknown[];
+    expect(batchEntries).toHaveLength(6);
+    expect(batchEntries[4]).toEqual(expect.objectContaining({
+      statement: expect.anything(),
+    }));
+    expect(batchEntries[5]).toEqual({ kind: "cleared" });
     expect(batchMock).toHaveBeenCalledTimes(1);
     expect(releaseMock).not.toHaveBeenCalled();
   });
@@ -278,11 +318,62 @@ describe("GCP provider principal claims", () => {
     const statement = executeMock.mock.calls[0]?.[0] as SQL;
     const query = new PgDialect().sqlToQuery(statement).sql.replace(/\s+/g, " ");
     expect(query).toContain("WITH updated_integration AS");
+    expect(query).toContain("bumped_connections AS");
     expect(query).toContain("inserted_claims AS");
     expect(query).toContain("audit_event AS");
+    expect(query).toContain("\"revision\" = connection.\"revision\" + 1");
+    expect(query).toContain(
+      "\"provider_integration_id\" = updated_integration.\"id\"",
+    );
     expect(query).toContain("\"status\" = $");
     expect(query).toContain("\"updated_at\" = $");
     expect(query).not.toContain("@sample-project-123");
     expect(batchMock).not.toHaveBeenCalled();
+  });
+
+  it("bumps attached connection revisions before clearing a Neon reconnect gate", async () => {
+    findIntegrationMock.mockResolvedValue({
+      id: integrationId,
+      status: "active",
+      revokedAt: null,
+      revocationPendingAt: null,
+      updatedAt: new Date("2026-07-23T00:00:00Z"),
+    });
+    const claim = {
+      kind: "integration",
+      organizationId: workspaceId,
+      integrationId,
+      claimId: "33333333-3333-4333-8333-333333333333",
+      claimedAt: new Date(),
+      pendingAt: new Date(),
+      firstPending: true,
+    };
+    claimMock.mockResolvedValue(claim);
+    batchMock.mockResolvedValue([
+      [{ id: integrationId }],
+      { rows: [] },
+      { rows: [] },
+      [{ id: integrationId }],
+    ]);
+
+    const response = await POST(neonRequest(), context);
+
+    expect(response.status).toBe(200);
+    const statements = executeMock.mock.calls.map(([statement]) => (
+      new PgDialect().sqlToQuery(statement as SQL).sql.replace(/\s+/g, " ")
+    ));
+    const bumpIndex = statements.findIndex((query) => (
+      query.includes("UPDATE \"workspace_control\".\"workspace_connection\"")
+      && query.includes("\"revision\" = connection.\"revision\" + 1")
+    ));
+    expect(bumpIndex).toBeGreaterThanOrEqual(0);
+    expect(statements[bumpIndex]).toContain("\"revocation_claim_id\" =");
+    const batchEntries = batchMock.mock.calls[0]?.[0] as unknown[];
+    expect(batchEntries).toHaveLength(4);
+    expect(batchEntries[1]).toEqual(expect.objectContaining({
+      statement: expect.anything(),
+    }));
+    expect(batchEntries[3]).toEqual({ kind: "cleared" });
+    expect(releaseMock).not.toHaveBeenCalled();
   });
 });

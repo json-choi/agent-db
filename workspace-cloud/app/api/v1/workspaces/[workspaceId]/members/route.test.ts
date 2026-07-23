@@ -1,8 +1,11 @@
+import type { SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   authorizeWorkspaceMock,
   claimRevocationGateMock,
+  clearRevocationGateMock,
   executeMock,
   memberFindFirstMock,
   releaseRevocationGateClaimMock,
@@ -11,6 +14,7 @@ const {
 } = vi.hoisted(() => ({
   authorizeWorkspaceMock: vi.fn(),
   claimRevocationGateMock: vi.fn(),
+  clearRevocationGateMock: vi.fn(),
   executeMock: vi.fn(),
   memberFindFirstMock: vi.fn(),
   releaseRevocationGateClaimMock: vi.fn(),
@@ -45,6 +49,7 @@ vi.mock("../../../../../../lib/provider-integrations", () => ({
 }));
 vi.mock("../../../../../../lib/revocation-gates", () => ({
   claimRevocationGate: claimRevocationGateMock,
+  clearRevocationGate: clearRevocationGateMock,
   releaseRevocationGateClaim: releaseRevocationGateClaimMock,
   renewRevocationGateClaim: renewRevocationGateClaimMock,
 }));
@@ -69,6 +74,7 @@ const initialClaim = {
   claimedAt,
   pendingAt: claimedAt,
   firstPending: true,
+  memberRole: "editor" as const,
 };
 const renewedClaim = {
   ...initialClaim,
@@ -90,6 +96,16 @@ function mutationRequest(method: "PATCH" | "DELETE", body: unknown) {
   );
 }
 
+function compiledExecute() {
+  const statement = executeMock.mock.calls[0]?.[0] as SQL | undefined;
+  if (!statement) throw new Error("Expected a member mutation SQL statement");
+  const query = new PgDialect().sqlToQuery(statement);
+  return {
+    sql: query.sql.replace(/\s+/g, " ").trim(),
+    params: query.params,
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   authorizeWorkspaceMock.mockResolvedValue({
@@ -103,6 +119,7 @@ beforeEach(() => {
     role: "editor",
   });
   claimRevocationGateMock.mockResolvedValue(initialClaim);
+  clearRevocationGateMock.mockResolvedValue(true);
   renewRevocationGateClaimMock.mockResolvedValue(renewedClaim);
   releaseRevocationGateClaimMock.mockResolvedValue(true);
   revokeActiveLeasesMock.mockResolvedValue({ revoked: 1, deferred: 0 });
@@ -188,6 +205,9 @@ describe("workspace member lease revocation gate", () => {
       .toBeLessThan(renewRevocationGateClaimMock.mock.invocationCallOrder[0]);
     expect(renewRevocationGateClaimMock.mock.invocationCallOrder[0])
       .toBeLessThan(executeMock.mock.invocationCallOrder[0]);
+    const query = compiledExecute();
+    expect(query.sql).toContain('target."role" =');
+    expect(query.params).toContain("editor");
   });
 
   it("deletes a member only through a renewed UUID-owned SQL mutation", async () => {
@@ -216,6 +236,93 @@ describe("workspace member lease revocation gate", () => {
     expect(response.status).toBe(409);
     expect(revokeActiveLeasesMock).not.toHaveBeenCalled();
     expect(renewRevocationGateClaimMock).not.toHaveBeenCalled();
+    expect(executeMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the role returned by the claim for revocation and the final CAS", async () => {
+    memberFindFirstMock.mockResolvedValue({
+      id: memberId,
+      organizationId: workspaceId,
+      userId: "target-user",
+      role: "analyst",
+    });
+    claimRevocationGateMock.mockResolvedValue({
+      ...initialClaim,
+      memberRole: "editor",
+    });
+    renewRevocationGateClaimMock.mockResolvedValue({
+      ...renewedClaim,
+      memberRole: "editor",
+    });
+    executeMock.mockResolvedValue({
+      rows: [{
+        id: memberId,
+        organizationId: workspaceId,
+        userId: "target-user",
+        role: "analyst",
+        createdAt: "2026-07-23T00:00:00.000Z",
+      }],
+    });
+
+    const response = await PATCH(
+      mutationRequest("PATCH", { memberId, role: "analyst" }),
+      context,
+    );
+
+    expect(response.status).toBe(200);
+    expect(revokeActiveLeasesMock).toHaveBeenCalledWith({
+      organizationId: workspaceId,
+      userId: "target-user",
+    });
+    const query = compiledExecute();
+    expect(query.sql).toContain('target."role" =');
+    expect(query.params).toContain("editor");
+  });
+
+  it("clears a fresh claim instead of trusting a stale non-owner pre-read", async () => {
+    memberFindFirstMock.mockResolvedValue({
+      id: memberId,
+      organizationId: workspaceId,
+      userId: "target-user",
+      role: "admin",
+    });
+    claimRevocationGateMock.mockResolvedValue({
+      ...initialClaim,
+      memberRole: "owner",
+    });
+
+    const response = await PATCH(
+      mutationRequest("PATCH", { memberId, role: "viewer" }),
+      context,
+    );
+
+    expect(response.status).toBe(403);
+    expect(clearRevocationGateMock).toHaveBeenCalledWith(
+      expect.objectContaining({ memberRole: "owner", firstPending: true }),
+    );
+    expect(releaseRevocationGateClaimMock).not.toHaveBeenCalled();
+    expect(revokeActiveLeasesMock).not.toHaveBeenCalled();
+    expect(executeMock).not.toHaveBeenCalled();
+  });
+
+  it("releases an owner takeover claim without removing the owner", async () => {
+    claimRevocationGateMock.mockResolvedValue({
+      ...initialClaim,
+      firstPending: false,
+      memberRole: "owner",
+    });
+
+    const response = await DELETE(
+      mutationRequest("DELETE", { memberId }),
+      context,
+    );
+
+    expect(response.status).toBe(403);
+    expect(releaseRevocationGateClaimMock).toHaveBeenCalledWith(
+      expect.objectContaining({ memberRole: "owner", firstPending: false }),
+    );
+    expect(clearRevocationGateMock).not.toHaveBeenCalled();
+    expect(revokeActiveLeasesMock).not.toHaveBeenCalled();
     expect(executeMock).not.toHaveBeenCalled();
   });
 

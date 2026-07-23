@@ -26,6 +26,7 @@ use crate::model::{
 const DEFAULT_CONTROL_PLANE_ORIGIN: &str = "https://app.dopedb.dev";
 const DESKTOP_CLIENT_ID: &str = "dopedb-desktop";
 const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
+const MANAGED_LEASE_CONTRACT: &str = "access-v1";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -104,6 +105,15 @@ struct CreatedConnectionResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AuthorizedConnectionResponse {
+    allowed: bool,
+    action: String,
+    access_mode: String,
+    revision: i64,
+}
+
+#[derive(Debug, Deserialize)]
 struct ManagedLeaseResponse {
     lease: RemoteManagedLease,
 }
@@ -126,9 +136,15 @@ struct RemoteManagedLease {
 }
 
 pub(crate) struct ManagedConnectionLease {
+    pub lease_id: Uuid,
     pub profile: ConnectionProfile,
     pub secret: Zeroizing<String>,
     pub valid_for: Duration,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RemoteConnectionAuthority {
+    pub revision: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -606,7 +622,7 @@ pub(crate) async fn authorize_connection(
     workspace_id: Uuid,
     connection_id: Uuid,
     write: bool,
-) -> AppResult<()> {
+) -> AppResult<RemoteConnectionAuthority> {
     let token = fetch_workspace_session(user_id)?
         .map(Zeroizing::new)
         .ok_or_else(|| {
@@ -628,7 +644,26 @@ pub(crate) async fn authorize_connection(
     if !response.status().is_success() {
         return Err(oauth_error(response).await);
     }
-    Ok(())
+    let authority = response
+        .json::<AuthorizedConnectionResponse>()
+        .await
+        .map_err(|error| request_error("reading shared connection authorization", error))?;
+    let expected_action = if write { "write" } else { "read" };
+    let access = crate::store::parse_workspace_access(authority.access_mode)?;
+    if !authority.allowed
+        || authority.action != expected_action
+        || authority.revision < 1
+        || access == WorkspaceConnectionAccess::Local
+        || (write && !access.can_write())
+        || (!write && !access.can_read())
+    {
+        return Err(AppError::Network(
+            "shared connection authorization returned invalid authority".into(),
+        ));
+    }
+    Ok(RemoteConnectionAuthority {
+        revision: authority.revision,
+    })
 }
 
 /// Obtain one provider-issued database credential for a managed shared connection.
@@ -638,6 +673,7 @@ pub(crate) async fn issue_managed_connection_lease(
     user_id: &str,
     workspace_id: Uuid,
     profile: &ConnectionProfile,
+    write: bool,
 ) -> AppResult<ManagedConnectionLease> {
     if profile.credential_mode != WorkspaceCredentialMode::Managed {
         return Err(AppError::Config(
@@ -650,12 +686,15 @@ pub(crate) async fn issue_managed_connection_lease(
             AppError::Config("managed database access requires an authenticated session".into())
         })?;
     let origin = origin()?;
+    let requested_access = if write { "write" } else { "read" };
     let response = client()?
         .post(format!(
             "{origin}/api/v1/workspaces/{workspace_id}/connections/{}/lease",
             profile.id
         ))
         .bearer_auth(token.as_str())
+        .header("x-dopedb-managed-lease-contract", MANAGED_LEASE_CONTRACT)
+        .json(&json!({ "accessMode": requested_access }))
         .send()
         .await
         .map_err(|error| request_error("requesting managed database access", error))?;
@@ -704,8 +743,8 @@ pub(crate) async fn issue_managed_connection_lease(
         || secret.is_empty()
         || secret.len() > (1 << 16)
         || !valid_provider_tls
-        || !matches!(lease.access_mode.as_str(), "read" | "write")
-        || (lease.access_mode == "write" && !profile.workspace_access.can_write())
+        || lease.access_mode != requested_access
+        || (write && !profile.workspace_access.can_write())
     {
         return Err(AppError::Network(
             "managed database access returned invalid connection material".into(),
@@ -743,10 +782,42 @@ pub(crate) async fn issue_managed_connection_lease(
         "opened short-lived managed database access"
     );
     Ok(ManagedConnectionLease {
+        lease_id,
         profile: leased_profile,
         secret,
         valid_for: Duration::from_secs(valid_seconds as u64),
     })
+}
+
+/// Release a provider credential before its natural expiry when the owning desktop
+/// pool is retired. Failure is surfaced to the caller for logging, but never blocks
+/// local pool closure.
+pub(crate) async fn release_managed_connection_lease(
+    user_id: &str,
+    workspace_id: Uuid,
+    connection_id: Uuid,
+    lease_id: Uuid,
+) -> AppResult<()> {
+    let Some(token) = fetch_workspace_session(user_id)?.map(Zeroizing::new) else {
+        return Ok(());
+    };
+    let origin = origin()?;
+    let response = client()?
+        .delete(format!(
+            "{origin}/api/v1/workspaces/{workspace_id}/connections/{connection_id}/lease"
+        ))
+        .bearer_auth(token.as_str())
+        .json(&json!({ "leaseId": lease_id }))
+        .send()
+        .await
+        .map_err(|error| request_error("releasing managed database access", error))?;
+    if response.status() == StatusCode::UNAUTHORIZED {
+        delete_workspace_session(user_id)?;
+    }
+    if !response.status().is_success() {
+        return Err(oauth_error(response).await);
+    }
+    Ok(())
 }
 
 /// Poll once at the server-provided interval. A successful token is validated and

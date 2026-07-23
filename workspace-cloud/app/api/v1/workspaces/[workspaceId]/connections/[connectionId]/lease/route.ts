@@ -24,10 +24,9 @@ type RouteContext = {
   params: Promise<{ workspaceId: string; connectionId: string }>;
 };
 
-async function consumeLeaseBudget(organizationId: string, userId: string) {
+async function consumeRequestBudget(key: string, limit: number) {
   const now = Date.now();
   const windowStart = now - 60_000;
-  const key = `workspace-lease:${organizationId}:${userId}`;
   const result = await db.execute<{ value: number }>(sql`
     INSERT INTO ${rateLimit} ("id", "key", "count", "last_request")
     VALUES (${crypto.randomUUID()}, ${key}, 1, ${now})
@@ -39,7 +38,18 @@ async function consumeLeaseBudget(organizationId: string, userId: string) {
       "last_request" = ${now}
     RETURNING "count" AS "value"
   `);
-  return Number(result.rows[0]?.value ?? Number.POSITIVE_INFINITY) <= 5;
+  return Number(result.rows[0]?.value ?? Number.POSITIVE_INFINITY) <= limit;
+}
+
+function consumeLeaseBudget(organizationId: string, userId: string) {
+  return consumeRequestBudget(`workspace-lease:${organizationId}:${userId}`, 5);
+}
+
+function consumeLeaseReleaseBudget(organizationId: string, userId: string) {
+  return consumeRequestBudget(
+    `workspace-lease-release:${organizationId}:${userId}`,
+    30,
+  );
 }
 
 export async function POST(request: Request, context: RouteContext) {
@@ -50,7 +60,39 @@ export async function POST(request: Request, context: RouteContext) {
   if (!isUuid(workspaceId) || !isUuid(connectionId)) {
     return jsonError("Invalid workspace or connection id", 400);
   }
-  const authorization = await authorizeWorkspace(request, workspaceId, "read");
+  if (request.headers.get("x-dopedb-managed-lease-contract") !== "access-v1") {
+    return jsonError(
+      "Update DopeDB to use managed database access safely",
+      426,
+    );
+  }
+  const payloadText = await request.text();
+  if (payloadText.length > 256) {
+    return jsonError("Managed access request is too large", 413);
+  }
+  if (!payloadText.trim()) {
+    return jsonError("Managed access mode must be read or write", 400);
+  }
+  let requestedAccessMode: "read" | "write";
+  try {
+    const payload = JSON.parse(payloadText) as { accessMode?: unknown };
+    if (
+      !payload
+      || typeof payload !== "object"
+      || typeof payload.accessMode !== "string"
+      || !["read", "write"].includes(payload.accessMode)
+    ) {
+      return jsonError("Managed access mode must be read or write", 400);
+    }
+    requestedAccessMode = payload.accessMode as "read" | "write";
+  } catch {
+    return jsonError("Managed access request must be valid JSON", 400);
+  }
+  const authorization = await authorizeWorkspace(
+    request,
+    workspaceId,
+    requestedAccessMode,
+  );
   if (!authorization.ok) return jsonError(authorization.error, authorization.status);
   const connection = await db.query.workspaceConnection.findFirst({
     where: and(
@@ -74,6 +116,9 @@ export async function POST(request: Request, context: RouteContext) {
     || !connection.providerIntegrationId
   ) {
     return jsonError("Managed database access is not available", 409);
+  }
+  if (requestedAccessMode === "write" && !connection.allowWrites) {
+    return jsonError("Writing is disabled for this connection", 403);
   }
   const integration = await activeProviderIntegration(
     workspaceId,
@@ -107,10 +152,7 @@ export async function POST(request: Request, context: RouteContext) {
   if (!await consumeLeaseBudget(workspaceId, authorization.session.user.id)) {
     return jsonError("Managed database access is being opened too quickly. Retry shortly.", 429);
   }
-  const accessMode = connection.allowWrites
-    && (authorization.accessMode === "write" || authorization.accessMode === "manage")
-    ? "write"
-    : "read";
+  const accessMode = requestedAccessMode;
   try {
     const lease = await issueManagedLease({
       organizationId: workspaceId,
@@ -211,4 +253,68 @@ export async function POST(request: Request, context: RouteContext) {
     }
     return jsonError("Managed database access could not be issued", 502);
   }
+}
+
+/// Best-effort early release used when the desktop retires a managed pool before its
+/// provider expiry. Exact tenant/user/connection/lease predicates prevent one member
+/// from revoking another member's credential.
+export async function DELETE(request: Request, context: RouteContext) {
+  if (!request.headers.get("authorization")?.startsWith("Bearer ")) {
+    return jsonError("Desktop bearer authentication is required", 401);
+  }
+  const { workspaceId, connectionId } = await context.params;
+  if (!isUuid(workspaceId) || !isUuid(connectionId)) {
+    return jsonError("Invalid workspace or connection id", 400);
+  }
+  const payloadText = await request.text();
+  if (!payloadText.trim() || payloadText.length > 256) {
+    return jsonError("Managed lease release request is invalid", 400);
+  }
+  let leaseId: string;
+  try {
+    const payload = JSON.parse(payloadText) as { leaseId?: unknown };
+    if (!payload || typeof payload.leaseId !== "string" || !isUuid(payload.leaseId)) {
+      return jsonError("Managed lease id is invalid", 400);
+    }
+    leaseId = payload.leaseId;
+  } catch {
+    return jsonError("Managed lease release request must be valid JSON", 400);
+  }
+
+  // Cleanup remains available after a write/read downgrade, but not after membership
+  // removal; an unreachable credential then expires through the durable sweeper.
+  const authorization = await authorizeWorkspace(request, workspaceId, "view");
+  if (!authorization.ok) return jsonError(authorization.error, authorization.status);
+  if (
+    !await consumeLeaseReleaseBudget(
+      workspaceId,
+      authorization.session.user.id,
+    )
+  ) {
+    return jsonError("Managed lease releases are being requested too quickly", 429);
+  }
+  const release = await revokeActiveLeases({
+    organizationId: workspaceId,
+    leaseId,
+    userId: authorization.session.user.id,
+    connectionId,
+  });
+  if (release.revoked > 0 || release.deferred > 0) {
+    await db.insert(workspaceAuditEvent).values({
+      organizationId: workspaceId,
+      actorUserId: authorization.session.user.id,
+      action: "credential.lease.release",
+      resourceType: "connection",
+      resourceId: connectionId,
+      redactedSummary: {
+        released: release.revoked,
+        deferred: release.deferred,
+      },
+      requestId: crypto.randomUUID(),
+    });
+  }
+  return privateJson({
+    released: release.revoked > 0,
+    deferred: release.deferred > 0,
+  });
 }

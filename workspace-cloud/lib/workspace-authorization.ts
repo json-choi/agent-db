@@ -2,7 +2,7 @@
 // and membership from the database and fails closed; client role claims are ignored.
 import "server-only";
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { db } from "./db";
 import { auth } from "./auth";
 import { member } from "./schema";
@@ -27,9 +27,14 @@ export async function authorizeWorkspace(
     where: and(
       eq(member.organizationId, organizationId),
       eq(member.userId, session.user.id),
+      isNull(member.revocationPendingAt),
     ),
   });
-  if (!membership || !isWorkspaceRole(membership.role)) {
+  if (
+    !membership
+    || membership.revocationPendingAt
+    || !isWorkspaceRole(membership.role)
+  ) {
     return { ok: false as const, status: 403, error: "Workspace access denied" };
   }
   if (!hasWorkspaceCapability(membership.role, capability)) {

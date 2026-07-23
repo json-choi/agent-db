@@ -2,19 +2,22 @@
 //! connection's READ-ONLY pool. The catalog backs `get_schema`/`get_table_ddl`
 //! and the MCP `describe_table` tool.
 
+mod catalog_v2;
 mod mysql;
 mod pg;
 mod sqlite;
 
+pub(crate) use catalog_v2::{load_cached_catalog, load_catalog, CatalogReadMode};
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::connection::{DbPool, Live};
+use crate::connection::{ConnectionAccess, ConnectionLease, DbPool, Live};
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
 /// A relational column.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Column {
     pub name: String,
@@ -24,7 +27,7 @@ pub struct Column {
 }
 
 /// A foreign-key edge from one column to a referenced table column.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ForeignKey {
     pub column: String,
@@ -37,7 +40,7 @@ pub struct ForeignKey {
 
 /// A secondary index on a table (primary-key indexes are excluded — the PK is already
 /// carried on the columns).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Index {
     pub name: String,
@@ -50,7 +53,7 @@ fn default_kind() -> String {
 }
 
 /// A table (or view) with its columns, foreign keys, indexes, and a row-count estimate.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Table {
     /// Schema/namespace (None for SQLite / single-schema MySQL).
@@ -71,7 +74,7 @@ pub struct Table {
 /// A non-tabular database object shown in the explorer. Keeping these separate from
 /// [`Table`] prevents routines, triggers, and sequences from accidentally flowing into
 /// data reads, schema diffs, SQL completion, or MCP table tools.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DatabaseObject {
     /// Schema/namespace (None for single-schema engines).
@@ -88,7 +91,7 @@ pub struct DatabaseObject {
 }
 
 /// The introspected schema for one connection.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Catalog {
     pub tables: Vec<Table>,
@@ -111,23 +114,10 @@ pub async fn introspect(conn: &Live) -> AppResult<Catalog> {
     }
 }
 
-/// Get (opening/caching on first use) a live connection. Mirrors `commands::get_live` —
-/// kept here because that helper is private to the commands module and this command
-/// lives outside it.
-async fn live_for(state: &AppState, id: Uuid) -> AppResult<Live> {
-    // Validate the active workspace and current server authority before consulting
-    // the process-wide pool cache. A cached handle must never outlive its scope.
-    let profile = state.store.get_connection(id).await?;
-    let authorization = crate::connection::authorize_profile(&state.store, &profile, false).await?;
-    if let Some(existing) = state.connections.lock().unwrap().get(&id) {
-        return Ok(existing.clone());
-    }
-    let opened = crate::connection::connect_authorized(&profile, &authorization).await?;
-    Ok(crate::connection::cache_opened(
-        &state.connections,
-        id,
-        opened,
-    ))
+/// Acquire an online-authorized read lease pinned to the active workspace/account
+/// scope. The lease keeps that scope stable for the complete DDL operation.
+async fn live_for(state: &AppState, id: Uuid) -> AppResult<ConnectionLease> {
+    state.connections.acquire(id, ConnectionAccess::Read).await
 }
 
 /// The CREATE-TABLE DDL for one table, read through the read-only pool.
@@ -143,7 +133,7 @@ pub async fn get_table_ddl(
     table: String,
 ) -> AppResult<String> {
     let live = live_for(&state, id).await?;
-    match &live {
+    match live.live() {
         Live::Sql(live) => match live.ro() {
             DbPool::Postgres(pool) => pg::table_ddl(pool, schema.as_deref(), &table).await,
             DbPool::Mysql(pool) => mysql::table_ddl(pool, &table).await,

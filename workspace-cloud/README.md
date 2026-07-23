@@ -212,6 +212,14 @@ guess a path for legacy records.
 - Managed target-database credentials are generated per member with a 15-minute TTL,
   returned once to an authenticated native Bearer client, and never inserted into the
   service database, audit stream, browser UI, or desktop store.
+- Managed lease POSTs must send
+  `x-dopedb-managed-lease-contract: access-v1` and an explicit `read` or `write`
+  access mode. The service returns HTTP 426 to legacy clients instead of guessing
+  their authority. Deploy this control-plane change immediately before the matching
+  desktop release; managed access is intentionally fail-closed during that window.
+- Desktop pool retirement calls the exact tenant/user/connection/lease DELETE
+  boundary for early provider revocation. Natural provider expiry and the durable
+  cleanup worker remain the fallback when the desktop is offline.
 - Shared connection rows contain endpoint metadata, safety defaults, credential mode,
   and a redacted provider-resource selector. Usernames,
   passwords, tokens, certificates, connection URLs, SQLite paths, advanced parameters,

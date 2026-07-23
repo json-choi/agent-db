@@ -7,9 +7,14 @@ import { isUuid, jsonError, mutationAllowed, privateJson } from "../../../../../
 import { revokeActiveLeases } from "../../../../../../../lib/provider-integrations";
 import {
   claimRevocationGate,
+  clearRevocationGate,
   releaseRevocationGateClaim,
 } from "../../../../../../../lib/revocation-gates";
-import { workspaceAuditEvent, workspaceConnection } from "../../../../../../../lib/schema";
+import {
+  workspaceAuditEvent,
+  workspaceConnection,
+  workspaceProviderIntegration,
+} from "../../../../../../../lib/schema";
 import { authorizeWorkspace } from "../../../../../../../lib/workspace-authorization";
 import { parseSharedConnection, publicConnection } from "../../../../../../../lib/workspace-connections";
 
@@ -27,15 +32,58 @@ export async function POST(request: Request, context: RouteContext) {
   }
   const authorization = await authorizeWorkspace(request, workspaceId, body.action);
   if (!authorization.ok) return jsonError(authorization.error, authorization.status);
-  const connection = await db.query.workspaceConnection.findFirst({
-    where: and(
-      eq(workspaceConnection.id, connectionId),
-      eq(workspaceConnection.organizationId, workspaceId),
-      isNull(workspaceConnection.deletedAt),
+  const [connection] = await db.select({
+    id: workspaceConnection.id,
+    revision: workspaceConnection.revision,
+    allowWrites: workspaceConnection.allowWrites,
+    credentialMode: workspaceConnection.credentialMode,
+    provider: workspaceConnection.provider,
+    providerIntegrationId: workspaceConnection.providerIntegrationId,
+    revocationPendingAt: workspaceConnection.revocationPendingAt,
+    integrationStatus: workspaceProviderIntegration.status,
+    integrationProvider: workspaceProviderIntegration.provider,
+    integrationRevokedAt: workspaceProviderIntegration.revokedAt,
+    integrationRevocationPendingAt:
+      workspaceProviderIntegration.revocationPendingAt,
+    integrationRevocationClaimId:
+      workspaceProviderIntegration.revocationClaimId,
+  }).from(workspaceConnection).leftJoin(
+    workspaceProviderIntegration,
+    and(
+      eq(
+        workspaceProviderIntegration.id,
+        workspaceConnection.providerIntegrationId,
+      ),
+      eq(
+        workspaceProviderIntegration.organizationId,
+        workspaceConnection.organizationId,
+      ),
     ),
-    columns: { id: true, revision: true },
-  });
+  ).where(and(
+    eq(workspaceConnection.id, connectionId),
+    eq(workspaceConnection.organizationId, workspaceId),
+    isNull(workspaceConnection.deletedAt),
+  )).limit(1);
   if (!connection) return jsonError("Connection not found", 404);
+  if (connection.revocationPendingAt) {
+    return jsonError("Connection access is changing. Retry shortly.", 409);
+  }
+  if (
+    connection.credentialMode === "managed"
+    && (
+      !connection.providerIntegrationId
+      || connection.integrationProvider !== connection.provider
+      || connection.integrationStatus !== "active"
+      || connection.integrationRevokedAt !== null
+      || connection.integrationRevocationPendingAt !== null
+      || connection.integrationRevocationClaimId !== null
+    )
+  ) {
+    return jsonError("Managed provider access is unavailable or changing", 409);
+  }
+  if (body.action === "write" && !connection.allowWrites) {
+    return jsonError("Writing is disabled for this connection", 403);
+  }
   return privateJson({
     allowed: true,
     action: body.action,
@@ -59,7 +107,13 @@ export async function PATCH(request: Request, context: RouteContext) {
       eq(workspaceConnection.organizationId, workspaceId),
       isNull(workspaceConnection.deletedAt),
     ),
-    columns: { id: true, engine: true, provider: true, credentialMode: true },
+    columns: {
+      id: true,
+      engine: true,
+      provider: true,
+      credentialMode: true,
+      revision: true,
+    },
   });
   if (!existing) return jsonError("Connection not found", 404);
   let input;
@@ -81,6 +135,15 @@ export async function PATCH(request: Request, context: RouteContext) {
   });
   if (!claim) {
     return jsonError("Another connection access change is already in progress", 409);
+  }
+  const expectedClaimRevision = existing.revision + (claim.firstPending ? 1 : 0);
+  if (claim.connectionRevision !== expectedClaimRevision) {
+    await (
+      claim.firstPending
+        ? clearRevocationGate(claim)
+        : releaseRevocationGateClaim(claim)
+    ).catch(() => false);
+    return jsonError("Connection changed concurrently. Retry the update.", 409);
   }
   let revocation;
   try {
@@ -116,12 +179,17 @@ export async function PATCH(request: Request, context: RouteContext) {
         revocationPendingAt: null,
         revocationClaimedAt: null,
         revocationClaimId: null,
+        // The gate revision invalidates operations that started before revocation.
+        // This second bump invalidates any template snapshot fetched while the gate
+        // was pending, before the material update committed.
+        revision: sql`${workspaceConnection.revision} + 1`,
         updatedAt,
       })
       .where(and(
         eq(workspaceConnection.id, connectionId),
         eq(workspaceConnection.organizationId, workspaceId),
         eq(workspaceConnection.revocationClaimId, claim.claimId),
+        eq(workspaceConnection.revision, expectedClaimRevision),
         isNull(workspaceConnection.deletedAt),
       ))
       .returning(),

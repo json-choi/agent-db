@@ -21,6 +21,7 @@ const FK_SQL: &str = r#"
 SELECT table_name, column_name, referenced_table_name, referenced_column_name
 FROM information_schema.key_column_usage
 WHERE table_schema = DATABASE() AND referenced_table_name IS NOT NULL
+ORDER BY table_name, column_name, referenced_table_name, referenced_column_name
 "#;
 
 // Secondary indexes (bulk equivalent of `SHOW INDEX` — one round trip). PRIMARY excluded.

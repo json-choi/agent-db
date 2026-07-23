@@ -18,7 +18,7 @@ use uuid::Uuid;
 use chrono::Utc;
 
 use crate::audit::{self, RecordArgs};
-use crate::connection::{self, DbPool, Live};
+use crate::connection::{ConnectionAccess, ConnectionContext, ConnectionManager, DbPool};
 use crate::error::AppError;
 use crate::introspect;
 use crate::model::{
@@ -27,7 +27,7 @@ use crate::model::{
 };
 use crate::monitoring::{self, HealthSnapshot};
 use crate::safety::{self, PoolRef};
-use crate::store::Store;
+use crate::store::{AccountScope, PinnedConnection, Store};
 
 const QUERY_PLAN_TTL: Duration = Duration::from_secs(30);
 const MAX_QUERY_PLANS: usize = 256;
@@ -38,11 +38,39 @@ const MAX_AGENT_ROWS: u64 = 1000;
 #[derive(Clone)]
 pub(crate) struct PlannedQuery {
     connection_id: Uuid,
+    identity: PlannedConnectionIdentity,
     sql: String,
     max_rows: u64,
     decision: String,
     created_at: Instant,
 }
+
+/// Non-secret authority snapshot bound to a reviewed query. A connection UUID is
+/// not sufficient because the same id can resolve differently after an account or
+/// workspace switch. The scope generation also rejects A → B → A reuse.
+#[derive(Clone, PartialEq, Eq)]
+struct PlannedConnectionIdentity {
+    workspace_id: Uuid,
+    account_scope: AccountScope,
+    scope_generation: i64,
+    connection_revision: i64,
+    binding_revision: i64,
+    binding_updated_at: String,
+}
+
+impl From<&PinnedConnection> for PlannedConnectionIdentity {
+    fn from(pin: &PinnedConnection) -> Self {
+        Self {
+            workspace_id: pin.scope.workspace_id,
+            account_scope: pin.scope.account_scope.clone(),
+            scope_generation: pin.scope.generation,
+            connection_revision: pin.connection_revision,
+            binding_revision: pin.binding_revision,
+            binding_updated_at: pin.binding_updated_at.clone(),
+        }
+    }
+}
+
 /// Query plans are shared by the HTTP and stdio MCP listeners in this app process.
 pub(crate) type QueryPlanStore = Arc<Mutex<HashMap<Uuid, PlannedQuery>>>;
 
@@ -51,11 +79,11 @@ pub(crate) fn query_plan_store() -> QueryPlanStore {
 }
 
 #[derive(Clone)]
-pub struct DbTools {
+pub(crate) struct DbTools {
     store: Store,
     app: AppHandle,
-    /// Live connections opened on behalf of MCP callers, shared across sessions.
-    conns: Arc<Mutex<HashMap<Uuid, Live>>>,
+    /// Scope-aware connection manager shared with the UI and other agent transports.
+    conns: ConnectionManager,
     plans: QueryPlanStore,
 }
 
@@ -142,10 +170,10 @@ fn connection_list_payload(connections: &[ConnectionProfile]) -> serde_json::Val
 }
 
 impl DbTools {
-    pub fn new(
+    pub(crate) fn new(
         store: Store,
         app: AppHandle,
-        conns: Arc<Mutex<HashMap<Uuid, Live>>>,
+        conns: ConnectionManager,
         plans: QueryPlanStore,
     ) -> Self {
         Self {
@@ -180,43 +208,18 @@ impl DbTools {
         }
     }
 
-    /// Open (and cache) a live connection for the given id.
-    async fn live(&self, id: Uuid) -> Result<Live, McpError> {
-        // Revalidate active workspace scope before using a cached pool. Workspace
-        // switches clear the cache too, but this keeps the boundary race-free.
-        let profile = self.store.get_connection(id).await.map_err(err)?;
-        let authorization = connection::authorize_profile(&self.store, &profile, false)
+    /// Pin the active workspace/account authority without opening the target DB.
+    async fn pin(&self, id: Uuid) -> Result<ConnectionContext, McpError> {
+        self.conns
+            .pin(id, ConnectionAccess::Read)
             .await
-            .map_err(err)?;
-        if let Some(c) = self.conns.lock().unwrap().get(&id) {
-            return Ok(c.clone());
-        }
-        let opened = connection::connect_authorized(&profile, &authorization)
-            .await
-            .map_err(err)?;
-        Ok(connection::cache_opened(&self.conns, id, opened))
-    }
-
-    /// Load the schema catalog: cached JSON if present (kept fresh by connection edits
-    /// clearing the cache), else live introspect + cache. Mirrors `commands::load_catalog`.
-    async fn catalog(&self, id: Uuid) -> Result<introspect::Catalog, McpError> {
-        if let Some(json) = self.store.get_schema_cache(id).await.map_err(err)? {
-            if let Ok(cat) = serde_json::from_str::<introspect::Catalog>(&json) {
-                return Ok(cat);
-            }
-        }
-        let live = self.live(id).await?;
-        let cat = introspect::introspect(&live).await.map_err(err)?;
-        if let Ok(s) = serde_json::to_string(&cat) {
-            let _ = self.store.set_schema_cache(id, &s).await;
-        }
-        Ok(cat)
+            .map_err(err)
     }
 
     /// Persist one MCP query-history row and return its durable consent handle.
     async fn history(
         &self,
-        conn_id: Uuid,
+        pin: &PinnedConnection,
         sql: &str,
         status: &str,
         rows: Option<i64>,
@@ -225,18 +228,21 @@ impl DbTools {
     ) -> Result<Uuid, AppError> {
         let id = Uuid::new_v4();
         self.store
-            .insert_history(&HistoryEntry {
-                id,
-                connection_id: conn_id,
-                sql: sql.to_string(),
-                kind: QueryKind::Read,
-                status: status.to_string(),
-                row_count: rows,
-                duration_ms: dur_ms,
-                error,
-                executed_at: Utc::now(),
-                origin: "agent".into(),
-            })
+            .insert_history_if_current(
+                pin,
+                &HistoryEntry {
+                    id,
+                    connection_id: pin.connection_id,
+                    sql: sql.to_string(),
+                    kind: QueryKind::Read,
+                    status: status.to_string(),
+                    row_count: rows,
+                    duration_ms: dur_ms,
+                    error,
+                    executed_at: Utc::now(),
+                    origin: "agent".into(),
+                },
+            )
             .await?;
         Ok(id)
     }
@@ -400,13 +406,20 @@ impl DbTools {
         &self,
         Parameters(args): Parameters<ConnArg>,
     ) -> Result<CallToolResult, McpError> {
-        let profile = self.resolve_conn(&args.connection).await?;
+        let resolved = self.resolve_conn(&args.connection).await?;
         self.emit(
             "agent:tool_call",
-            json!({ "tool": "list_tables", "connection": profile.name }),
+            json!({ "tool": "list_tables", "connection": resolved.name }),
         );
-        let live = self.live(profile.id).await?;
-        let catalog = introspect::introspect(&live).await.map_err(err)?;
+        let catalog = introspect::load_catalog(
+            &self.store,
+            &self.conns,
+            resolved.id,
+            introspect::CatalogReadMode::LiveNoCache,
+        )
+        .await
+        .map_err(err)?;
+        let profile = resolved;
         self.audit(
             profile.id,
             profile.engine,
@@ -456,12 +469,20 @@ impl DbTools {
         &self,
         Parameters(args): Parameters<DescribeTableArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let profile = self.resolve_conn(&args.connection).await?;
+        let resolved = self.resolve_conn(&args.connection).await?;
         self.emit(
             "agent:tool_call",
-            json!({ "tool": "describe_table", "connection": profile.name, "table": args.table }),
+            json!({ "tool": "describe_table", "connection": resolved.name, "table": args.table }),
         );
-        let catalog = self.catalog(profile.id).await?;
+        let catalog = introspect::load_catalog(
+            &self.store,
+            &self.conns,
+            resolved.id,
+            introspect::CatalogReadMode::CacheFirst,
+        )
+        .await
+        .map_err(err)?;
+        let profile = resolved;
         let want = args.table.as_str();
         // Match "schema.table" or bare name exactly, else fall back to case-insensitive.
         let table = catalog
@@ -544,16 +565,18 @@ impl DbTools {
         &self,
         Parameters(args): Parameters<PlanQueryArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let profile = self.resolve_conn(&args.connection).await?;
+        let resolved = self.resolve_conn(&args.connection).await?;
         self.emit(
             "agent:tool_call",
             json!({
                 "tool": "plan_query",
-                "connection": profile.name,
-                "connectionId": profile.id,
+                "connection": resolved.name,
+                "connectionId": resolved.id,
                 "sql": args.sql,
             }),
         );
+        let context = self.pin(resolved.id).await?;
+        let profile = context.pin().profile.clone();
         // MongoDB has no SQL surface — point the agent at the typed document tool
         // instead of letting the fail-safe classifier return a misleading verdict.
         if profile.engine.is_document() {
@@ -593,8 +616,9 @@ impl DbTools {
             .max_rows
             .unwrap_or(settings.max_rows)
             .min(MAX_AGENT_ROWS);
-        let live = self.live(profile.id).await?;
-        let live = live.sql().map_err(err)?;
+        let identity = PlannedConnectionIdentity::from(context.pin());
+        let lease = context.connect().await.map_err(err)?;
+        let live = lease.live().sql().map_err(err)?;
         let preview = safety::preview(pool_ref(live.ro()), &args.sql, &cls, &settings)
             .await
             .map_err(err)?;
@@ -622,6 +646,7 @@ impl DbTools {
                 plan_id,
                 PlannedQuery {
                     connection_id: profile.id,
+                    identity,
                     sql: args.sql.clone(),
                     max_rows: cap,
                     decision: decision.clone(),
@@ -701,11 +726,18 @@ impl DbTools {
                 None,
             ));
         }
-        let profile = self
-            .store
-            .get_connection(plan.connection_id)
-            .await
-            .map_err(err)?;
+        // Pin first, before looking up the profile or opening the DB. This compares
+        // against the exact workspace/account snapshot reviewed by plan_query and
+        // rejects both cross-account reuse and A → B → A reuse.
+        let context = self.pin(plan.connection_id).await?;
+        if PlannedConnectionIdentity::from(context.pin()) != plan.identity {
+            return Err(McpError::invalid_params(
+                "workspace, account, or connection access changed; call plan_query again",
+                None,
+            ));
+        }
+        let operation_pin = context.pin().clone();
+        let profile = context.pin().profile.clone();
         let cls = safety::classify(&plan.sql, profile.engine).map_err(err)?;
         if !matches!(cls.kind, QueryKind::Read) || cls.statement_count != 1 {
             return Err(McpError::invalid_params(
@@ -723,7 +755,7 @@ impl DbTools {
                 "sql": plan.sql,
             }),
         );
-        let live = match self.live(profile.id).await {
+        let live = match context.connect().await.map_err(err) {
             Ok(live) => live,
             Err(e) => {
                 let message = e.message.to_string();
@@ -738,7 +770,7 @@ impl DbTools {
                 .await;
                 if let Err(history_error) = self
                     .history(
-                        profile.id,
+                        &operation_pin,
                         &plan.sql,
                         "error",
                         None,
@@ -767,7 +799,7 @@ impl DbTools {
         // L2 authoritative read-only session — a misclassified write is rejected at the DB.
         // (`sql()` cannot fail here: plan_query never issues planIds for MongoDB.)
         let result = match safety::run_read_only(
-            pool_ref(live.sql().map_err(err)?.ro()),
+            pool_ref(live.live().sql().map_err(err)?.ro()),
             &plan.sql,
             plan.max_rows,
         )
@@ -787,7 +819,7 @@ impl DbTools {
                 .await;
                 if let Err(history_error) = self
                     .history(
-                        profile.id,
+                        &operation_pin,
                         &plan.sql,
                         "error",
                         None,
@@ -823,7 +855,7 @@ impl DbTools {
         .await;
         let query_run_id = match self
             .history(
-                profile.id,
+                &operation_pin,
                 &plan.sql,
                 "ok",
                 Some(result.row_count as i64),
@@ -901,18 +933,21 @@ impl DbTools {
         &self,
         Parameters(args): Parameters<RunDocumentQueryArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let profile = self.resolve_conn(&args.connection).await?;
+        let resolved = self.resolve_conn(&args.connection).await?;
         // The audit/history/feed `sql` slot carries the serialized typed request.
         let query_text = serde_json::to_string(&args.query).map_err(|e| err(e.into()))?;
         self.emit(
             "agent:tool_call",
             json!({
                 "tool": "run_document_query",
-                "connection": profile.name,
-                "connectionId": profile.id,
+                "connection": resolved.name,
+                "connectionId": resolved.id,
                 "sql": query_text,
             }),
         );
+        let context = self.pin(resolved.id).await?;
+        let operation_pin = context.pin().clone();
+        let profile = context.pin().profile.clone();
         if !profile.engine.is_document() {
             return Err(McpError::invalid_params(
                 "run_document_query only works on MongoDB connections — use plan_query/run_query for SQL engines",
@@ -956,9 +991,9 @@ impl DbTools {
             .max_rows
             .unwrap_or(settings.max_rows)
             .min(MAX_AGENT_ROWS);
-        let live = self.live(profile.id).await?;
+        let live = context.connect().await.map_err(err)?;
         let result = match crate::mongo::query::run(
-            live.mongo().map_err(err)?,
+            live.live().mongo().map_err(err)?,
             &args.query,
             cap,
             Duration::from_millis(safety::STATEMENT_TIMEOUT_MS),
@@ -979,7 +1014,7 @@ impl DbTools {
                 .await;
                 if let Err(history_error) = self
                     .history(
-                        profile.id,
+                        &operation_pin,
                         &query_text,
                         "error",
                         None,
@@ -1017,7 +1052,7 @@ impl DbTools {
         .await;
         if let Err(e) = self
             .history(
-                profile.id,
+                &operation_pin,
                 &query_text,
                 "ok",
                 Some(result.doc_count as i64),
@@ -1414,10 +1449,19 @@ mod tests {
     fn planned_query_is_single_use_in_the_shared_store() {
         let store = query_plan_store();
         let id = Uuid::new_v4();
+        let identity = PlannedConnectionIdentity {
+            workspace_id: Uuid::new_v4(),
+            account_scope: AccountScope::Personal,
+            scope_generation: 1,
+            connection_revision: 1,
+            binding_revision: 0,
+            binding_updated_at: String::new(),
+        };
         store.lock().unwrap().insert(
             id,
             PlannedQuery {
                 connection_id: Uuid::new_v4(),
+                identity,
                 sql: "SELECT 1".into(),
                 max_rows: 10,
                 decision: "ready".into(),
@@ -1426,5 +1470,30 @@ mod tests {
         );
         assert!(store.lock().unwrap().remove(&id).is_some());
         assert!(store.lock().unwrap().remove(&id).is_none());
+    }
+
+    #[test]
+    fn planned_query_identity_rejects_scope_and_revision_changes() {
+        let workspace_id = Uuid::new_v4();
+        let identity = PlannedConnectionIdentity {
+            workspace_id,
+            account_scope: AccountScope::WorkspaceUser("account-a".into()),
+            scope_generation: 7,
+            connection_revision: 3,
+            binding_revision: 2,
+            binding_updated_at: "2026-07-24T00:00:00Z".into(),
+        };
+
+        let mut switched_account = identity.clone();
+        switched_account.account_scope = AccountScope::WorkspaceUser("account-b".into());
+        assert!(identity != switched_account);
+
+        let mut reselected_scope = identity.clone();
+        reselected_scope.scope_generation += 2;
+        assert!(identity != reselected_scope);
+
+        let mut changed_binding = identity.clone();
+        changed_binding.binding_revision += 1;
+        assert!(identity != changed_binding);
     }
 }

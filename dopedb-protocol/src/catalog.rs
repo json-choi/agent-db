@@ -3,6 +3,7 @@
 use chrono::{DateTime, Utc};
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -55,6 +56,29 @@ pub enum CatalogValidationError {
 }
 
 impl CatalogSnapshot {
+    /// Build a canonical snapshot and derive its SHA-256 fingerprint from schema
+    /// metadata only. Capture time and connection id are excluded so collecting the
+    /// same database metadata again produces the same fingerprint.
+    pub fn capture(
+        connection_id: Uuid,
+        engine: DatabaseEngine,
+        database: impl Into<String>,
+        captured_at: DateTime<Utc>,
+        mut contents: CatalogContents,
+    ) -> Result<Self, CatalogValidationError> {
+        canonicalize_contents(&mut contents);
+        let database = database.into();
+        let fingerprint = catalog_fingerprint(engine, &database, &contents);
+        Self::new(
+            connection_id,
+            engine,
+            database,
+            captured_at,
+            fingerprint,
+            contents,
+        )
+    }
+
     pub fn new(
         connection_id: Uuid,
         engine: DatabaseEngine,
@@ -119,6 +143,23 @@ impl CatalogSnapshot {
         &self.fingerprint
     }
 
+    /// Recompute the canonical metadata fingerprint without trusting the wire/cache
+    /// value stored in this snapshot.
+    pub fn canonical_fingerprint(&self) -> String {
+        let mut contents = CatalogContents {
+            namespaces: self.namespaces.clone(),
+            relations: self.relations.clone(),
+            routines: self.routines.clone(),
+            other_objects: self.other_objects.clone(),
+        };
+        canonicalize_contents(&mut contents);
+        catalog_fingerprint(self.engine, &self.database, &contents)
+    }
+
+    pub fn has_canonical_fingerprint(&self) -> bool {
+        self.fingerprint == self.canonical_fingerprint()
+    }
+
     pub fn namespaces(&self) -> &[Namespace] {
         &self.namespaces
     }
@@ -141,6 +182,133 @@ fn valid_fingerprint(fingerprint: &str) -> bool {
         && fingerprint
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CatalogFingerprintPayload<'a> {
+    schema_version: u32,
+    engine: DatabaseEngine,
+    database: &'a str,
+    namespaces: &'a [Namespace],
+    relations: &'a [Relation],
+    routines: &'a [Routine],
+    other_objects: &'a [DatabaseObject],
+}
+
+fn catalog_fingerprint(
+    engine: DatabaseEngine,
+    database: &str,
+    contents: &CatalogContents,
+) -> String {
+    let payload = CatalogFingerprintPayload {
+        schema_version: CATALOG_SCHEMA_VERSION,
+        engine,
+        database,
+        namespaces: &contents.namespaces,
+        relations: &contents.relations,
+        routines: &contents.routines,
+        other_objects: &contents.other_objects,
+    };
+    // These DTOs contain no fallible custom serializers, so serialization failure is
+    // an internal invariant violation rather than input-dependent behavior.
+    let canonical =
+        serde_json::to_vec(&payload).expect("Catalog fingerprint payload must always serialize");
+    lower_hex(&Sha256::digest(canonical))
+}
+
+fn lower_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
+}
+
+fn canonicalize_contents(contents: &mut CatalogContents) {
+    contents.namespaces.sort_by(|left, right| {
+        (left.name.as_str(), left.comment.as_deref())
+            .cmp(&(right.name.as_str(), right.comment.as_deref()))
+    });
+    for relation in &mut contents.relations {
+        relation.columns.sort_by(|left, right| {
+            (left.ordinal, &left.name)
+                .cmp(&(right.ordinal, &right.name))
+                .then_with(|| compare_serialized(left, right))
+        });
+        relation.constraints.sort_by(|left, right| {
+            (constraint_kind_rank(left.kind), left.name.as_str())
+                .cmp(&(constraint_kind_rank(right.kind), right.name.as_str()))
+                .then_with(|| compare_serialized(left, right))
+        });
+        relation.indexes.sort_by(|left, right| {
+            left.name
+                .cmp(&right.name)
+                .then_with(|| compare_serialized(left, right))
+        });
+        relation.partition_children.sort_by(compare_object_ref);
+    }
+    contents.relations.sort_by(|left, right| {
+        compare_object_ref(&left.object, &right.object)
+            .then_with(|| compare_serialized(left, right))
+    });
+    contents.routines.sort_by(|left, right| {
+        compare_object_ref(&left.object, &right.object)
+            .then_with(|| compare_serialized(left, right))
+    });
+    contents.other_objects.sort_by(|left, right| {
+        compare_object_ref(&left.object, &right.object)
+            .then_with(|| compare_serialized(left, right))
+    });
+}
+
+fn compare_serialized<T: Serialize>(left: &T, right: &T) -> std::cmp::Ordering {
+    // Catalog DTO fields serialize infallibly. A deterministic empty fallback keeps
+    // this comparator total even if a future custom field serializer can fail.
+    serde_json::to_vec(left)
+        .unwrap_or_default()
+        .cmp(&serde_json::to_vec(right).unwrap_or_default())
+}
+
+fn compare_object_ref(left: &ObjectRef, right: &ObjectRef) -> std::cmp::Ordering {
+    (
+        left.catalog.as_deref(),
+        left.namespace.as_deref(),
+        left.name.as_str(),
+        object_kind_rank(left.kind),
+        left.native_id.as_deref(),
+    )
+        .cmp(&(
+            right.catalog.as_deref(),
+            right.namespace.as_deref(),
+            right.name.as_str(),
+            object_kind_rank(right.kind),
+            right.native_id.as_deref(),
+        ))
+}
+
+const fn object_kind_rank(kind: ObjectKind) -> u8 {
+    match kind {
+        ObjectKind::Table => 0,
+        ObjectKind::View => 1,
+        ObjectKind::MaterializedView => 2,
+        ObjectKind::Routine => 3,
+        ObjectKind::Sequence => 4,
+        ObjectKind::Type => 5,
+        ObjectKind::Trigger => 6,
+        ObjectKind::Other => 7,
+    }
+}
+
+const fn constraint_kind_rank(kind: ConstraintKind) -> u8 {
+    match kind {
+        ConstraintKind::Primary => 0,
+        ConstraintKind::Unique => 1,
+        ConstraintKind::Foreign => 2,
+        ConstraintKind::Check => 3,
+    }
 }
 
 #[derive(Deserialize)]
@@ -354,6 +522,9 @@ pub struct Relation {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Routine {
     pub object: ObjectRef,
+    /// Engine-native routine kind (`function`, `procedure`, ...), when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_kind: Option<String>,
     #[serde(default)]
     pub arguments: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -362,6 +533,12 @@ pub struct Routine {
     pub language: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
+    /// Lossless compact metadata used by object explorers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// Owning relation for objects such as table triggers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -369,7 +546,13 @@ pub struct Routine {
 pub struct DatabaseObject {
     pub object: ObjectRef,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
 }
 
 #[cfg(test)]
@@ -379,12 +562,11 @@ mod tests {
     use super::*;
 
     fn valid_snapshot() -> CatalogSnapshot {
-        CatalogSnapshot::new(
+        CatalogSnapshot::capture(
             Uuid::from_u128(1),
             DatabaseEngine::Postgres,
             "app",
             Utc::now(),
-            "a".repeat(64),
             CatalogContents::default(),
         )
         .unwrap()
@@ -394,7 +576,7 @@ mod tests {
     fn constructor_fixes_schema_version_and_validates_fingerprint() {
         let snapshot = valid_snapshot();
         assert_eq!(snapshot.schema_version(), CATALOG_SCHEMA_VERSION);
-        assert_eq!(snapshot.fingerprint(), "a".repeat(64));
+        assert!(snapshot.has_canonical_fingerprint());
         assert!(CatalogSnapshot::new(
             Uuid::from_u128(1),
             DatabaseEngine::Postgres,
@@ -404,6 +586,75 @@ mod tests {
             CatalogContents::default(),
         )
         .is_err());
+    }
+
+    #[test]
+    fn canonical_fingerprint_is_stable_across_collection_and_capture_order() {
+        let routine_ref = ObjectRef {
+            catalog: None,
+            namespace: Some("public".into()),
+            name: "calculate".into(),
+            kind: ObjectKind::Routine,
+            native_id: None,
+        };
+        let overloaded = vec![
+            Routine {
+                object: routine_ref.clone(),
+                native_kind: Some("function".into()),
+                arguments: vec!["text".into()],
+                return_type: Some("text".into()),
+                language: Some("sql".into()),
+                comment: None,
+                detail: Some("(text)".into()),
+                parent: None,
+            },
+            Routine {
+                object: routine_ref,
+                native_kind: Some("function".into()),
+                arguments: vec!["integer".into()],
+                return_type: Some("integer".into()),
+                language: Some("sql".into()),
+                comment: None,
+                detail: Some("(integer)".into()),
+                parent: None,
+            },
+        ];
+        let first = CatalogContents {
+            namespaces: vec![
+                Namespace {
+                    name: "zeta".into(),
+                    comment: None,
+                },
+                Namespace {
+                    name: "alpha".into(),
+                    comment: Some("first".into()),
+                },
+            ],
+            routines: overloaded,
+            ..CatalogContents::default()
+        };
+        let mut second = first.clone();
+        second.namespaces.reverse();
+        second.routines.reverse();
+        let first = CatalogSnapshot::capture(
+            Uuid::from_u128(1),
+            DatabaseEngine::Postgres,
+            "app",
+            Utc::now(),
+            first,
+        )
+        .unwrap();
+        let second = CatalogSnapshot::capture(
+            Uuid::from_u128(2),
+            DatabaseEngine::Postgres,
+            "app",
+            Utc::now() + chrono::Duration::seconds(1),
+            second,
+        )
+        .unwrap();
+        assert_eq!(first.fingerprint(), second.fingerprint());
+        assert_eq!(first.namespaces(), second.namespaces());
+        assert_eq!(first.routines(), second.routines());
     }
 
     #[test]

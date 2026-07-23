@@ -13,7 +13,8 @@ use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
+use dopedb_protocol::catalog::{CatalogSnapshot, DatabaseEngine, CATALOG_SCHEMA_VERSION};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{AssertSqlSafe, Row, Sqlite, SqlitePool, Transaction};
 use tokio::sync::Mutex;
@@ -38,6 +39,63 @@ pub struct Store {
     /// chain, making `verify_chain` report false tampering.
     // ponytail: one global async lock; audit writes are rare, contention is a non-issue.
     audit_lock: Arc<Mutex<()>>,
+}
+
+/// Stable, non-secret identity for local execution artifacts. Team resources are
+/// partitioned by the exact Better Auth account; Personal resources remain
+/// account-free even while an account is selected in the switcher.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum AccountScope {
+    Personal,
+    WorkspaceUser(String),
+}
+
+impl AccountScope {
+    pub(crate) fn storage_key(&self) -> &str {
+        match self {
+            Self::Personal => "personal",
+            Self::WorkspaceUser(user_id) => user_id,
+        }
+    }
+}
+
+/// One atomically observed workspace/account selection. `generation` changes for
+/// every committed selection, including A → B → A, so a late task cannot mistake a
+/// newly re-selected scope for the one in which it originally started.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ActiveResourceScope {
+    pub workspace_id: Uuid,
+    pub workspace_kind: WorkspaceKind,
+    pub selected_account_id: Option<String>,
+    pub account_scope: AccountScope,
+    pub generation: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CatalogCachePolicy {
+    Persistent,
+    EphemeralOnly,
+}
+
+/// A connection resolved together with the exact active scope and every piece of
+/// local credential material that can change its meaning.
+#[derive(Clone)]
+pub(crate) struct PinnedConnection {
+    pub scope: ActiveResourceScope,
+    pub connection_id: Uuid,
+    pub connection_revision: i64,
+    pub binding_revision: i64,
+    pub binding_updated_at: String,
+    pub profile: ConnectionProfile,
+    pub requires_remote_rbac: bool,
+    pub catalog_cache_policy: CatalogCachePolicy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CacheWriteOutcome {
+    Stored,
+    Stale,
+    NotPersisted,
 }
 
 impl Store {
@@ -89,8 +147,10 @@ impl Store {
         migrate_workspace_foundation(&pool).await?;
         migrate_audit_no_cascade(&pool).await?;
         add_local_scope_columns(&pool).await;
-        add_connection_binding_scope_columns(&pool).await;
+        add_connection_binding_scope_columns(&pool).await?;
         migrate_schema_cache_scopes(&pool).await?;
+        ensure_schema_cache_v2(&pool).await?;
+        repair_active_scope_on_open(&pool).await?;
         ensure_local_scope_indexes(&pool).await?;
         Ok(Store {
             pool,
@@ -179,6 +239,38 @@ impl Store {
         )
         .fetch_optional(&self.pool)
         .await?)
+    }
+
+    /// Read the complete active scope in one SQLite statement. Callers that need a
+    /// durable identity for a longer operation must retain this value instead of
+    /// re-reading workspace and account settings independently.
+    pub(crate) async fn active_resource_scope(&self) -> AppResult<ActiveResourceScope> {
+        let row = sqlx::query(
+            "SELECT w.id AS workspace_id,
+                    w.kind AS workspace_kind,
+                    account.value AS selected_account_id,
+                    generation.value AS scope_generation
+             FROM app_settings active
+             JOIN workspaces w
+               ON active.key = 'active_workspace_id'
+              AND active.value = w.id
+              AND w.lifecycle_state = 'active'
+             LEFT JOIN app_settings account
+               ON account.key = 'active_workspace_account_id'
+             JOIN app_settings generation
+               ON generation.key = 'active_scope_generation'
+             WHERE w.kind = 'personal'
+                OR (account.value IS NOT NULL AND EXISTS(
+                    SELECT 1 FROM workspace_members m
+                    WHERE m.workspace_id = w.id
+                      AND m.user_id = account.value
+                      AND m.status = 'active'
+                ))",
+        )
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| AppError::Config("no active workspace scope is configured".into()))?;
+        active_scope_from_row(&row)
     }
 
     /// Remember public account identity before a possibly-offline membership refresh.
@@ -364,36 +456,8 @@ impl Store {
         .bind(&user.id)
         .execute(&mut *tx)
         .await?;
-        sqlx::query(
-            "UPDATE app_settings SET value = ?1
-             WHERE key = 'active_workspace_id'
-               AND value IN (
-                 SELECT id FROM workspaces
-                 WHERE kind = 'team' AND lifecycle_state != 'active'
-               )",
-        )
-        .bind(personal_id.to_string())
-        .execute(&mut *tx)
-        .await?;
+        repair_active_scope_after_membership_change(&mut tx, now).await?;
         tx.commit().await?;
-        if self.active_workspace_account_id().await?.as_deref() == Some(user.id.as_str()) {
-            let active = self.active_workspace().await?;
-            if active.kind == WorkspaceKind::Team {
-                let still_accessible: bool = sqlx::query_scalar(
-                    "SELECT EXISTS(
-                         SELECT 1 FROM workspace_members
-                         WHERE workspace_id = ?1 AND user_id = ?2 AND status = 'active'
-                     )",
-                )
-                .bind(active.id.to_string())
-                .bind(&user.id)
-                .fetch_one(&self.pool)
-                .await?;
-                if !still_accessible {
-                    self.activate_workspace_account(&user.id).await?;
-                }
-            }
-        }
         Ok(())
     }
 
@@ -404,10 +468,11 @@ impl Store {
         id: Uuid,
         account_user_id: Option<&str>,
     ) -> AppResult<Workspace> {
+        let mut tx = self.pool.begin().await?;
         let row =
             sqlx::query("SELECT * FROM workspaces WHERE id = ?1 AND lifecycle_state = 'active'")
                 .bind(id.to_string())
-                .fetch_optional(&self.pool)
+                .fetch_optional(&mut *tx)
                 .await?
                 .ok_or_else(|| AppError::NotFound(format!("workspace {id}")))?;
         let workspace = row_to_workspace(&row)?;
@@ -416,7 +481,7 @@ impl Store {
                 "SELECT EXISTS(SELECT 1 FROM workspace_accounts WHERE user_id = ?1)",
             )
             .bind(user_id)
-            .fetch_one(&self.pool)
+            .fetch_one(&mut *tx)
             .await?;
             if !account_exists {
                 return Err(AppError::NotFound(format!("workspace account {user_id}")));
@@ -430,7 +495,7 @@ impl Store {
                 )
                 .bind(id.to_string())
                 .bind(user_id)
-                .fetch_one(&self.pool)
+                .fetch_one(&mut *tx)
                 .await?;
                 if !membership_exists {
                     return Err(AppError::NotFound(format!(
@@ -445,7 +510,6 @@ impl Store {
         }
 
         let now = Utc::now();
-        let mut tx = self.pool.begin().await?;
         match account_user_id {
             Some(user_id) => {
                 sqlx::query(
@@ -483,6 +547,7 @@ impl Store {
         .bind(id.to_string())
         .execute(&mut *tx)
         .await?;
+        bump_active_scope_generation(&mut tx).await?;
         tx.commit().await?;
         Ok(workspace)
     }
@@ -589,6 +654,7 @@ impl Store {
                     .execute(&mut *tx)
                     .await?;
             }
+            bump_active_scope_generation(&mut tx).await?;
         }
         tx.commit().await?;
         Ok(())
@@ -598,7 +664,16 @@ impl Store {
         let row = sqlx::query(
             "SELECT w.* FROM workspaces w
              JOIN app_settings s ON s.key = 'active_workspace_id' AND s.value = w.id
-             WHERE w.lifecycle_state = 'active'",
+             LEFT JOIN app_settings account
+               ON account.key = 'active_workspace_account_id'
+             WHERE w.lifecycle_state = 'active'
+               AND (w.kind = 'personal'
+                    OR (account.value IS NOT NULL AND EXISTS(
+                        SELECT 1 FROM workspace_members m
+                        WHERE m.workspace_id = w.id
+                          AND m.user_id = account.value
+                          AND m.status = 'active'
+                    )))",
         )
         .fetch_optional(&self.pool)
         .await?
@@ -607,20 +682,19 @@ impl Store {
     }
 
     pub async fn active_workspace_id(&self) -> AppResult<Uuid> {
-        Ok(self.active_workspace().await?.id)
+        Ok(self.active_resource_scope().await?.workspace_id)
     }
 
     /// Local execution artifacts use a stable non-secret scope key. Personal data is
     /// device-local; team data follows the exact authenticated account selected with
     /// that workspace so caches, history, and Agent sessions cannot cross accounts.
     pub(crate) async fn active_local_scope(&self) -> AppResult<String> {
-        let workspace = self.active_workspace().await?;
-        if workspace.kind == WorkspaceKind::Personal {
-            return Ok("personal".into());
-        }
-        self.active_workspace_account_id()
+        Ok(self
+            .active_resource_scope()
             .await?
-            .ok_or_else(|| AppError::Config("a team workspace has no active account".into()))
+            .account_scope
+            .storage_key()
+            .to_owned())
     }
 
     // ── connections ────────────────────────────────────────────────────────
@@ -660,37 +734,64 @@ impl Store {
         }
         let now = Utc::now();
         let extra = serde_json::to_string(&p.extra_params)?;
-        let workspace = self.active_workspace().await?;
-        let workspace_id = workspace.id;
-        let account_user_id = if workspace.kind == WorkspaceKind::Team {
-            Some(self.active_workspace_account_id().await?.ok_or_else(|| {
-                AppError::Config("team-local connections require an active account".into())
-            })?)
-        } else {
-            None
-        };
-        self.ensure_connection_write_scope(p.id).await?;
-        let existing: Option<(String, i64)> =
-            sqlx::query_as("SELECT workspace_id, revision FROM connections WHERE id = ?1")
-                .bind(p.id.to_string())
-                .fetch_optional(&self.pool)
-                .await?;
-        let revision = existing.map_or(1, |(_, revision)| revision + 1);
         let mut tx = self.pool.begin().await?;
-        sqlx::query(
+        // Acquire SQLite's writer lock before observing the active scope. This makes
+        // scope selection, ownership validation, and the revision bump one serialized
+        // transaction even if another process instance touches the same database.
+        sqlx::query("UPDATE app_settings SET value = value WHERE key = 'active_scope_generation'")
+            .execute(&mut *tx)
+            .await?;
+        let active: Option<(String, String, Option<String>)> = sqlx::query_as(
+            "SELECT w.id, w.kind, account.value
+             FROM app_settings workspace
+             JOIN workspaces w
+               ON workspace.key = 'active_workspace_id'
+              AND workspace.value = w.id
+              AND w.lifecycle_state = 'active'
+             LEFT JOIN app_settings account
+               ON account.key = 'active_workspace_account_id'
+             WHERE w.kind = 'personal'
+                OR (
+                    account.value IS NOT NULL
+                    AND EXISTS(
+                        SELECT 1 FROM workspace_members member
+                        WHERE member.workspace_id = w.id
+                          AND member.user_id = account.value
+                          AND member.status = 'active'
+                    )
+                )",
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+        let (workspace_id_raw, workspace_kind_raw, selected_account_id) =
+            active.ok_or_else(|| AppError::Config("active workspace scope is invalid".into()))?;
+        let workspace_id = parse_uuid(workspace_id_raw)?;
+        let workspace_kind = parse_workspace_kind(workspace_kind_raw)?;
+        let account_user_id = match workspace_kind {
+            WorkspaceKind::Personal => None,
+            WorkspaceKind::Team => Some(selected_account_id.ok_or_else(|| {
+                AppError::Config("team-local connections require an active account".into())
+            })?),
+        };
+        let revision: Option<i64> = sqlx::query_scalar(
             r#"INSERT INTO connections
                 (id, name, engine, provider, driver_id, host, port, db_name, username, sslmode,
                  extra_params, secret_ref, readonly_default, allow_writes,
                  created_at, updated_at, env, schema_group, workspace_id, account_user_id,
                  revision, sync_status, workspace_access, credential_mode, deleted_at)
                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?15,?16,?17,
-                       ?18,?19,?20,'dirty',?21,?22,NULL)
+                       ?18,?19,1,'dirty',?20,?21,NULL)
                ON CONFLICT(id) DO UPDATE SET
                  name=?2, engine=?3, provider=?4, driver_id=?5, host=?6, port=?7,
                  db_name=?8, username=?9, sslmode=?10, extra_params=?11, secret_ref=?12,
                  readonly_default=?13, allow_writes=?14, updated_at=?15,
-                 env=?16, schema_group=?17, revision=?20, sync_status='dirty',
-                 workspace_access=?21, credential_mode=?22, deleted_at=NULL"#,
+                 env=?16, schema_group=?17, revision=connections.revision + 1,
+                 sync_status='dirty', workspace_access=?20, credential_mode=?21,
+                 deleted_at=NULL
+               WHERE connections.workspace_id = ?18
+                 AND connections.account_user_id IS ?19
+                 AND connections.remote_id IS NULL
+               RETURNING revision"#,
         )
         .bind(p.id.to_string())
         .bind(&p.name)
@@ -711,11 +812,12 @@ impl Store {
         .bind(&p.schema_group)
         .bind(workspace_id.to_string())
         .bind(account_user_id)
-        .bind(revision)
         .bind(workspace_access_str(p.workspace_access))
         .bind(credential_mode_str(p.credential_mode))
-        .execute(&mut *tx)
+        .fetch_optional(&mut *tx)
         .await?;
+        let revision =
+            revision.ok_or_else(|| AppError::NotFound(format!("connection {}", p.id)))?;
 
         // Guarantee a safety row for the connection (defaults on first insert).
         sqlx::query("INSERT OR IGNORE INTO connection_safety (connection_id) VALUES (?1)")
@@ -888,7 +990,12 @@ impl Store {
                  ON CONFLICT(connection_id, account_user_id) DO UPDATE SET
                     workspace_access = excluded.workspace_access,
                     allow_writes = excluded.allow_writes,
-                    updated_at = excluded.updated_at",
+                    revision = workspace_connection_bindings.revision + 1,
+                    updated_at = excluded.updated_at
+                 WHERE workspace_connection_bindings.workspace_access
+                           IS NOT excluded.workspace_access
+                    OR workspace_connection_bindings.allow_writes
+                           IS NOT excluded.allow_writes",
             )
             .bind(profile.id.to_string())
             .bind(account_user_id)
@@ -970,7 +1077,11 @@ impl Store {
                 username = excluded.username,
                 extra_params = excluded.extra_params,
                 secret_ref = excluded.secret_ref,
-                updated_at = excluded.updated_at",
+                revision = workspace_connection_bindings.revision + 1,
+                updated_at = excluded.updated_at
+             WHERE workspace_connection_bindings.username IS NOT excluded.username
+                OR workspace_connection_bindings.extra_params IS NOT excluded.extra_params
+                OR workspace_connection_bindings.secret_ref IS NOT excluded.secret_ref",
         )
         .bind(id.to_string())
         .bind(account_user_id)
@@ -1045,6 +1156,421 @@ impl Store {
         .await?
         .ok_or_else(|| AppError::NotFound(format!("connection {id}")))?;
         row_to_connection_with_binding(&row)
+    }
+
+    /// Resolve a readable connection and every local authority/revision value in one
+    /// SQLite snapshot. Long-running services keep this pin and use conditional writes
+    /// so a result completed after a workspace, account, template, or credential
+    /// change is discarded instead of being published into the new scope.
+    pub(crate) async fn pin_connection_for_read(&self, id: Uuid) -> AppResult<PinnedConnection> {
+        let row = sqlx::query(
+            "SELECT c.*,
+                    b.username AS binding_username,
+                    b.extra_params AS binding_extra_params,
+                    b.secret_ref AS binding_secret_ref,
+                    b.workspace_access AS binding_workspace_access,
+                    b.allow_writes AS binding_allow_writes,
+                    active.workspace_id AS pinned_workspace_id,
+                    active.workspace_kind AS pinned_workspace_kind,
+                    active.selected_account_id AS pinned_selected_account_id,
+                    active.account_scope AS pinned_account_scope,
+                    active.scope_generation AS pinned_scope_generation,
+                    c.revision AS pinned_connection_revision,
+                    CASE WHEN c.remote_id IS NOT NULL
+                         THEN COALESCE(b.revision, 0) ELSE 0 END
+                         AS pinned_binding_revision,
+                    CASE WHEN c.remote_id IS NOT NULL
+                         THEN COALESCE(b.updated_at, '') ELSE '' END
+                         AS pinned_binding_updated_at,
+                    c.remote_id AS pinned_remote_id
+             FROM (
+                 SELECT w.id AS workspace_id,
+                        w.kind AS workspace_kind,
+                        account.value AS selected_account_id,
+                        CASE WHEN w.kind = 'personal'
+                             THEN 'personal' ELSE account.value END AS account_scope,
+                        generation.value AS scope_generation
+                 FROM app_settings workspace
+                 JOIN workspaces w
+                   ON workspace.key = 'active_workspace_id'
+                  AND workspace.value = w.id
+                  AND w.lifecycle_state = 'active'
+                 LEFT JOIN app_settings account
+                   ON account.key = 'active_workspace_account_id'
+                 JOIN app_settings generation
+                   ON generation.key = 'active_scope_generation'
+             ) active
+             JOIN connections c
+               ON c.workspace_id = active.workspace_id
+              AND c.deleted_at IS NULL
+             LEFT JOIN workspace_connection_bindings b
+               ON b.connection_id = c.id
+              AND b.account_user_id = active.selected_account_id
+             WHERE c.id = ?1
+               AND (active.workspace_kind = 'personal'
+                    OR active.selected_account_id IS NOT NULL)
+               AND (active.workspace_kind = 'personal'
+                    OR EXISTS(
+                        SELECT 1 FROM workspace_members m
+                        WHERE m.workspace_id = active.workspace_id
+                          AND m.user_id = active.selected_account_id
+                          AND m.status = 'active'
+                    ))
+               AND (active.workspace_kind = 'personal'
+                    OR c.remote_id IS NOT NULL
+                    OR c.account_user_id = active.selected_account_id)",
+        )
+        .bind(id.to_string())
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("connection {id}")))?;
+
+        let profile = row_to_connection_with_binding(&row)?;
+        if !profile.workspace_access.can_read() {
+            return Err(AppError::Blocked {
+                reason: "workspace role cannot execute this connection".into(),
+            });
+        }
+        let scope_generation = parse_scope_generation(
+            row.try_get::<String, _>("pinned_scope_generation")?
+                .as_str(),
+        )?;
+        let workspace_kind = parse_workspace_kind(row.try_get("pinned_workspace_kind")?)?;
+        let selected_account_id: Option<String> = row.try_get("pinned_selected_account_id")?;
+        let account_scope_key: String = row.try_get("pinned_account_scope")?;
+        let account_scope = account_scope_from_parts(
+            workspace_kind,
+            selected_account_id.as_deref(),
+            &account_scope_key,
+        )?;
+        let connection_revision: i64 = row.try_get("pinned_connection_revision")?;
+        let binding_revision: i64 = row.try_get("pinned_binding_revision")?;
+        let binding_updated_at: String = row.try_get("pinned_binding_updated_at")?;
+        let requires_remote_rbac = row
+            .try_get::<Option<String>, _>("pinned_remote_id")?
+            .is_some();
+        let valid_binding_revision = if requires_remote_rbac {
+            binding_revision >= 1 && !binding_updated_at.is_empty()
+        } else {
+            binding_revision == 0 && binding_updated_at.is_empty()
+        };
+        if connection_revision < 1 || !valid_binding_revision {
+            return Err(AppError::Config(
+                "connection material has an invalid revision".into(),
+            ));
+        }
+        let catalog_cache_policy = if profile.credential_mode == WorkspaceCredentialMode::Managed {
+            CatalogCachePolicy::EphemeralOnly
+        } else {
+            CatalogCachePolicy::Persistent
+        };
+        Ok(PinnedConnection {
+            scope: ActiveResourceScope {
+                workspace_id: parse_uuid(row.try_get("pinned_workspace_id")?)?,
+                workspace_kind,
+                selected_account_id,
+                account_scope,
+                generation: scope_generation,
+            },
+            connection_id: id,
+            connection_revision,
+            binding_revision,
+            binding_updated_at,
+            profile,
+            requires_remote_rbac,
+            catalog_cache_policy,
+        })
+    }
+
+    /// Check whether a retained connection pin still names the active scope and current
+    /// local material. Shared-resource callers still need a fresh control-plane RBAC
+    /// authorization; this method intentionally verifies only the local half.
+    pub(crate) async fn is_pin_current(&self, pin: &PinnedConnection) -> AppResult<bool> {
+        let current: bool = sqlx::query_scalar(
+            "SELECT EXISTS(
+                 SELECT 1
+                 FROM app_settings workspace
+                 JOIN workspaces w
+                   ON workspace.key = 'active_workspace_id'
+                  AND workspace.value = w.id
+                  AND w.lifecycle_state = 'active'
+                 LEFT JOIN app_settings account
+                   ON account.key = 'active_workspace_account_id'
+                 JOIN app_settings generation
+                   ON generation.key = 'active_scope_generation'
+                 JOIN connections c
+                   ON c.id = ?5
+                  AND c.workspace_id = w.id
+                  AND c.deleted_at IS NULL
+                 LEFT JOIN workspace_connection_bindings b
+                   ON b.connection_id = c.id
+                  AND b.account_user_id = account.value
+                 WHERE w.id = ?1
+                   AND w.kind = ?2
+                   AND account.value IS ?3
+                   AND generation.value = ?4
+                   AND c.revision = ?6
+                   AND CASE WHEN c.remote_id IS NOT NULL
+                            THEN COALESCE(b.revision, 0) ELSE 0 END = ?7
+                   AND CASE WHEN c.remote_id IS NOT NULL
+                            THEN COALESCE(b.updated_at, '') ELSE '' END = ?8
+                   AND CASE WHEN w.kind = 'personal'
+                            THEN 'personal' ELSE account.value END = ?9
+                   AND (w.kind = 'personal'
+                        OR EXISTS(
+                            SELECT 1 FROM workspace_members m
+                            WHERE m.workspace_id = w.id
+                              AND m.user_id = account.value
+                              AND m.status = 'active'
+                        ))
+                   AND (w.kind = 'personal'
+                        OR c.remote_id IS NOT NULL
+                        OR c.account_user_id = account.value)
+                   AND (c.remote_id IS NULL
+                        OR COALESCE(b.workspace_access, 'view')
+                           IN ('read', 'write', 'manage'))
+             )",
+        )
+        .bind(pin.scope.workspace_id.to_string())
+        .bind(workspace_kind_str(pin.scope.workspace_kind))
+        .bind(pin.scope.selected_account_id.as_deref())
+        .bind(pin.scope.generation.to_string())
+        .bind(pin.connection_id.to_string())
+        .bind(pin.connection_revision)
+        .bind(pin.binding_revision)
+        .bind(&pin.binding_updated_at)
+        .bind(pin.scope.account_scope.storage_key())
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(current)
+    }
+
+    /// Return a valid Catalog V2 snapshot only when both its stored provenance and the
+    /// active local scope still match the retained pin. Managed credentials are never
+    /// persisted until the control plane exposes a non-secret principal revision.
+    pub(crate) async fn get_catalog_if_current(
+        &self,
+        pin: &PinnedConnection,
+    ) -> AppResult<Option<CatalogSnapshot>> {
+        if pin.catalog_cache_policy == CatalogCachePolicy::EphemeralOnly {
+            return Ok(None);
+        }
+        let row = sqlx::query(
+            "SELECT cache.catalog_schema_version,
+                    cache.fingerprint,
+                    cache.captured_at,
+                    cache.catalog_json
+             FROM schema_cache_v2 cache
+             JOIN app_settings workspace
+               ON workspace.key = 'active_workspace_id'
+              AND workspace.value = cache.workspace_id
+             JOIN workspaces w
+               ON w.id = workspace.value
+              AND w.lifecycle_state = 'active'
+             LEFT JOIN app_settings account
+               ON account.key = 'active_workspace_account_id'
+             JOIN app_settings generation
+               ON generation.key = 'active_scope_generation'
+             JOIN connections c
+               ON c.id = cache.connection_id
+              AND c.workspace_id = cache.workspace_id
+              AND c.deleted_at IS NULL
+             LEFT JOIN workspace_connection_bindings b
+               ON b.connection_id = c.id
+              AND b.account_user_id = account.value
+             WHERE cache.workspace_id = ?1
+               AND cache.account_scope = ?2
+               AND cache.connection_id = ?3
+               AND cache.connection_revision = ?4
+               AND cache.binding_revision = ?5
+               AND cache.binding_updated_at = ?6
+               AND cache.catalog_schema_version = ?7
+               AND NOT EXISTS(
+                   SELECT 1 FROM schema_cache legacy
+                   WHERE legacy.connection_id = cache.connection_id
+                     AND legacy.account_scope = cache.account_scope
+               )
+               AND w.kind = ?8
+               AND account.value IS ?9
+               AND generation.value = ?10
+               AND c.revision = ?4
+               AND CASE WHEN c.remote_id IS NOT NULL
+                        THEN COALESCE(b.revision, 0) ELSE 0 END = ?5
+               AND CASE WHEN c.remote_id IS NOT NULL
+                        THEN COALESCE(b.updated_at, '') ELSE '' END = ?6
+               AND CASE WHEN w.kind = 'personal'
+                        THEN 'personal' ELSE account.value END = ?2
+               AND (w.kind = 'personal'
+                    OR EXISTS(
+                        SELECT 1 FROM workspace_members m
+                        WHERE m.workspace_id = w.id
+                          AND m.user_id = account.value
+                          AND m.status = 'active'
+                    ))
+               AND (w.kind = 'personal'
+                    OR c.remote_id IS NOT NULL
+                    OR c.account_user_id = account.value)
+               AND (c.remote_id IS NULL
+                    OR COALESCE(b.workspace_access, 'view')
+                       IN ('read', 'write', 'manage'))",
+        )
+        .bind(pin.scope.workspace_id.to_string())
+        .bind(pin.scope.account_scope.storage_key())
+        .bind(pin.connection_id.to_string())
+        .bind(pin.connection_revision)
+        .bind(pin.binding_revision)
+        .bind(&pin.binding_updated_at)
+        .bind(i64::from(CATALOG_SCHEMA_VERSION))
+        .bind(workspace_kind_str(pin.scope.workspace_kind))
+        .bind(pin.scope.selected_account_id.as_deref())
+        .bind(pin.scope.generation.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let Ok(schema_version) = row.try_get::<i64, _>("catalog_schema_version") else {
+            return Ok(None);
+        };
+        let Ok(fingerprint) = row.try_get::<String, _>("fingerprint") else {
+            return Ok(None);
+        };
+        let Ok(captured_at_raw) = row.try_get::<String, _>("captured_at") else {
+            return Ok(None);
+        };
+        let Ok(captured_at) =
+            DateTime::parse_from_rfc3339(&captured_at_raw).map(|value| value.with_timezone(&Utc))
+        else {
+            return Ok(None);
+        };
+        let Ok(catalog_json) = row.try_get::<String, _>("catalog_json") else {
+            return Ok(None);
+        };
+        let snapshot = match serde_json::from_str::<CatalogSnapshot>(&catalog_json) {
+            Ok(snapshot) => snapshot,
+            Err(_) => return Ok(None),
+        };
+        if schema_version != i64::from(CATALOG_SCHEMA_VERSION)
+            || snapshot.schema_version() != CATALOG_SCHEMA_VERSION
+            || snapshot.fingerprint() != fingerprint
+            || snapshot.captured_at() != captured_at
+            || !snapshot.has_canonical_fingerprint()
+            || !catalog_matches_pin(&snapshot, pin)
+        {
+            return Ok(None);
+        }
+        Ok(Some(snapshot))
+    }
+
+    /// Store a Catalog V2 snapshot only if the pin is still current at the exact
+    /// statement that performs the write. `Stale` is an expected race outcome.
+    pub(crate) async fn put_catalog_if_current(
+        &self,
+        pin: &PinnedConnection,
+        snapshot: &CatalogSnapshot,
+    ) -> AppResult<CacheWriteOutcome> {
+        if pin.catalog_cache_policy == CatalogCachePolicy::EphemeralOnly {
+            return Ok(CacheWriteOutcome::NotPersisted);
+        }
+        snapshot
+            .validate()
+            .map_err(|_| AppError::Config("invalid Catalog V2 snapshot".into()))?;
+        if !snapshot.has_canonical_fingerprint() || !catalog_matches_pin(snapshot, pin) {
+            return Err(AppError::Config(
+                "Catalog V2 snapshot does not match its connection pin".into(),
+            ));
+        }
+        let catalog_json = serde_json::to_string(snapshot)?;
+        let mut tx = self.pool.begin().await?;
+        let result = sqlx::query(
+            "INSERT INTO schema_cache_v2
+                (workspace_id, account_scope, connection_id, connection_revision,
+                 binding_revision, binding_updated_at, catalog_schema_version,
+                 fingerprint, captured_at, catalog_json)
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10
+             WHERE EXISTS(
+                 SELECT 1
+                 FROM app_settings workspace
+                 JOIN workspaces w
+                   ON workspace.key = 'active_workspace_id'
+                  AND workspace.value = w.id
+                  AND w.lifecycle_state = 'active'
+                 LEFT JOIN app_settings account
+                   ON account.key = 'active_workspace_account_id'
+                 JOIN app_settings generation
+                   ON generation.key = 'active_scope_generation'
+                 JOIN connections c
+                   ON c.id = ?3
+                  AND c.workspace_id = w.id
+                  AND c.deleted_at IS NULL
+                 LEFT JOIN workspace_connection_bindings b
+                   ON b.connection_id = c.id
+                  AND b.account_user_id = account.value
+                 WHERE w.id = ?1
+                   AND w.kind = ?11
+                   AND account.value IS ?12
+                   AND generation.value = ?13
+                   AND c.revision = ?4
+                   AND CASE WHEN c.remote_id IS NOT NULL
+                            THEN COALESCE(b.revision, 0) ELSE 0 END = ?5
+                   AND CASE WHEN c.remote_id IS NOT NULL
+                            THEN COALESCE(b.updated_at, '') ELSE '' END = ?6
+                   AND CASE WHEN w.kind = 'personal'
+                            THEN 'personal' ELSE account.value END = ?2
+                   AND (w.kind = 'personal'
+                        OR EXISTS(
+                            SELECT 1 FROM workspace_members m
+                            WHERE m.workspace_id = w.id
+                              AND m.user_id = account.value
+                              AND m.status = 'active'
+                        ))
+                   AND (w.kind = 'personal'
+                        OR c.remote_id IS NOT NULL
+                        OR c.account_user_id = account.value)
+                   AND (c.remote_id IS NULL
+                        OR COALESCE(b.workspace_access, 'view')
+                           IN ('read', 'write', 'manage'))
+             )
+             ON CONFLICT(workspace_id, account_scope, connection_id) DO UPDATE SET
+                 connection_revision = excluded.connection_revision,
+                 binding_revision = excluded.binding_revision,
+                 binding_updated_at = excluded.binding_updated_at,
+                 catalog_schema_version = excluded.catalog_schema_version,
+                 fingerprint = excluded.fingerprint,
+                 captured_at = excluded.captured_at,
+                 catalog_json = excluded.catalog_json",
+        )
+        .bind(pin.scope.workspace_id.to_string())
+        .bind(pin.scope.account_scope.storage_key())
+        .bind(pin.connection_id.to_string())
+        .bind(pin.connection_revision)
+        .bind(pin.binding_revision)
+        .bind(&pin.binding_updated_at)
+        .bind(i64::from(snapshot.schema_version()))
+        .bind(snapshot.fingerprint())
+        .bind(snapshot.captured_at())
+        .bind(catalog_json)
+        .bind(workspace_kind_str(pin.scope.workspace_kind))
+        .bind(pin.scope.selected_account_id.as_deref())
+        .bind(pin.scope.generation.to_string())
+        .execute(&mut *tx)
+        .await?;
+        if result.rows_affected() == 0 {
+            tx.rollback().await?;
+            return Ok(CacheWriteOutcome::Stale);
+        }
+        // An older binary must refresh rather than consume a less precisely scoped
+        // legacy row after the new runtime has published an authoritative snapshot.
+        sqlx::query(
+            "DELETE FROM schema_cache
+             WHERE connection_id = ?1 AND account_scope = ?2",
+        )
+        .bind(pin.connection_id.to_string())
+        .bind(pin.scope.account_scope.storage_key())
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(CacheWriteOutcome::Stored)
     }
 
     /// Update several connections as one transaction so a failed group operation
@@ -1170,18 +1696,79 @@ impl Store {
 
     // ── query history ──────────────────────────────────────────────────────
 
-    pub async fn insert_history(&self, h: &HistoryEntry) -> AppResult<()> {
-        self.get_connection(h.connection_id).await?;
-        let account_scope = self.active_local_scope().await?;
-        sqlx::query(
+    /// Persist an execution artifact only if the connection still has the exact
+    /// workspace/account/material identity that authorized the operation. This is
+    /// intentionally one `INSERT .. SELECT` statement: checking a pin and inserting
+    /// separately would let a scope switch place an old operation in the new account.
+    pub(crate) async fn insert_history_if_current(
+        &self,
+        pin: &PinnedConnection,
+        h: &HistoryEntry,
+    ) -> AppResult<()> {
+        if h.connection_id != pin.connection_id {
+            return Err(AppError::Config(
+                "query history does not match its connection pin".into(),
+            ));
+        }
+        let result = sqlx::query(
             r#"INSERT INTO query_history
                 (id, connection_id, account_scope, sql, kind, status, row_count,
                  duration_ms, error, executed_at, origin)
-               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)"#,
+               SELECT ?10, ?5, ?9, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18
+               WHERE EXISTS(
+                   SELECT 1
+                   FROM app_settings workspace
+                   JOIN workspaces w
+                     ON workspace.key = 'active_workspace_id'
+                    AND workspace.value = w.id
+                    AND w.lifecycle_state = 'active'
+                   LEFT JOIN app_settings account
+                     ON account.key = 'active_workspace_account_id'
+                   JOIN app_settings generation
+                     ON generation.key = 'active_scope_generation'
+                   JOIN connections c
+                     ON c.id = ?5
+                    AND c.workspace_id = w.id
+                    AND c.deleted_at IS NULL
+                   LEFT JOIN workspace_connection_bindings b
+                     ON b.connection_id = c.id
+                    AND b.account_user_id = account.value
+                   WHERE w.id = ?1
+                     AND w.kind = ?2
+                     AND account.value IS ?3
+                     AND generation.value = ?4
+                     AND c.revision = ?6
+                     AND CASE WHEN c.remote_id IS NOT NULL
+                              THEN COALESCE(b.revision, 0) ELSE 0 END = ?7
+                     AND CASE WHEN c.remote_id IS NOT NULL
+                              THEN COALESCE(b.updated_at, '') ELSE '' END = ?8
+                     AND CASE WHEN w.kind = 'personal'
+                              THEN 'personal' ELSE account.value END = ?9
+                     AND (w.kind = 'personal'
+                          OR EXISTS(
+                              SELECT 1 FROM workspace_members m
+                              WHERE m.workspace_id = w.id
+                                AND m.user_id = account.value
+                                AND m.status = 'active'
+                          ))
+                     AND (w.kind = 'personal'
+                          OR c.remote_id IS NOT NULL
+                          OR c.account_user_id = account.value)
+                     AND (c.remote_id IS NULL
+                          OR COALESCE(b.workspace_access, 'view')
+                             IN ('read', 'write', 'manage'))
+               )"#,
         )
+        .bind(pin.scope.workspace_id.to_string())
+        .bind(workspace_kind_str(pin.scope.workspace_kind))
+        .bind(pin.scope.selected_account_id.as_deref())
+        .bind(pin.scope.generation.to_string())
+        .bind(pin.connection_id.to_string())
+        .bind(pin.connection_revision)
+        .bind(pin.binding_revision)
+        .bind(&pin.binding_updated_at)
+        .bind(pin.scope.account_scope.storage_key())
         .bind(h.id.to_string())
-        .bind(h.connection_id.to_string())
-        .bind(account_scope)
         .bind(&h.sql)
         .bind(kind_str(h.kind))
         .bind(&h.status)
@@ -1192,6 +1779,11 @@ impl Store {
         .bind(&h.origin)
         .execute(&self.pool)
         .await?;
+        if result.rows_affected() != 1 {
+            return Err(AppError::Blocked {
+                reason: "workspace scope changed before query history could be saved".into(),
+            });
+        }
         Ok(())
     }
 
@@ -1333,6 +1925,7 @@ impl Store {
     // ── schema cache ───────────────────────────────────────────────────────
 
     /// Returns the cached catalog JSON for a connection, if any.
+    #[cfg(test)]
     pub async fn get_schema_cache(&self, connection_id: Uuid) -> AppResult<Option<String>> {
         self.get_connection(connection_id).await?;
         let account_scope = self.active_local_scope().await?;
@@ -1350,6 +1943,7 @@ impl Store {
         })
     }
 
+    #[cfg(test)]
     pub async fn set_schema_cache(&self, connection_id: Uuid, catalog_json: &str) -> AppResult<()> {
         self.get_connection(connection_id).await?;
         let account_scope = self.active_local_scope().await?;
@@ -1372,13 +1966,24 @@ impl Store {
     /// Drop the cached catalog so the next introspection reads live — after a
     /// connection edit, or an explicit schema refresh.
     pub async fn clear_schema_cache(&self, connection_id: Uuid) -> AppResult<()> {
-        self.get_connection(connection_id).await?;
-        let account_scope = self.active_local_scope().await?;
+        let pin = self.pin_connection_for_read(connection_id).await?;
+        let account_scope = pin.scope.account_scope.storage_key();
+        let mut tx = self.pool.begin().await?;
         sqlx::query("DELETE FROM schema_cache WHERE connection_id = ?1 AND account_scope = ?2")
             .bind(connection_id.to_string())
             .bind(account_scope)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
+        sqlx::query(
+            "DELETE FROM schema_cache_v2
+             WHERE workspace_id = ?1 AND account_scope = ?2 AND connection_id = ?3",
+        )
+        .bind(pin.scope.workspace_id.to_string())
+        .bind(account_scope)
+        .bind(connection_id.to_string())
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -1568,6 +2173,235 @@ impl Store {
     }
 }
 
+fn active_scope_from_row(row: &sqlx::sqlite::SqliteRow) -> AppResult<ActiveResourceScope> {
+    let workspace_id = parse_uuid(row.try_get("workspace_id")?)?;
+    let workspace_kind = parse_workspace_kind(row.try_get("workspace_kind")?)?;
+    let selected_account_id: Option<String> = row.try_get("selected_account_id")?;
+    let account_scope = match workspace_kind {
+        WorkspaceKind::Personal => AccountScope::Personal,
+        WorkspaceKind::Team => AccountScope::WorkspaceUser(
+            selected_account_id
+                .clone()
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| AppError::Config("a team workspace has no active account".into()))?,
+        ),
+    };
+    Ok(ActiveResourceScope {
+        workspace_id,
+        workspace_kind,
+        selected_account_id,
+        account_scope,
+        generation: parse_scope_generation(row.try_get::<String, _>("scope_generation")?.as_str())?,
+    })
+}
+
+fn account_scope_from_parts(
+    workspace_kind: WorkspaceKind,
+    selected_account_id: Option<&str>,
+    stored_scope: &str,
+) -> AppResult<AccountScope> {
+    let account_scope = match workspace_kind {
+        WorkspaceKind::Personal if stored_scope == "personal" => AccountScope::Personal,
+        WorkspaceKind::Team => {
+            let user_id = selected_account_id
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| AppError::Config("a team workspace has no active account".into()))?;
+            if stored_scope != user_id {
+                return Err(AppError::Config(
+                    "active workspace scope is internally inconsistent".into(),
+                ));
+            }
+            AccountScope::WorkspaceUser(user_id.to_owned())
+        }
+        WorkspaceKind::Personal => {
+            return Err(AppError::Config(
+                "Personal Workspace has an invalid local scope".into(),
+            ));
+        }
+    };
+    Ok(account_scope)
+}
+
+fn parse_scope_generation(raw: &str) -> AppResult<i64> {
+    let generation = raw
+        .parse::<i64>()
+        .map_err(|_| AppError::Config("active scope generation is invalid".into()))?;
+    if generation < 0 {
+        return Err(AppError::Config(
+            "active scope generation is invalid".into(),
+        ));
+    }
+    Ok(generation)
+}
+
+async fn bump_active_scope_generation(tx: &mut Transaction<'_, Sqlite>) -> AppResult<i64> {
+    let raw: Option<String> =
+        sqlx::query_scalar("SELECT value FROM app_settings WHERE key = 'active_scope_generation'")
+            .fetch_optional(&mut **tx)
+            .await?;
+    let current = match raw {
+        Some(raw) => parse_scope_generation(&raw)?,
+        None => 0,
+    };
+    let next = current
+        .checked_add(1)
+        .ok_or_else(|| AppError::Config("active scope generation overflowed".into()))?;
+    sqlx::query(
+        "INSERT INTO app_settings (key, value)
+         VALUES ('active_scope_generation', ?1)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    )
+    .bind(next.to_string())
+    .execute(&mut **tx)
+    .await?;
+    Ok(next)
+}
+
+/// Membership synchronization can revoke the selected account while another account
+/// keeps the same team workspace alive. Repair that tuple inside the synchronization
+/// transaction so no committed state ever exposes a revoked account with a team.
+async fn repair_active_scope_after_membership_change(
+    tx: &mut Transaction<'_, Sqlite>,
+    now: DateTime<Utc>,
+) -> AppResult<bool> {
+    let current: Option<(String, Option<String>)> = sqlx::query_as(
+        "SELECT workspace.value, account.value
+         FROM app_settings workspace
+         LEFT JOIN app_settings account
+           ON account.key = 'active_workspace_account_id'
+         WHERE workspace.key = 'active_workspace_id'",
+    )
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some((current_workspace_id, mut selected_account_id)) = current else {
+        return Err(AppError::Config("no active workspace is configured".into()));
+    };
+    let mut account_setting_repaired = false;
+    if let Some(user_id) = selected_account_id.as_deref() {
+        let account_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(
+                 SELECT 1 FROM workspace_accounts WHERE user_id = ?1
+             )",
+        )
+        .bind(user_id)
+        .fetch_one(&mut **tx)
+        .await?;
+        if !account_exists {
+            sqlx::query(
+                "DELETE FROM app_settings
+                 WHERE key = 'active_workspace_account_id'",
+            )
+            .execute(&mut **tx)
+            .await?;
+            selected_account_id = None;
+            account_setting_repaired = true;
+        }
+    }
+    let current_is_valid: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+             SELECT 1 FROM workspaces w
+             WHERE w.id = ?1
+               AND w.lifecycle_state = 'active'
+               AND (w.kind = 'personal'
+                    OR (?2 IS NOT NULL AND EXISTS(
+                        SELECT 1 FROM workspace_members m
+                        WHERE m.workspace_id = w.id
+                          AND m.user_id = ?2
+                          AND m.status = 'active'
+                    )))
+         )",
+    )
+    .bind(&current_workspace_id)
+    .bind(selected_account_id.as_deref())
+    .fetch_one(&mut **tx)
+    .await?;
+    if current_is_valid {
+        if account_setting_repaired {
+            bump_active_scope_generation(tx).await?;
+        }
+        return Ok(account_setting_repaired);
+    }
+
+    let fallback_workspace_id = if let Some(user_id) = selected_account_id.as_deref() {
+        sqlx::query_scalar::<_, Option<String>>(
+            "SELECT COALESCE(
+                 (SELECT a.last_workspace_id FROM workspace_accounts a
+                  JOIN workspace_members m
+                    ON m.workspace_id = a.last_workspace_id
+                   AND m.user_id = a.user_id
+                   AND m.status = 'active'
+                  JOIN workspaces w
+                    ON w.id = m.workspace_id
+                   AND w.lifecycle_state = 'active'
+                  WHERE a.user_id = ?1),
+                 (SELECT m.workspace_id FROM workspace_members m
+                  JOIN workspaces w
+                    ON w.id = m.workspace_id
+                   AND w.lifecycle_state = 'active'
+                  WHERE m.user_id = ?1
+                    AND m.status = 'active'
+                  ORDER BY w.name
+                  LIMIT 1)
+             )",
+        )
+        .bind(user_id)
+        .fetch_one(&mut **tx)
+        .await?
+        .unwrap_or_else(|| migrations::PERSONAL_WORKSPACE_ID.to_owned())
+    } else {
+        migrations::PERSONAL_WORKSPACE_ID.to_owned()
+    };
+
+    sqlx::query(
+        "UPDATE app_settings SET value = ?1
+         WHERE key = 'active_workspace_id'",
+    )
+    .bind(&fallback_workspace_id)
+    .execute(&mut **tx)
+    .await?;
+    if let Some(user_id) = selected_account_id.as_deref() {
+        sqlx::query(
+            "UPDATE workspace_accounts
+             SET last_workspace_id = CASE
+                     WHEN ?1 = ?2 THEN last_workspace_id ELSE ?1
+                 END,
+                 last_used_at = ?3,
+                 updated_at = ?3
+             WHERE user_id = ?4",
+        )
+        .bind(&fallback_workspace_id)
+        .bind(migrations::PERSONAL_WORKSPACE_ID)
+        .bind(now)
+        .bind(user_id)
+        .execute(&mut **tx)
+        .await?;
+    }
+    bump_active_scope_generation(tx).await?;
+    Ok(true)
+}
+
+async fn repair_active_scope_on_open(pool: &SqlitePool) -> AppResult<()> {
+    let mut tx = pool.begin().await?;
+    repair_active_scope_after_membership_change(&mut tx, Utc::now()).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+fn catalog_matches_pin(snapshot: &CatalogSnapshot, pin: &PinnedConnection) -> bool {
+    snapshot.connection_id() == pin.connection_id
+        && snapshot.engine() == protocol_engine(pin.profile.engine)
+        && snapshot.database() == pin.profile.database
+}
+
+fn protocol_engine(engine: Engine) -> DatabaseEngine {
+    match engine {
+        Engine::Postgres => DatabaseEngine::Postgres,
+        Engine::Mysql => DatabaseEngine::Mysql,
+        Engine::Sqlite => DatabaseEngine::Sqlite,
+        Engine::Mongodb => DatabaseEngine::Mongodb,
+    }
+}
+
 /// Add synchronizable resource columns to databases created before the workspace
 /// schema existed. SQLite lacks `ADD COLUMN IF NOT EXISTS`, so duplicate errors are
 /// expected and deliberately ignored after each independent statement.
@@ -1611,14 +2445,25 @@ async fn add_local_scope_columns(pool: &SqlitePool) {
 
 /// Add fail-closed per-account RBAC cache fields to databases created by the first
 /// workspace preview. The next successful control-plane sync replaces these defaults.
-async fn add_connection_binding_scope_columns(pool: &SqlitePool) {
+async fn add_connection_binding_scope_columns(pool: &SqlitePool) -> AppResult<()> {
     let statements = [
         "ALTER TABLE workspace_connection_bindings ADD COLUMN workspace_access TEXT NOT NULL DEFAULT 'view'",
         "ALTER TABLE workspace_connection_bindings ADD COLUMN allow_writes INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE workspace_connection_bindings ADD COLUMN revision INTEGER NOT NULL DEFAULT 1",
     ];
     for statement in statements {
-        let _ = sqlx::query(statement).execute(pool).await;
+        if let Err(error) = sqlx::query(statement).execute(pool).await {
+            let duplicate_column = matches!(
+                &error,
+                sqlx::Error::Database(database)
+                    if database.message().contains("duplicate column name")
+            );
+            if !duplicate_column {
+                return Err(error.into());
+            }
+        }
     }
+    Ok(())
 }
 
 /// Create indexes only after every upgrade path has added the referenced columns.
@@ -1678,6 +2523,106 @@ async fn migrate_schema_cache_scopes(pool: &SqlitePool) -> AppResult<()> {
     Ok(())
 }
 
+/// Validate the disposable Catalog V2 cache shape before creating its index. Keeping
+/// the index out of the bootstrap script lets us recover from an interrupted preview
+/// that left a partial table instead of failing startup before this repair can run.
+async fn ensure_schema_cache_v2(pool: &SqlitePool) -> AppResult<()> {
+    let rows = sqlx::query("PRAGMA table_info('schema_cache_v2')")
+        .fetch_all(pool)
+        .await?;
+    let expected = [
+        ("workspace_id", "TEXT", 1_i64, 1_i64, None),
+        ("account_scope", "TEXT", 1, 2, None),
+        ("connection_id", "TEXT", 1, 3, None),
+        ("connection_revision", "INTEGER", 1, 0, None),
+        ("binding_revision", "INTEGER", 1, 0, None),
+        ("binding_updated_at", "TEXT", 1, 0, Some("''")),
+        ("catalog_schema_version", "INTEGER", 1, 0, None),
+        ("fingerprint", "TEXT", 1, 0, None),
+        ("captured_at", "TEXT", 1, 0, None),
+        ("catalog_json", "TEXT", 1, 0, None),
+    ];
+    let shape_is_current = rows.len() == expected.len()
+        && expected
+            .iter()
+            .all(|(expected_name, expected_type, not_null, pk, default)| {
+                rows.iter().any(|row| {
+                    row.try_get::<String, _>("name")
+                        .is_ok_and(|value| value == *expected_name)
+                        && row
+                            .try_get::<String, _>("type")
+                            .is_ok_and(|value| value == *expected_type)
+                        && row
+                            .try_get::<i64, _>("notnull")
+                            .is_ok_and(|value| value == *not_null)
+                        && row.try_get::<i64, _>("pk").is_ok_and(|value| value == *pk)
+                        && row
+                            .try_get::<Option<String>, _>("dflt_value")
+                            .is_ok_and(|value| value.as_deref() == *default)
+                })
+            });
+    let foreign_keys = sqlx::query("PRAGMA foreign_key_list('schema_cache_v2')")
+        .fetch_all(pool)
+        .await?;
+    let foreign_keys_are_current = foreign_keys.len() == 2
+        && [
+            ("workspace_id", "workspaces"),
+            ("connection_id", "connections"),
+        ]
+        .iter()
+        .all(|(column, table)| {
+            foreign_keys.iter().any(|row| {
+                row.try_get::<String, _>("from")
+                    .is_ok_and(|value| value == *column)
+                    && row
+                        .try_get::<String, _>("table")
+                        .is_ok_and(|value| value == *table)
+                    && row
+                        .try_get::<String, _>("to")
+                        .is_ok_and(|value| value == "id")
+                    && row
+                        .try_get::<String, _>("on_delete")
+                        .is_ok_and(|value| value == "CASCADE")
+            })
+        });
+    if !shape_is_current || !foreign_keys_are_current {
+        let mut tx = pool.begin().await?;
+        sqlx::query("DROP TABLE IF EXISTS schema_cache_v2")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::raw_sql(
+            r#"
+            CREATE TABLE schema_cache_v2 (
+                workspace_id          TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+                account_scope         TEXT NOT NULL,
+                connection_id         TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
+                connection_revision   INTEGER NOT NULL,
+                binding_revision      INTEGER NOT NULL,
+                binding_updated_at    TEXT NOT NULL DEFAULT '',
+                catalog_schema_version INTEGER NOT NULL,
+                fingerprint           TEXT NOT NULL,
+                captured_at           TEXT NOT NULL,
+                catalog_json          TEXT NOT NULL,
+                PRIMARY KEY (workspace_id, account_scope, connection_id)
+            );
+            "#,
+        )
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+    }
+    sqlx::query("DROP INDEX IF EXISTS idx_schema_cache_v2_connection")
+        .execute(pool)
+        .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_schema_cache_v2_connection
+         ON schema_cache_v2(connection_id)",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// Backfill every legacy synchronizable resource into the Personal Workspace while
 /// preserving its UUID. The migration copies no credential value and creates no
 /// outbox payload, so local secret references cannot leak into synchronization data.
@@ -1693,7 +2638,7 @@ async fn migrate_workspace_foundation(pool: &SqlitePool) -> AppResult<()> {
             .execute(&mut *tx)
             .await?;
     }
-    sqlx::query(
+    let repaired_scope = sqlx::query(
         "UPDATE app_settings SET value = ?1
          WHERE key = 'active_workspace_id'
            AND NOT EXISTS (SELECT 1 FROM workspaces WHERE id = app_settings.value)",
@@ -1701,6 +2646,9 @@ async fn migrate_workspace_foundation(pool: &SqlitePool) -> AppResult<()> {
     .bind(personal)
     .execute(&mut *tx)
     .await?;
+    if repaired_scope.rows_affected() > 0 {
+        bump_active_scope_generation(&mut tx).await?;
+    }
     sqlx::query("INSERT OR IGNORE INTO sync_state (workspace_id) VALUES (?1)")
         .bind(personal)
         .execute(&mut *tx)
@@ -1794,15 +2742,7 @@ fn row_to_workspace(r: &sqlx::sqlite::SqliteRow) -> AppResult<Workspace> {
     Ok(Workspace {
         id: parse_uuid(r.try_get("id")?)?,
         name: r.try_get("name")?,
-        kind: match r.try_get::<String, _>("kind")?.as_str() {
-            "personal" => WorkspaceKind::Personal,
-            "team" => WorkspaceKind::Team,
-            other => {
-                return Err(AppError::Config(format!(
-                    "unknown workspace kind '{other}'"
-                )))
-            }
-        },
+        kind: parse_workspace_kind(r.try_get("kind")?)?,
         lifecycle_state: match r.try_get::<String, _>("lifecycle_state")?.as_str() {
             "active" => WorkspaceLifecycleState::Active,
             "archived" => WorkspaceLifecycleState::Archived,
@@ -2027,6 +2967,16 @@ fn workspace_kind_str(kind: WorkspaceKind) -> &'static str {
     }
 }
 
+fn parse_workspace_kind(kind: String) -> AppResult<WorkspaceKind> {
+    match kind.as_str() {
+        "personal" => Ok(WorkspaceKind::Personal),
+        "team" => Ok(WorkspaceKind::Team),
+        other => Err(AppError::Config(format!(
+            "unknown workspace kind '{other}'"
+        ))),
+    }
+}
+
 fn workspace_role_str(role: WorkspaceRole) -> &'static str {
     match role {
         WorkspaceRole::Viewer => "viewer",
@@ -2097,9 +3047,10 @@ pub(crate) fn parse_agent_provider(s: String) -> AppResult<AgentProvider> {
 #[cfg(test)]
 mod tests {
     use super::{
-        add_local_scope_columns, add_workspace_columns, engine_str, ensure_local_scope_indexes,
-        migrate_audit_no_cascade, migrate_schema_cache_scopes, migrate_workspace_foundation,
-        migrations, parse_engine, Store,
+        add_connection_binding_scope_columns, add_local_scope_columns, add_workspace_columns,
+        engine_str, ensure_local_scope_indexes, ensure_schema_cache_v2, migrate_audit_no_cascade,
+        migrate_schema_cache_scopes, migrate_workspace_foundation, migrations, parse_engine,
+        repair_active_scope_on_open, CacheWriteOutcome, CatalogCachePolicy, Store,
     };
     use crate::agent::AgentProvider;
     use crate::error::AppError;
@@ -2107,11 +3058,13 @@ mod tests {
         ConnectionProfile, DashboardDraft, DashboardKind, DashboardVisualization, Engine,
         HistoryEntry, Provider, QueryKind, WorkspaceAuthUser, WorkspaceRole,
     };
-    use chrono::Utc;
+    use chrono::{TimeZone, Utc};
+    use dopedb_protocol::catalog::{CatalogContents, CatalogSnapshot, DatabaseEngine};
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use sqlx::SqlitePool;
     use std::collections::HashMap;
     use std::str::FromStr;
+    use std::time::Duration;
     use uuid::Uuid;
 
     async fn memory_pool() -> SqlitePool {
@@ -2154,6 +3107,23 @@ mod tests {
             email: format!("{}@example.com", name.to_lowercase()),
             display_name: name.into(),
         }
+    }
+
+    fn catalog_snapshot(connection_id: Uuid, database: &str, marker: char) -> CatalogSnapshot {
+        CatalogSnapshot::capture(
+            connection_id,
+            DatabaseEngine::Sqlite,
+            database,
+            Utc.with_ymd_and_hms(2026, 7, 24, 0, 0, 0).single().unwrap(),
+            CatalogContents {
+                namespaces: vec![dopedb_protocol::catalog::Namespace {
+                    name: marker.to_string(),
+                    comment: None,
+                }],
+                ..CatalogContents::default()
+            },
+        )
+        .unwrap()
     }
 
     #[tokio::test]
@@ -2268,6 +3238,99 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(rows, 2);
+    }
+
+    #[tokio::test]
+    async fn catalog_v2_bootstrap_preserves_rollback_schema_without_claiming_legacy_rows() {
+        let pool = memory_pool().await;
+        sqlx::raw_sql(
+            r#"
+            CREATE TABLE connections (id TEXT PRIMARY KEY);
+            INSERT INTO connections (id) VALUES ('10000000-0000-0000-0000-000000000001');
+            CREATE TABLE schema_cache (
+                connection_id TEXT PRIMARY KEY REFERENCES connections(id) ON DELETE CASCADE,
+                introspected_at TEXT NOT NULL,
+                catalog_json TEXT NOT NULL
+            );
+            INSERT INTO schema_cache (connection_id, introspected_at, catalog_json)
+            VALUES ('10000000-0000-0000-0000-000000000001', '2026-01-01', '{\"legacy\":true}');
+            CREATE TABLE workspace_connection_bindings (
+                connection_id TEXT NOT NULL,
+                account_user_id TEXT NOT NULL,
+                username TEXT NOT NULL DEFAULT '',
+                extra_params TEXT NOT NULL DEFAULT '{}',
+                secret_ref TEXT,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (connection_id, account_user_id)
+            );
+            INSERT INTO workspace_connection_bindings
+                (connection_id, account_user_id, username, updated_at)
+            VALUES
+                ('10000000-0000-0000-0000-000000000001', 'account-a', 'db-user', '2026-01-01');
+            CREATE TABLE schema_cache_v2 (
+                workspace_id TEXT PRIMARY KEY
+            );
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::raw_sql(migrations::SCHEMA)
+            .execute(&pool)
+            .await
+            .unwrap();
+        add_connection_binding_scope_columns(&pool).await.unwrap();
+        add_connection_binding_scope_columns(&pool).await.unwrap();
+        ensure_schema_cache_v2(&pool).await.unwrap();
+        ensure_schema_cache_v2(&pool).await.unwrap();
+        migrate_schema_cache_scopes(&pool).await.unwrap();
+        migrate_schema_cache_scopes(&pool).await.unwrap();
+
+        let generation: String = sqlx::query_scalar(
+            "SELECT value FROM app_settings WHERE key = 'active_scope_generation'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(generation, "0");
+        let binding_revision: i64 = sqlx::query_scalar(
+            "SELECT revision FROM workspace_connection_bindings
+             WHERE connection_id = '10000000-0000-0000-0000-000000000001'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(binding_revision, 1);
+        let legacy_rows: i64 = sqlx::query_scalar("SELECT count(*) FROM schema_cache")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let v2_rows: i64 = sqlx::query_scalar("SELECT count(*) FROM schema_cache_v2")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(legacy_rows, 1);
+        assert_eq!(
+            v2_rows, 0,
+            "legacy cache has no trustworthy workspace or revision provenance"
+        );
+        let v2_columns: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM pragma_table_info('schema_cache_v2')")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(v2_columns, 10);
+        let v2_index: bool = sqlx::query_scalar(
+            "SELECT EXISTS(
+                 SELECT 1 FROM sqlite_master
+                 WHERE type = 'index' AND name = 'idx_schema_cache_v2_connection'
+             )",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(v2_index);
     }
 
     #[tokio::test]
@@ -2490,6 +3553,137 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn membership_revocation_repairs_active_scope_in_the_same_transaction() {
+        let pool = memory_pool().await;
+        sqlx::raw_sql(migrations::SCHEMA)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let store = Store::from_pool_for_test(pool);
+        let workspace_id = Uuid::new_v4();
+        let user_a = workspace_user("10000000-0000-0000-0000-000000000001", "Alpha");
+        let user_b = workspace_user("20000000-0000-0000-0000-000000000002", "Beta");
+        for user in [&user_a, &user_b] {
+            store
+                .sync_account_workspaces(
+                    user,
+                    &[(
+                        workspace_id,
+                        "Still active for Beta".into(),
+                        WorkspaceRole::Analyst,
+                    )],
+                )
+                .await
+                .unwrap();
+        }
+        store
+            .activate_workspace(workspace_id, Some(&user_a.id))
+            .await
+            .unwrap();
+        let before = store.active_resource_scope().await.unwrap();
+
+        // The workspace remains globally active through Beta, but Alpha's exact
+        // membership disappears. The committed scope must already be repaired.
+        store.sync_account_workspaces(&user_a, &[]).await.unwrap();
+        let after = store.active_resource_scope().await.unwrap();
+        assert_eq!(
+            after.workspace_id.to_string(),
+            migrations::PERSONAL_WORKSPACE_ID
+        );
+        assert_eq!(
+            after.selected_account_id.as_deref(),
+            Some(user_a.id.as_str())
+        );
+        assert!(after.generation > before.generation);
+        let workspace_state: String =
+            sqlx::query_scalar("SELECT lifecycle_state FROM workspaces WHERE id = ?1")
+                .bind(workspace_id.to_string())
+                .fetch_one(store.pool())
+                .await
+                .unwrap();
+        assert_eq!(workspace_state, "active");
+    }
+
+    #[tokio::test]
+    async fn startup_repair_fails_closed_for_legacy_invalid_scope_tuples() {
+        let pool = memory_pool().await;
+        sqlx::raw_sql(migrations::SCHEMA)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let workspace_id = Uuid::new_v4();
+        let user = workspace_user("10000000-0000-0000-0000-000000000001", "Known");
+        sqlx::query(
+            "INSERT INTO workspace_accounts
+                (user_id, email, display_name, created_at, updated_at, last_used_at)
+             VALUES (?1, ?2, ?3, ?4, ?4, ?4)",
+        )
+        .bind(&user.id)
+        .bind(&user.email)
+        .bind(&user.display_name)
+        .bind(Utc::now())
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO workspaces
+                (id, name, kind, lifecycle_state, created_at, updated_at)
+             VALUES (?1, 'Revoked team', 'team', 'active', ?2, ?2)",
+        )
+        .bind(workspace_id.to_string())
+        .bind(Utc::now())
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("UPDATE app_settings SET value = ?1 WHERE key = 'active_workspace_id'")
+            .bind(workspace_id.to_string())
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO app_settings (key, value)
+             VALUES ('active_workspace_account_id', ?1)",
+        )
+        .bind(&user.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "UPDATE app_settings SET value = '7'
+             WHERE key = 'active_scope_generation'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        repair_active_scope_on_open(&pool).await.unwrap();
+        repair_active_scope_on_open(&pool).await.unwrap();
+        let store = Store::from_pool_for_test(pool.clone());
+        let repaired = store.active_resource_scope().await.unwrap();
+        assert_eq!(
+            repaired.workspace_id.to_string(),
+            migrations::PERSONAL_WORKSPACE_ID
+        );
+        assert_eq!(
+            repaired.selected_account_id.as_deref(),
+            Some(user.id.as_str())
+        );
+        assert_eq!(repaired.generation, 8);
+
+        sqlx::query(
+            "UPDATE app_settings SET value = 'missing-account'
+             WHERE key = 'active_workspace_account_id'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        repair_active_scope_on_open(&pool).await.unwrap();
+        let repaired = store.active_resource_scope().await.unwrap();
+        assert!(repaired.selected_account_id.is_none());
+        assert_eq!(repaired.generation, 9);
+    }
+
+    #[tokio::test]
     async fn remote_template_sync_preserves_member_local_credential_binding() {
         let pool = memory_pool().await;
         sqlx::raw_sql(migrations::SCHEMA)
@@ -2631,6 +3825,18 @@ mod tests {
                 .await,
             Err(AppError::Blocked { .. })
         ));
+        let pin = store.pin_connection_for_read(id).await.unwrap();
+        assert_eq!(pin.catalog_cache_policy, CatalogCachePolicy::EphemeralOnly);
+        let snapshot = catalog_snapshot(id, ":memory:", 'c');
+        assert_eq!(
+            store.put_catalog_if_current(&pin, &snapshot).await.unwrap(),
+            CacheWriteOutcome::NotPersisted
+        );
+        let v2_rows: i64 = sqlx::query_scalar("SELECT count(*) FROM schema_cache_v2")
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+        assert_eq!(v2_rows, 0);
     }
 
     #[tokio::test]
@@ -2709,19 +3915,23 @@ mod tests {
             .set_schema_cache(connection_id, r#"{"owner":"alpha"}"#)
             .await
             .unwrap();
+        let execution_pin_a = store.pin_connection_for_read(connection_id).await.unwrap();
         store
-            .insert_history(&HistoryEntry {
-                id: Uuid::new_v4(),
-                connection_id,
-                sql: "SELECT 'alpha'".into(),
-                kind: QueryKind::Read,
-                status: "ok".into(),
-                row_count: Some(1),
-                duration_ms: Some(1),
-                error: None,
-                executed_at: Utc::now(),
-                origin: "manual".into(),
-            })
+            .insert_history_if_current(
+                &execution_pin_a,
+                &HistoryEntry {
+                    id: Uuid::new_v4(),
+                    connection_id,
+                    sql: "SELECT 'alpha'".into(),
+                    kind: QueryKind::Read,
+                    status: "ok".into(),
+                    row_count: Some(1),
+                    duration_ms: Some(1),
+                    error: None,
+                    executed_at: Utc::now(),
+                    origin: "manual".into(),
+                },
+            )
             .await
             .unwrap();
         let thread_a = store
@@ -2741,6 +3951,26 @@ mod tests {
             crate::model::WorkspaceConnectionAccess::Read
         );
         assert!(!profile_b.allow_writes);
+        assert!(matches!(
+            store
+                .insert_history_if_current(
+                    &execution_pin_a,
+                    &HistoryEntry {
+                        id: Uuid::new_v4(),
+                        connection_id,
+                        sql: "SELECT 'stale-alpha'".into(),
+                        kind: QueryKind::Read,
+                        status: "error".into(),
+                        row_count: None,
+                        duration_ms: None,
+                        error: Some("connection failed".into()),
+                        executed_at: Utc::now(),
+                        origin: "agent".into(),
+                    },
+                )
+                .await,
+            Err(AppError::Blocked { .. })
+        ));
         assert!(store
             .get_schema_cache(connection_id)
             .await
@@ -2771,6 +4001,418 @@ mod tests {
         );
         assert_eq!(store.list_history(connection_id).await.unwrap().len(), 1);
         assert_eq!(store.list_chat_threads().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn pinned_catalog_cache_rejects_scope_aba_and_keeps_accounts_isolated() {
+        let pool = memory_pool().await;
+        sqlx::raw_sql(migrations::SCHEMA)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let store = Store::from_pool_for_test(pool);
+        let workspace_id = Uuid::new_v4();
+        let connection_id = Uuid::new_v4();
+        let user_a = workspace_user("10000000-0000-0000-0000-000000000001", "Alpha");
+        let user_b = workspace_user("20000000-0000-0000-0000-000000000002", "Beta");
+        for user in [&user_a, &user_b] {
+            store
+                .sync_account_workspaces(
+                    user,
+                    &[(workspace_id, "Shared".into(), WorkspaceRole::Analyst)],
+                )
+                .await
+                .unwrap();
+        }
+        let mut template = sqlite_profile(connection_id, "shared");
+        template.workspace_access = crate::model::WorkspaceConnectionAccess::Read;
+        template.credential_mode = crate::model::WorkspaceCredentialMode::MemberLocal;
+        for user in [&user_a, &user_b] {
+            store
+                .sync_remote_connections(workspace_id, &user.id, &[(template.clone(), 1)])
+                .await
+                .unwrap();
+            store
+                .bind_connection_credentials(
+                    connection_id,
+                    &user.id,
+                    &format!("{}-db-user", user.display_name.to_lowercase()),
+                    &HashMap::new(),
+                    Some(&Uuid::new_v4().to_string()),
+                )
+                .await
+                .unwrap();
+        }
+
+        store
+            .activate_workspace(workspace_id, Some(&user_a.id))
+            .await
+            .unwrap();
+        let pin_a = store.pin_connection_for_read(connection_id).await.unwrap();
+        assert_eq!(pin_a.scope.workspace_id, workspace_id);
+        assert_eq!(pin_a.scope.account_scope.storage_key(), user_a.id);
+        assert_eq!(pin_a.profile.username, "alpha-db-user");
+        assert!(pin_a.requires_remote_rbac);
+        assert_eq!(pin_a.catalog_cache_policy, CatalogCachePolicy::Persistent);
+        assert!(store.is_pin_current(&pin_a).await.unwrap());
+
+        // V1 rows have no revision provenance and must never be promoted/read by V2.
+        sqlx::query(
+            "INSERT INTO schema_cache
+                (connection_id, account_scope, introspected_at, catalog_json)
+             VALUES (?1, ?2, '2026-01-01', '{\"legacy\":true}')",
+        )
+        .bind(connection_id.to_string())
+        .bind(&user_a.id)
+        .execute(store.pool())
+        .await
+        .unwrap();
+        assert!(store
+            .get_catalog_if_current(&pin_a)
+            .await
+            .unwrap()
+            .is_none());
+
+        let snapshot = catalog_snapshot(connection_id, ":memory:", 'a');
+        assert_eq!(
+            store
+                .put_catalog_if_current(&pin_a, &snapshot)
+                .await
+                .unwrap(),
+            CacheWriteOutcome::Stored
+        );
+        assert_eq!(
+            store.get_catalog_if_current(&pin_a).await.unwrap().unwrap(),
+            snapshot
+        );
+        let legacy_rows: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM schema_cache
+             WHERE connection_id = ?1 AND account_scope = ?2",
+        )
+        .bind(connection_id.to_string())
+        .bind(&user_a.id)
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+        assert_eq!(legacy_rows, 0);
+
+        store
+            .activate_workspace(workspace_id, Some(&user_b.id))
+            .await
+            .unwrap();
+        assert!(!store.is_pin_current(&pin_a).await.unwrap());
+        assert_eq!(
+            store
+                .put_catalog_if_current(&pin_a, &snapshot)
+                .await
+                .unwrap(),
+            CacheWriteOutcome::Stale
+        );
+        let pin_b = store.pin_connection_for_read(connection_id).await.unwrap();
+        assert_eq!(pin_b.scope.account_scope.storage_key(), user_b.id);
+        assert_eq!(pin_b.profile.username, "beta-db-user");
+        assert!(store
+            .get_catalog_if_current(&pin_b)
+            .await
+            .unwrap()
+            .is_none());
+
+        // Returning to A does not revive an in-flight A pin: generation defeats ABA.
+        store
+            .activate_workspace(workspace_id, Some(&user_a.id))
+            .await
+            .unwrap();
+        let repinned_a = store.pin_connection_for_read(connection_id).await.unwrap();
+        assert!(repinned_a.scope.generation > pin_a.scope.generation);
+        assert!(!store.is_pin_current(&pin_a).await.unwrap());
+        assert_eq!(
+            store
+                .get_catalog_if_current(&repinned_a)
+                .await
+                .unwrap()
+                .unwrap(),
+            snapshot,
+            "a current pin may reuse the same account/revision cache after re-selection"
+        );
+
+        // A rollback binary can only write V1. Its row acts as a freshness marker:
+        // after re-upgrade, the new runtime must miss instead of reviving older V2.
+        sqlx::query(
+            "INSERT INTO schema_cache
+                (connection_id, account_scope, introspected_at, catalog_json)
+             VALUES (?1, ?2, '2026-07-24T00:01:00Z', '{\"rollback\":true}')
+             ON CONFLICT(connection_id, account_scope) DO UPDATE SET
+                introspected_at = excluded.introspected_at,
+                catalog_json = excluded.catalog_json",
+        )
+        .bind(connection_id.to_string())
+        .bind(&user_a.id)
+        .execute(store.pool())
+        .await
+        .unwrap();
+        assert!(store
+            .get_catalog_if_current(&repinned_a)
+            .await
+            .unwrap()
+            .is_none());
+        let refreshed = catalog_snapshot(connection_id, ":memory:", 'd');
+        assert_eq!(
+            store
+                .put_catalog_if_current(&repinned_a, &refreshed)
+                .await
+                .unwrap(),
+            CacheWriteOutcome::Stored
+        );
+        assert_eq!(
+            store
+                .get_catalog_if_current(&repinned_a)
+                .await
+                .unwrap()
+                .unwrap(),
+            refreshed
+        );
+
+        sqlx::query(
+            "UPDATE schema_cache_v2 SET captured_at = 'not-a-time'
+             WHERE workspace_id = ?1 AND account_scope = ?2 AND connection_id = ?3",
+        )
+        .bind(workspace_id.to_string())
+        .bind(&user_a.id)
+        .bind(connection_id.to_string())
+        .execute(store.pool())
+        .await
+        .unwrap();
+        assert!(store
+            .get_catalog_if_current(&repinned_a)
+            .await
+            .unwrap()
+            .is_none());
+        store
+            .put_catalog_if_current(&repinned_a, &refreshed)
+            .await
+            .unwrap();
+
+        sqlx::query(
+            "UPDATE schema_cache_v2 SET catalog_json = '{'
+             WHERE workspace_id = ?1 AND account_scope = ?2 AND connection_id = ?3",
+        )
+        .bind(workspace_id.to_string())
+        .bind(&user_a.id)
+        .bind(connection_id.to_string())
+        .execute(store.pool())
+        .await
+        .unwrap();
+        assert!(store
+            .get_catalog_if_current(&repinned_a)
+            .await
+            .unwrap()
+            .is_none());
+        store
+            .put_catalog_if_current(&repinned_a, &refreshed)
+            .await
+            .unwrap();
+
+        let mut tampered = serde_json::to_value(&refreshed).unwrap();
+        tampered["fingerprint"] = serde_json::Value::String("e".repeat(64));
+        sqlx::query(
+            "UPDATE schema_cache_v2
+             SET fingerprint = ?1, catalog_json = ?2
+             WHERE workspace_id = ?3 AND account_scope = ?4 AND connection_id = ?5",
+        )
+        .bind("e".repeat(64))
+        .bind(serde_json::to_string(&tampered).unwrap())
+        .bind(workspace_id.to_string())
+        .bind(&user_a.id)
+        .bind(connection_id.to_string())
+        .execute(store.pool())
+        .await
+        .unwrap();
+        assert!(store
+            .get_catalog_if_current(&repinned_a)
+            .await
+            .unwrap()
+            .is_none());
+        store
+            .put_catalog_if_current(&repinned_a, &refreshed)
+            .await
+            .unwrap();
+
+        sqlx::query(
+            "UPDATE schema_cache_v2 SET catalog_schema_version = 1
+             WHERE workspace_id = ?1 AND account_scope = ?2 AND connection_id = ?3",
+        )
+        .bind(workspace_id.to_string())
+        .bind(&user_a.id)
+        .bind(connection_id.to_string())
+        .execute(store.pool())
+        .await
+        .unwrap();
+        assert!(store
+            .get_catalog_if_current(&repinned_a)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn pinned_catalog_write_is_stale_after_binding_or_template_revision_changes() {
+        let pool = memory_pool().await;
+        sqlx::raw_sql(migrations::SCHEMA)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let store = Store::from_pool_for_test(pool);
+        let workspace_id = Uuid::new_v4();
+        let connection_id = Uuid::new_v4();
+        let user = workspace_user("10000000-0000-0000-0000-000000000001", "Owner");
+        store
+            .sync_account_workspaces(
+                &user,
+                &[(workspace_id, "Shared".into(), WorkspaceRole::Owner)],
+            )
+            .await
+            .unwrap();
+        let mut template = sqlite_profile(connection_id, "shared");
+        template.workspace_access = crate::model::WorkspaceConnectionAccess::Read;
+        template.credential_mode = crate::model::WorkspaceCredentialMode::MemberLocal;
+        store
+            .sync_remote_connections(workspace_id, &user.id, &[(template.clone(), 1)])
+            .await
+            .unwrap();
+        let first_ref = Uuid::new_v4().to_string();
+        store
+            .bind_connection_credentials(
+                connection_id,
+                &user.id,
+                "first-user",
+                &HashMap::new(),
+                Some(&first_ref),
+            )
+            .await
+            .unwrap();
+        store
+            .activate_workspace(workspace_id, Some(&user.id))
+            .await
+            .unwrap();
+        let binding_pin = store.pin_connection_for_read(connection_id).await.unwrap();
+        let snapshot = catalog_snapshot(connection_id, ":memory:", 'b');
+
+        let second_ref = Uuid::new_v4().to_string();
+        store
+            .bind_connection_credentials(
+                connection_id,
+                &user.id,
+                "second-user",
+                &HashMap::new(),
+                Some(&second_ref),
+            )
+            .await
+            .unwrap();
+        assert!(!store.is_pin_current(&binding_pin).await.unwrap());
+        assert_eq!(
+            store
+                .put_catalog_if_current(&binding_pin, &snapshot)
+                .await
+                .unwrap(),
+            CacheWriteOutcome::Stale
+        );
+
+        let template_pin = store.pin_connection_for_read(connection_id).await.unwrap();
+        template.name = "shared revision two".into();
+        store
+            .sync_remote_connections(workspace_id, &user.id, &[(template, 2)])
+            .await
+            .unwrap();
+        assert!(!store.is_pin_current(&template_pin).await.unwrap());
+        assert_eq!(
+            store
+                .put_catalog_if_current(&template_pin, &snapshot)
+                .await
+                .unwrap(),
+            CacheWriteOutcome::Stale
+        );
+    }
+
+    #[tokio::test]
+    async fn binding_revision_changes_only_when_material_or_authority_changes() {
+        let pool = memory_pool().await;
+        sqlx::raw_sql(migrations::SCHEMA)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let store = Store::from_pool_for_test(pool);
+        let workspace_id = Uuid::new_v4();
+        let connection_id = Uuid::new_v4();
+        let user = workspace_user("10000000-0000-0000-0000-000000000001", "Owner");
+        store
+            .sync_account_workspaces(
+                &user,
+                &[(workspace_id, "Shared".into(), WorkspaceRole::Owner)],
+            )
+            .await
+            .unwrap();
+        let mut template = sqlite_profile(connection_id, "shared");
+        template.workspace_access = crate::model::WorkspaceConnectionAccess::Read;
+        template.credential_mode = crate::model::WorkspaceCredentialMode::MemberLocal;
+        store
+            .sync_remote_connections(workspace_id, &user.id, &[(template.clone(), 1)])
+            .await
+            .unwrap();
+        store
+            .sync_remote_connections(workspace_id, &user.id, &[(template.clone(), 1)])
+            .await
+            .unwrap();
+        let initial: i64 = sqlx::query_scalar(
+            "SELECT revision FROM workspace_connection_bindings
+             WHERE connection_id = ?1 AND account_user_id = ?2",
+        )
+        .bind(connection_id.to_string())
+        .bind(&user.id)
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+        assert_eq!(initial, 1);
+
+        let secret_ref = Uuid::new_v4().to_string();
+        for _ in 0..2 {
+            store
+                .bind_connection_credentials(
+                    connection_id,
+                    &user.id,
+                    "db-user",
+                    &HashMap::new(),
+                    Some(&secret_ref),
+                )
+                .await
+                .unwrap();
+        }
+        let material_revision: i64 = sqlx::query_scalar(
+            "SELECT revision FROM workspace_connection_bindings
+             WHERE connection_id = ?1 AND account_user_id = ?2",
+        )
+        .bind(connection_id.to_string())
+        .bind(&user.id)
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+        assert_eq!(material_revision, 2);
+
+        template.workspace_access = crate::model::WorkspaceConnectionAccess::Write;
+        template.allow_writes = true;
+        store
+            .sync_remote_connections(workspace_id, &user.id, &[(template, 2)])
+            .await
+            .unwrap();
+        let authority_revision: i64 = sqlx::query_scalar(
+            "SELECT revision FROM workspace_connection_bindings
+             WHERE connection_id = ?1 AND account_user_id = ?2",
+        )
+        .bind(connection_id.to_string())
+        .bind(&user.id)
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+        assert_eq!(authority_revision, 3);
     }
 
     #[tokio::test]
@@ -2823,6 +4465,62 @@ mod tests {
             store.get_connection(connection_id).await.unwrap().name,
             "alpha-local"
         );
+    }
+
+    #[tokio::test]
+    async fn concurrent_local_updates_advance_distinct_connection_revisions() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("revision-race.db");
+        let options = SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(true)
+            .foreign_keys(true)
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+            .busy_timeout(Duration::from_secs(5));
+        let pool = SqlitePoolOptions::new()
+            .max_connections(4)
+            .connect_with(options)
+            .await
+            .unwrap();
+        sqlx::raw_sql(migrations::SCHEMA)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let store = Store::from_pool_for_test(pool);
+        let connection_id = Uuid::new_v4();
+        let initial = sqlite_profile(connection_id, "initial");
+        store.upsert_connection(&initial).await.unwrap();
+        let original_pin = store.pin_connection_for_read(connection_id).await.unwrap();
+        assert_eq!(original_pin.connection_revision, 1);
+
+        let mut alpha = initial.clone();
+        alpha.name = "alpha".into();
+        let mut beta = initial;
+        beta.name = "beta".into();
+        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(3));
+        let first_store = store.clone();
+        let first_barrier = barrier.clone();
+        let first = tokio::spawn(async move {
+            first_barrier.wait().await;
+            first_store.upsert_connection(&alpha).await
+        });
+        let second_store = store.clone();
+        let second_barrier = barrier.clone();
+        let second = tokio::spawn(async move {
+            second_barrier.wait().await;
+            second_store.upsert_connection(&beta).await
+        });
+        barrier.wait().await;
+        first.await.unwrap().unwrap();
+        second.await.unwrap().unwrap();
+
+        let revision: i64 = sqlx::query_scalar("SELECT revision FROM connections WHERE id = ?1")
+            .bind(connection_id.to_string())
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+        assert_eq!(revision, 3);
+        assert!(!store.is_pin_current(&original_pin).await.unwrap());
     }
 
     // The OLD schema cascades; after migration, deleting a connection must NOT erase
@@ -3064,7 +4762,11 @@ mod tests {
             executed_at: Utc::now(),
             origin: "agent".into(),
         };
-        store.insert_history(&history).await.unwrap();
+        let history_pin = store.pin_connection_for_read(connection_id).await.unwrap();
+        store
+            .insert_history_if_current(&history_pin, &history)
+            .await
+            .unwrap();
         assert_eq!(store.get_history(history.id).await.unwrap().id, history.id);
 
         sqlx::query(

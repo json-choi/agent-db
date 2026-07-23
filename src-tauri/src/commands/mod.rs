@@ -15,7 +15,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::audit::{self, RecordArgs};
-use crate::connection::{self, DbPool, Live};
+use crate::connection::{self, ConnectionAccess, ConnectionLease, DbPool};
 use crate::error::{AppError, AppResult};
 use crate::executor;
 use crate::introspect;
@@ -29,6 +29,7 @@ use crate::model::{
 use crate::monitoring;
 use crate::safety::{classify, decide, preview, GateDecision, PoolRef};
 use crate::state::AppState;
+use crate::store::PinnedConnection;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -42,50 +43,18 @@ fn pool_ref(db: &DbPool) -> PoolRef<'_> {
         DbPool::Sqlite(p) => PoolRef::Sqlite(p),
     }
 }
-/// Get a live connection for `id`, opening (and caching) one on first use.
-///
-/// Never holds the connections lock across an `.await`: it either clones an existing
-/// handle out under the lock, or opens a fresh one and inserts the clone afterwards.
-async fn get_live(state: &AppState, id: Uuid) -> AppResult<Live> {
-    // Validate the active workspace before consulting the process-wide pool cache.
-    // This closes the switch boundary even if a command races with cache eviction.
-    let profile = state.store.get_connection(id).await?;
-    if !profile.workspace_access.can_read() {
-        return Err(AppError::Blocked {
-            reason: "your workspace role can view this template but cannot query the database"
-                .into(),
-        });
-    }
-    let authorization = connection::authorize_profile(&state.store, &profile, false).await?;
-    if let Some(existing) = state.connections.lock().unwrap().get(&id) {
-        return Ok(existing.clone());
-    }
-    let opened = connection::connect_authorized(&profile, &authorization).await?;
-    Ok(connection::cache_opened(&state.connections, id, opened))
+/// Acquire a manager-owned read lease pinned to the active account/workspace scope.
+/// The manager performs online RBAC checks and single-flight cache opening.
+async fn get_live(state: &AppState, id: Uuid) -> AppResult<ConnectionLease> {
+    get_live_with_access(state, id, ConnectionAccess::Read).await
 }
 
-async fn authorize_shared_connection(
+async fn get_live_with_access(
     state: &AppState,
-    profile: &ConnectionProfile,
-    write: bool,
-) -> AppResult<()> {
-    connection::authorize_profile(&state.store, profile, write)
-        .await
-        .map(|_| ())
-}
-
-/// Snapshot an existing credential only when a rollback may need to restore it.
-/// A dangling reference is treated as an empty slot, while an OS credential-store
-/// access failure must stop the mutation instead of being mistaken for "not found".
-fn secret_snapshot(id: Uuid, referenced: bool) -> AppResult<Option<Zeroizing<String>>> {
-    if !referenced {
-        return Ok(None);
-    }
-    match connection::fetch_secret(&id) {
-        Ok(secret) => Ok(Some(Zeroizing::new(secret))),
-        Err(AppError::NotFound(_)) => Ok(None),
-        Err(error) => Err(error),
-    }
+    id: Uuid,
+    access: ConnectionAccess,
+) -> AppResult<ConnectionLease> {
+    state.connections.acquire(id, access).await
 }
 
 fn delete_secret_best_effort(id: Uuid, action: &'static str) {
@@ -124,30 +93,13 @@ fn validate_schema_group_engine(
     Ok(())
 }
 
-/// Best-effort resolve the introspected catalog: schema cache first, live DB otherwise.
-async fn load_catalog(state: &AppState, id: Uuid) -> AppResult<introspect::Catalog> {
-    if let Some(json) = state.store.get_schema_cache(id).await? {
-        if let Ok(cat) = serde_json::from_str::<introspect::Catalog>(&json) {
-            return Ok(cat);
-        }
-    }
-    let live = get_live(state, id).await?;
-    let catalog = introspect::introspect(&live).await?;
-    let _ = state
-        .store
-        .set_schema_cache(id, &serde_json::to_string(&catalog)?)
-        .await;
-    Ok(catalog)
-}
-
 /// Append an audit record (always) and a query-history row for one run/attempt.
 /// Best-effort outcome logging: failures never mask the actual command result, but
 /// they are logged (never silently dropped) so a dropped compliance row is visible.
 #[allow(clippy::too_many_arguments)]
 async fn record_run(
     state: &AppState,
-    id: Uuid,
-    engine: Engine,
+    pin: &PinnedConnection,
     sql: &str,
     kind: QueryKind,
     action: &str,
@@ -157,6 +109,8 @@ async fn record_run(
     error: Option<String>,
     origin: &str,
 ) {
+    let id = pin.connection_id;
+    let engine = pin.profile.engine;
     if let Err(e) = audit::record(
         &state.store,
         RecordArgs {
@@ -177,18 +131,21 @@ async fn record_run(
     }
     if let Err(e) = state
         .store
-        .insert_history(&HistoryEntry {
-            id: Uuid::new_v4(),
-            connection_id: id,
-            sql: sql.to_string(),
-            kind,
-            status: status.to_string(),
-            row_count,
-            duration_ms,
-            error,
-            executed_at: Utc::now(),
-            origin: origin.to_string(),
-        })
+        .insert_history_if_current(
+            pin,
+            &HistoryEntry {
+                id: Uuid::new_v4(),
+                connection_id: id,
+                sql: sql.to_string(),
+                kind,
+                status: status.to_string(),
+                row_count,
+                duration_ms,
+                error,
+                executed_at: Utc::now(),
+                origin: origin.to_string(),
+            },
+        )
         .await
     {
         tracing::error!("history insert failed for connection {id}: {e}");
@@ -240,7 +197,10 @@ pub async fn refresh_workspace_auth_state(
             if let Err(error) = sync_account_memberships(&state, &user).await {
                 tracing::warn!(%error, "legacy workspace membership sync deferred");
             }
-            state.store.activate_workspace_account(&user.id).await?;
+            state
+                .connections
+                .activate_workspace_account(&user.id)
+                .await?;
         }
     }
 
@@ -253,8 +213,7 @@ pub async fn refresh_workspace_auth_state(
                 }
             }
             Ok(None) => {
-                state.store.remove_workspace_account(&user_id).await?;
-                state.connections.lock().unwrap().clear();
+                state.connections.remove_workspace_account(&user_id).await?;
                 ensure_active_workspace_account(&state).await?;
             }
             Err(error) => {
@@ -280,9 +239,10 @@ pub async fn workspace_sign_out(
             .await?
             .ok_or_else(|| AppError::Config("no workspace account is signed in".into()))?,
     };
+    state.connections.remove_workspace_account(&user_id).await?;
+    // Pool retirement releases managed provider credentials while the Better Auth
+    // token is still available; session revocation and local token deletion follow.
     crate::workspace_auth::sign_out(&user_id).await?;
-    state.store.remove_workspace_account(&user_id).await?;
-    state.connections.lock().unwrap().clear();
     workspace_auth_state_from_store(&state).await
 }
 
@@ -291,18 +251,17 @@ pub async fn workspace_sign_out_all(state: State<'_, AppState>) -> AppResult<Wor
     let accounts = state.store.workspace_accounts().await?;
     let mut first_error = None;
     for account in accounts {
-        match crate::workspace_auth::sign_out(&account.user.id).await {
-            Ok(()) => {
-                if let Err(error) = state.store.remove_workspace_account(&account.user.id).await {
-                    first_error.get_or_insert(error);
-                }
-            }
-            Err(error) => {
-                first_error.get_or_insert(error);
-            }
+        if let Err(error) = state
+            .connections
+            .remove_workspace_account(&account.user.id)
+            .await
+        {
+            first_error.get_or_insert(error);
+        }
+        if let Err(error) = crate::workspace_auth::sign_out(&account.user.id).await {
+            first_error.get_or_insert(error);
         }
     }
-    state.connections.lock().unwrap().clear();
     if let Some(error) = first_error {
         return Err(error);
     }
@@ -331,8 +290,10 @@ pub async fn poll_workspace_login(
             // encountered a transient control-plane or local-cache error.
             tracing::warn!(%error, "workspace membership sync deferred after sign-in");
         }
-        state.store.activate_workspace_account(&user.id).await?;
-        state.connections.lock().unwrap().clear();
+        state
+            .connections
+            .activate_workspace_account(&user.id)
+            .await?;
     }
     Ok(result)
 }
@@ -368,10 +329,13 @@ async fn ensure_active_workspace_account(state: &AppState) -> AppResult<()> {
         return Ok(());
     }
     if let Some(stale_id) = active_account_id {
-        state.store.remove_workspace_account(&stale_id).await?;
+        state
+            .connections
+            .remove_workspace_account(&stale_id)
+            .await?;
     } else if let Some(account) = accounts.first() {
         state
-            .store
+            .connections
             .activate_workspace_account(&account.user.id)
             .await?;
     }
@@ -382,8 +346,7 @@ async fn validated_workspace_user(state: &AppState, user_id: &str) -> AppResult<
     match crate::workspace_auth::auth_user(user_id).await? {
         Some(user) => Ok(user),
         None => {
-            state.store.remove_workspace_account(user_id).await?;
-            state.connections.lock().unwrap().clear();
+            state.connections.remove_workspace_account(user_id).await?;
             ensure_active_workspace_account(state).await?;
             Err(AppError::Network(
                 "workspace session is no longer active".into(),
@@ -400,7 +363,7 @@ async fn sync_account_memberships(state: &AppState, user: &WorkspaceAuthUser) ->
         .map(|workspace| (workspace.id, workspace.name, workspace.role))
         .collect::<Vec<_>>();
     state
-        .store
+        .connections
         .sync_account_workspaces(user, &workspaces)
         .await?;
     let active = state.store.active_workspace().await?;
@@ -420,7 +383,7 @@ async fn sync_workspace_connections(
     match crate::workspace_auth::remote_connections(account_user_id, workspace_id).await {
         Ok(Some(connections)) => {
             let removed_credential_ids = state
-                .store
+                .connections
                 .sync_remote_connections(workspace_id, account_user_id, &connections)
                 .await?;
             for credential_id in removed_credential_ids {
@@ -457,16 +420,14 @@ pub async fn refresh_workspace_memberships(
     state: State<'_, AppState>,
 ) -> AppResult<Vec<Workspace>> {
     let accounts = state.store.workspace_accounts().await?;
-    let mut removed_account = false;
     for account in accounts {
         match crate::workspace_auth::auth_user(&account.user.id).await {
             Ok(Some(user)) => sync_account_memberships(&state, &user).await?,
             Ok(None) => {
                 state
-                    .store
+                    .connections
                     .remove_workspace_account(&account.user.id)
                     .await?;
-                removed_account = true;
             }
             Err(error) => tracing::warn!(
                 user_id = %account.user.id,
@@ -476,9 +437,6 @@ pub async fn refresh_workspace_memberships(
         }
     }
     ensure_active_workspace_account(&state).await?;
-    if removed_account {
-        state.connections.lock().unwrap().clear();
-    }
     state.store.list_workspaces().await
 }
 
@@ -508,12 +466,9 @@ pub async fn set_active_workspace(
         sync_account_memberships(&state, &user).await?;
     }
     let workspace = state
-        .store
+        .connections
         .activate_workspace(id, account_user_id.as_deref())
         .await?;
-    // The active resource scope changed as soon as the setting was committed. Clear
-    // process-wide handles before any network or local synchronization can fail.
-    state.connections.lock().unwrap().clear();
     if workspace.kind == WorkspaceKind::Team {
         let account_user_id = account_user_id.ok_or_else(|| {
             AppError::Config("team workspace selection requires an account".into())
@@ -533,8 +488,10 @@ pub async fn set_active_workspace_account(
 ) -> AppResult<Workspace> {
     let user = validated_workspace_user(&state, &user_id).await?;
     sync_account_memberships(&state, &user).await?;
-    let workspace = state.store.activate_workspace_account(&user_id).await?;
-    state.connections.lock().unwrap().clear();
+    let workspace = state
+        .connections
+        .activate_workspace_account(&user_id)
+        .await?;
     if workspace.kind == WorkspaceKind::Team {
         if let Err(error) = sync_workspace_connections(&state, &user_id, workspace.id).await {
             tracing::warn!(workspace_id = %workspace.id, %error, "workspace connection sync deferred after account switch");
@@ -623,7 +580,7 @@ pub async fn copy_connection_to_workspace(
     let credential_ref = credential_id.map(|id| id.to_string());
     let local_result = async {
         let removed_credential_ids = state
-            .store
+            .connections
             .sync_remote_connections(workspace_id, &account.user.id, &remote)
             .await?;
         for credential_id in removed_credential_ids {
@@ -697,7 +654,11 @@ pub async fn bind_workspace_connection_credentials(
         ));
     }
     let password = Zeroizing::new(password);
-    let profile = state.store.get_connection(id).await?;
+    let mutation = state
+        .connections
+        .begin_connection_mutation(id, ConnectionAccess::Read)
+        .await?;
+    let profile = mutation.pin().profile.clone();
     if profile.workspace_access == WorkspaceConnectionAccess::Local {
         return Err(AppError::Config(
             "connection is not a shared workspace template".into(),
@@ -713,20 +674,21 @@ pub async fn bind_workspace_connection_credentials(
             reason: "your workspace role cannot execute this connection".into(),
         });
     }
-    authorize_shared_connection(&state, &profile, false).await?;
-    let account_user_id = state
-        .store
-        .active_workspace_account_id()
-        .await?
+    let account_user_id = mutation
+        .pin()
+        .scope
+        .selected_account_id
+        .clone()
         .ok_or_else(|| AppError::Config("no active workspace account".into()))?;
-    let credential_id = profile
+    let previous_credential_id = profile
         .secret_ref
         .as_deref()
         .map(Uuid::parse_str)
         .transpose()
-        .map_err(|_| AppError::Config("connection secret reference is invalid".into()))?
-        .unwrap_or_else(Uuid::new_v4);
-    let previous = secret_snapshot(credential_id, profile.secret_ref.is_some())?;
+        .map_err(|_| AppError::Config("connection secret reference is invalid".into()))?;
+    // Copy-on-write prevents a password-only rotation from mutating credential
+    // material behind an unchanged binding revision.
+    let credential_id = Uuid::new_v4();
     connection::store_secret(&credential_id, password.as_str())?;
     let credential_ref = credential_id.to_string();
     match state
@@ -741,21 +703,17 @@ pub async fn bind_workspace_connection_credentials(
         .await
     {
         Ok(profile) => {
-            state.connections.lock().unwrap().remove(&id);
+            mutation.retire_connection(id).await;
+            if let Some(previous_credential_id) = previous_credential_id {
+                delete_secret_best_effort(
+                    previous_credential_id,
+                    "replace_workspace_connection_credentials",
+                );
+            }
             Ok(profile)
         }
         Err(error) => {
-            if let Some(secret) = previous.as_deref() {
-                if let Err(rollback_error) = connection::store_secret(&credential_id, secret) {
-                    tracing::error!(
-                        credential_id = %credential_id,
-                        %rollback_error,
-                        "credential rollback failed"
-                    );
-                }
-            } else {
-                delete_secret_best_effort(credential_id, "bind_connection_credentials");
-            }
+            delete_secret_best_effort(credential_id, "bind_connection_credentials");
             Err(error)
         }
     }
@@ -794,6 +752,7 @@ pub async fn upsert_connection(
     profile.schema_group = normalize_schema_group(profile.schema_group);
     // Reject stale or incompatible explicit driver choices before persisting the profile.
     crate::driver::validate(&profile)?;
+    let mutation = state.connections.begin_scope_mutation().await;
     // Scope validation precedes credential-store writes so a known UUID from another
     // workspace cannot replace that resource's member-local secret as a side effect.
     state
@@ -802,6 +761,13 @@ pub async fn upsert_connection(
         .await?;
     let connections = state.store.list_connections().await?;
     validate_schema_group_engine(&profile, &connections)?;
+    let existing_secret_id = connections
+        .iter()
+        .find(|connection| connection.id == profile.id)
+        .and_then(|connection| connection.secret_ref.as_deref())
+        .map(Uuid::parse_str)
+        .transpose()
+        .map_err(|_| AppError::Config("stored connection secret reference is invalid".into()))?;
     let password = password
         .filter(|password| !password.is_empty())
         .map(Zeroizing::new);
@@ -813,54 +779,32 @@ pub async fn upsert_connection(
             "connection credential exceeds the size limit".into(),
         ));
     }
-    // Stash any supplied secret in the OS credential store and point the profile at it.
-    // If SQLite persistence fails, restore the previous item so no keychain orphan or
-    // credential/profile mismatch survives the command boundary.
-    let previous_secret_id = if password.is_some() {
-        profile
-            .secret_ref
-            .as_deref()
-            .map(Uuid::parse_str)
-            .transpose()
-            .map_err(|_| AppError::Config("connection secret reference is invalid".into()))?
-    } else {
-        None
-    };
-    let previous_secret = secret_snapshot(
-        profile.id,
-        previous_secret_id.is_some_and(|secret_id| secret_id == profile.id),
-    )?;
+    // Never trust an IPC-supplied secret reference. Preserve the stored pointer when
+    // no password is supplied, or write a new credential item and atomically swap the
+    // pointer with the SQLite profile.
+    profile.secret_ref = existing_secret_id.map(|id| id.to_string());
+    let replacement_secret_id = password.as_ref().map(|_| Uuid::new_v4());
     if let Some(password) = password.as_deref() {
-        connection::store_secret(&profile.id, password)?;
-        profile.secret_ref = Some(profile.id.to_string());
+        let credential_id = replacement_secret_id.expect("replacement id accompanies password");
+        connection::store_secret(&credential_id, password)?;
+        profile.secret_ref = Some(credential_id.to_string());
     }
-    // Drop any cached live connection so new credentials/host take effect next use,
-    // and invalidate the cached schema (an edit may repoint the connection at a
-    // different database — otherwise the stale table list would persist).
-    state.connections.lock().unwrap().remove(&profile.id);
-    let _ = state.store.clear_schema_cache(profile.id).await;
     match state.store.upsert_connection(&profile).await {
         Ok(profile) => {
-            if let Some(previous_id) = previous_secret_id.filter(|id| *id != profile.id) {
-                delete_secret_best_effort(previous_id, "replace_connection_credentials");
+            // Only retire the old material after SQLite commits. A failed edit keeps
+            // both the prior pool and catalog valid.
+            let _ = state.store.clear_schema_cache(profile.id).await;
+            mutation.retire_connection(profile.id).await;
+            if replacement_secret_id.is_some() {
+                if let Some(previous_id) = existing_secret_id {
+                    delete_secret_best_effort(previous_id, "replace_connection_credentials");
+                }
             }
             Ok(profile)
         }
         Err(error) => {
-            if password.is_some() {
-                if let Some(previous_secret) = previous_secret.as_deref() {
-                    if let Err(rollback_error) =
-                        connection::store_secret(&profile.id, previous_secret)
-                    {
-                        tracing::error!(
-                            credential_id = %profile.id,
-                            %rollback_error,
-                            "credential rollback failed"
-                        );
-                    }
-                } else {
-                    delete_secret_best_effort(profile.id, "upsert_connection");
-                }
+            if let Some(credential_id) = replacement_secret_id {
+                delete_secret_best_effort(credential_id, "upsert_connection");
             }
             Err(error)
         }
@@ -883,6 +827,7 @@ pub async fn set_connections_schema_group(
         return Ok(Vec::new());
     }
 
+    let mutation = state.connections.begin_scope_mutation().await;
     let normalized = normalize_schema_group(schema_group);
     let mut connections = state.store.list_connections().await?;
     for id in &unique_ids {
@@ -917,20 +862,34 @@ pub async fn set_connections_schema_group(
         .store
         .set_connections_schema_group(&unique_ids, normalized)
         .await?;
+    mutation.retire_connections(&unique_ids).await;
     Ok(updated)
 }
 
 #[tauri::command]
 pub async fn delete_connection(state: State<'_, AppState>, id: Uuid) -> AppResult<()> {
-    let profile = state.store.get_connection(id).await?;
+    let mutation = state
+        .connections
+        .begin_connection_mutation(id, ConnectionAccess::Read)
+        .await?;
+    let profile = mutation.pin().profile.clone();
     if profile.workspace_access != WorkspaceConnectionAccess::Local {
         return Err(AppError::Blocked {
             reason: "shared connections can only be removed by a workspace administrator".into(),
         });
     }
     state.store.delete_connection(id).await?;
-    let _ = connection::delete_secret(&id);
-    state.connections.lock().unwrap().remove(&id);
+    if let Some(secret_ref) = profile.secret_ref.as_deref() {
+        match Uuid::parse_str(secret_ref) {
+            Ok(credential_id) => {
+                delete_secret_best_effort(credential_id, "delete_connection");
+            }
+            Err(error) => {
+                tracing::warn!(connection_id = %id, %error, "ignored invalid credential reference while deleting connection");
+            }
+        }
+    }
+    mutation.retire_connection(id).await;
     Ok(())
 }
 
@@ -942,11 +901,11 @@ pub async fn test_connection(state: State<'_, AppState>, id: Uuid) -> AppResult<
             reason: "your workspace role cannot test this shared connection".into(),
         });
     }
-    let authorization = connection::authorize_profile(&state.store, &profile, false).await?;
-    connection::connect_authorized(&profile, &authorization)
+    state
+        .connections
+        .pin(id, ConnectionAccess::Read)
         .await?
-        .live
-        .test()
+        .test_fresh()
         .await
 }
 
@@ -1018,8 +977,12 @@ pub async fn run_dashboard(
     id: Uuid,
     query_id: Option<Uuid>,
 ) -> AppResult<QueryResult> {
+    let operation_scope = state.connections.begin_operation_scope().await;
     let dashboard = state.store.get_dashboard(id).await?;
-    let profile = state.store.get_connection(dashboard.connection_id).await?;
+    let operation_pin = operation_scope
+        .pin_connection(dashboard.connection_id)
+        .await?;
+    let profile = operation_pin.profile.clone();
     let draft = DashboardDraft {
         connection_id: dashboard.connection_id,
         title: dashboard.title.clone(),
@@ -1033,8 +996,7 @@ pub async fn run_dashboard(
             .unwrap_or(QueryKind::Write);
         record_run(
             &state,
-            dashboard.connection_id,
-            profile.engine,
+            &operation_pin,
             &dashboard.sql,
             kind,
             "dashboard:run",
@@ -1049,13 +1011,15 @@ pub async fn run_dashboard(
     }
 
     let settings = state.store.get_safety(dashboard.connection_id).await?;
-    let live = match get_live(&state, dashboard.connection_id).await {
+    let live = match operation_scope
+        .connect(operation_pin.clone(), ConnectionAccess::Read)
+        .await
+    {
         Ok(live) => live,
         Err(e) => {
             record_run(
                 &state,
-                dashboard.connection_id,
-                profile.engine,
+                &operation_pin,
                 &dashboard.sql,
                 QueryKind::Read,
                 "dashboard:run",
@@ -1070,13 +1034,13 @@ pub async fn run_dashboard(
         }
     };
     let max_rows = settings.max_rows.clamp(1, 100_000);
-    let run = crate::safety::run_read_only(pool_ref(live.sql()?.ro()), &dashboard.sql, max_rows);
+    let run =
+        crate::safety::run_read_only(pool_ref(live.live().sql()?.ro()), &dashboard.sql, max_rows);
     match executor::cancel::guard(query_id, executor::cancel::QUERY_TIMEOUT, run).await {
         Ok(result) => {
             record_run(
                 &state,
-                dashboard.connection_id,
-                profile.engine,
+                &operation_pin,
                 &dashboard.sql,
                 QueryKind::Read,
                 "dashboard:run",
@@ -1092,8 +1056,7 @@ pub async fn run_dashboard(
         Err(e) => {
             record_run(
                 &state,
-                dashboard.connection_id,
-                profile.engine,
+                &operation_pin,
                 &dashboard.sql,
                 QueryKind::Read,
                 "dashboard:run",
@@ -1113,7 +1076,13 @@ pub async fn run_dashboard(
 
 #[tauri::command]
 pub async fn get_schema(state: State<'_, AppState>, id: Uuid) -> AppResult<String> {
-    let catalog = load_catalog(&state, id).await?;
+    let catalog = introspect::load_catalog(
+        &state.store,
+        &state.connections,
+        id,
+        introspect::CatalogReadMode::CacheFirst,
+    )
+    .await?;
     Ok(serde_json::to_string(&catalog)?)
 }
 
@@ -1121,13 +1090,13 @@ pub async fn get_schema(state: State<'_, AppState>, id: Uuid) -> AppResult<Strin
 /// when the table list is stale — the cache is otherwise written once and never expires.
 #[tauri::command]
 pub async fn refresh_schema(state: State<'_, AppState>, id: Uuid) -> AppResult<String> {
-    let _ = state.store.clear_schema_cache(id).await;
-    let live = get_live(&state, id).await?;
-    let catalog = introspect::introspect(&live).await?;
-    let _ = state
-        .store
-        .set_schema_cache(id, &serde_json::to_string(&catalog)?)
-        .await;
+    let catalog = introspect::load_catalog(
+        &state.store,
+        &state.connections,
+        id,
+        introspect::CatalogReadMode::Refresh,
+    )
+    .await?;
     Ok(serde_json::to_string(&catalog)?)
 }
 
@@ -1141,6 +1110,14 @@ pub async fn classify_sql(
 ) -> AppResult<Classification> {
     let profile = state.store.get_connection(id).await?;
     classify(&sql, profile.engine)
+}
+
+fn preview_connection_access(kind: QueryKind, execute_preview_enabled: bool) -> ConnectionAccess {
+    if matches!(kind, QueryKind::Write) && execute_preview_enabled {
+        ConnectionAccess::Write
+    } else {
+        ConnectionAccess::Read
+    }
 }
 
 #[tauri::command]
@@ -1163,10 +1140,6 @@ pub async fn preview_sql(
             note: Some("workspace role is read-only — write preview skipped".into()),
         });
     }
-    if needs_write_pool {
-        authorize_shared_connection(&state, &profile, true).await?;
-    }
-
     // A write/DDL preview runs a real execute+rollback (takes row locks, fires
     // triggers/NOTIFY). Never do that on a writes-disabled connection — skip it.
     if needs_write_pool && !settings.allow_writes {
@@ -1182,8 +1155,13 @@ pub async fn preview_sql(
         });
     }
 
-    let live = get_live(&state, id).await?;
-    let live = live.sql()?;
+    let live = get_live_with_access(
+        &state,
+        id,
+        preview_connection_access(classification.kind, settings.explain_preview),
+    )
+    .await?;
+    let live = live.live().sql()?;
 
     // explain_preview off → EXPLAIN-plan only, never execute+rollback. EXPLAIN (no
     // ANALYZE) plans a write without running it, so route the write through the
@@ -1193,7 +1171,7 @@ pub async fn preview_sql(
             kind: QueryKind::Read,
             ..classification
         };
-        return preview(pool_ref(&live.write_pool), &sql, &explain_only, &settings).await;
+        return preview(pool_ref(&live.read_pool), &sql, &explain_only, &settings).await;
     }
 
     // Reads preview via EXPLAIN on the read-only pool; write previews execute + roll
@@ -1219,7 +1197,9 @@ pub async fn run_sql(
     query_id: Option<Uuid>,
     origin: Option<String>,
 ) -> AppResult<ExecOutcome> {
-    let profile = state.store.get_connection(id).await?;
+    let operation_scope = state.connections.begin_operation_scope().await;
+    let operation_pin = operation_scope.pin_connection(id).await?;
+    let profile = operation_pin.profile.clone();
     let settings = state.store.get_safety(id).await?;
     let classification = classify(&sql, profile.engine)?;
     let engine = profile.engine;
@@ -1230,10 +1210,6 @@ pub async fn run_sql(
             reason: "your workspace role grants read-only database access".into(),
         });
     }
-    if is_write {
-        authorize_shared_connection(&state, &profile, true).await?;
-    }
-
     // L4 policy decision (writes off / multi-statement → hard block).
     let decision = decide(&settings, &classification);
     match &decision {
@@ -1241,8 +1217,7 @@ pub async fn run_sql(
             let reason = reason.clone();
             record_run(
                 &state,
-                id,
-                engine,
+                &operation_pin,
                 &sql,
                 classification.kind,
                 "blocked",
@@ -1259,8 +1234,7 @@ pub async fn run_sql(
             let reason = "this statement modifies data and requires explicit approval".to_string();
             record_run(
                 &state,
-                id,
-                engine,
+                &operation_pin,
                 &sql,
                 classification.kind,
                 "blocked",
@@ -1307,16 +1281,43 @@ pub async fn run_sql(
         })?;
     }
 
-    let live = get_live(&state, id).await?;
-    // A document connection can reach here (fail-safe Write + writes enabled);
-    // the attempt row above must still get its closing error record.
-    let live = match live.sql() {
+    let live = match operation_scope
+        .connect(
+            operation_pin.clone(),
+            if is_write {
+                ConnectionAccess::Write
+            } else {
+                ConnectionAccess::Read
+            },
+        )
+        .await
+    {
         Ok(live) => live,
         Err(e) => {
             record_run(
                 &state,
-                id,
-                engine,
+                &operation_pin,
+                &sql,
+                classification.kind,
+                "error",
+                "error",
+                None,
+                None,
+                Some(e.to_string()),
+                &origin,
+            )
+            .await;
+            return Err(e);
+        }
+    };
+    // A document connection can reach here (fail-safe Write + writes enabled);
+    // the attempt row above must still get its closing error record.
+    let live = match live.live().sql() {
+        Ok(live) => live,
+        Err(e) => {
+            record_run(
+                &state,
+                &operation_pin,
                 &sql,
                 classification.kind,
                 "error",
@@ -1356,8 +1357,7 @@ pub async fn run_sql(
             let action = if outcome.committed { "execute" } else { "read" };
             record_run(
                 &state,
-                id,
-                engine,
+                &operation_pin,
                 &sql,
                 classification.kind,
                 action,
@@ -1373,8 +1373,7 @@ pub async fn run_sql(
         Err(e) => {
             record_run(
                 &state,
-                id,
-                engine,
+                &operation_pin,
                 &sql,
                 classification.kind,
                 "error",
@@ -1405,7 +1404,9 @@ pub async fn run_document_query(
     query_id: Option<Uuid>,
     origin: Option<String>,
 ) -> AppResult<DocumentPage> {
-    let profile = state.store.get_connection(id).await?;
+    let operation_scope = state.connections.begin_operation_scope().await;
+    let operation_pin = operation_scope.pin_connection(id).await?;
+    let profile = operation_pin.profile.clone();
     if !profile.engine.is_document() {
         return Err(AppError::Config(
             "document queries are only available on MongoDB connections".into(),
@@ -1413,7 +1414,6 @@ pub async fn run_document_query(
     }
     let settings = state.store.get_safety(id).await?;
     let classification = crate::mongo::query::classify(&query);
-    let engine = profile.engine;
     let origin = origin.unwrap_or_else(|| "manual".into());
     // The audit/history `sql` column carries the serialized typed request.
     let audited = serde_json::to_string(&query)?;
@@ -1438,8 +1438,7 @@ pub async fn run_document_query(
     if let Some(reason) = blocked_reason {
         record_run(
             &state,
-            id,
-            engine,
+            &operation_pin,
             &audited,
             classification.kind,
             "blocked",
@@ -1453,12 +1452,33 @@ pub async fn run_document_query(
         return Err(AppError::Blocked { reason });
     }
 
-    let live = get_live(&state, id).await?;
+    let live = match operation_scope
+        .connect(operation_pin.clone(), ConnectionAccess::Read)
+        .await
+    {
+        Ok(live) => live,
+        Err(e) => {
+            record_run(
+                &state,
+                &operation_pin,
+                &audited,
+                classification.kind,
+                "error",
+                "error",
+                None,
+                None,
+                Some(e.to_string()),
+                &origin,
+            )
+            .await;
+            return Err(e);
+        }
+    };
     let max_rows = settings.max_rows.clamp(1, 100_000);
     // maxTimeMS mirrors the wall-clock guard so a dropped client future cannot
     // leave a runaway server-side operation behind.
     let run = crate::mongo::query::run(
-        live.mongo()?,
+        live.live().mongo()?,
         &query,
         max_rows,
         executor::cancel::QUERY_TIMEOUT,
@@ -1467,8 +1487,7 @@ pub async fn run_document_query(
         Ok(page) => {
             record_run(
                 &state,
-                id,
-                engine,
+                &operation_pin,
                 &audited,
                 QueryKind::Read,
                 "read",
@@ -1484,8 +1503,7 @@ pub async fn run_document_query(
         Err(e) => {
             record_run(
                 &state,
-                id,
-                engine,
+                &operation_pin,
                 &audited,
                 QueryKind::Read,
                 "error",
@@ -1616,7 +1634,9 @@ pub async fn run_script(
 ) -> AppResult<crate::model::ScriptOutcome> {
     use crate::model::{ScriptOutcome, ScriptStatement};
 
-    let profile = state.store.get_connection(id).await?;
+    let operation_scope = state.connections.begin_operation_scope().await;
+    let operation_pin = operation_scope.pin_connection(id).await?;
+    let profile = operation_pin.profile.clone();
     let settings = state.store.get_safety(id).await?;
     let engine = profile.engine;
     let origin = origin.unwrap_or_else(|| "manual".into());
@@ -1641,8 +1661,7 @@ pub async fn run_script(
             let reason = "reads require approval for this connection".to_string();
             record_run(
                 &state,
-                id,
-                engine,
+                &operation_pin,
                 &sql,
                 QueryKind::Read,
                 "blocked",
@@ -1656,8 +1675,29 @@ pub async fn run_script(
             return Err(AppError::Blocked { reason });
         }
 
-        let live = get_live(&state, id).await?;
-        let live = live.sql()?;
+        let live = match operation_scope
+            .connect(operation_pin.clone(), ConnectionAccess::Read)
+            .await
+        {
+            Ok(live) => live,
+            Err(e) => {
+                record_run(
+                    &state,
+                    &operation_pin,
+                    &sql,
+                    QueryKind::Read,
+                    "script:execute",
+                    "error",
+                    None,
+                    None,
+                    Some(e.to_string()),
+                    &origin,
+                )
+                .await;
+                return Err(e);
+            }
+        };
+        let live = live.live().sql()?;
         let mut out: Vec<ScriptStatement> = Vec::with_capacity(statements.len());
         let mut failure: Option<String> = None;
         for stmt in &statements {
@@ -1691,8 +1731,7 @@ pub async fn run_script(
         };
         record_run(
             &state,
-            id,
-            engine,
+            &operation_pin,
             &sql,
             QueryKind::Read,
             "script:execute",
@@ -1715,8 +1754,6 @@ pub async fn run_script(
             reason: "your workspace role grants read-only database access".into(),
         });
     }
-    authorize_shared_connection(&state, &profile, true).await?;
-
     // ── write/DDL path: one transaction, all-or-nothing ───────────────────────
     // Same gates as run_sql: writes must be enabled AND the run explicitly approved.
     if !settings.allow_writes {
@@ -1725,8 +1762,7 @@ pub async fn run_script(
             .to_string();
         record_run(
             &state,
-            id,
-            engine,
+            &operation_pin,
             &sql,
             QueryKind::Write,
             "blocked",
@@ -1743,8 +1779,7 @@ pub async fn run_script(
         let reason = "this script modifies data and requires explicit approval".to_string();
         record_run(
             &state,
-            id,
-            engine,
+            &operation_pin,
             &sql,
             QueryKind::Write,
             "blocked",
@@ -1789,16 +1824,36 @@ pub async fn run_script(
         ))
     })?;
 
-    let live = get_live(&state, id).await?;
-    // Same audit-closure rule as run_sql: a document connection reaching the
-    // write path must not leave a dangling attempt record.
-    let live = match live.sql() {
+    let live = match operation_scope
+        .connect(operation_pin.clone(), ConnectionAccess::Write)
+        .await
+    {
         Ok(live) => live,
         Err(e) => {
             record_run(
                 &state,
-                id,
-                engine,
+                &operation_pin,
+                &sql,
+                script_kind,
+                "script:execute",
+                "error",
+                None,
+                None,
+                Some(e.to_string()),
+                &origin,
+            )
+            .await;
+            return Err(e);
+        }
+    };
+    // Same audit-closure rule as run_sql: a document connection reaching the
+    // write path must not leave a dangling attempt record.
+    let live = match live.live().sql() {
+        Ok(live) => live,
+        Err(e) => {
+            record_run(
+                &state,
+                &operation_pin,
                 &sql,
                 script_kind,
                 "script:execute",
@@ -1822,8 +1877,7 @@ pub async fn run_script(
             Err(e) => {
                 record_run(
                     &state,
-                    id,
-                    engine,
+                    &operation_pin,
                     &sql,
                     script_kind,
                     "script:execute",
@@ -1846,8 +1900,7 @@ pub async fn run_script(
     let first_err = rows.iter().find_map(|s| s.error.clone());
     record_run(
         &state,
-        id,
-        engine,
+        &operation_pin,
         &sql,
         script_kind,
         "script:execute",
@@ -1889,7 +1942,17 @@ pub async fn set_safety(
     if !profile.workspace_access.can_write() {
         settings.allow_writes = false;
     }
-    authorize_shared_connection(&state, &profile, settings.allow_writes).await?;
+    let _authorization = state
+        .connections
+        .pin(
+            id,
+            if settings.allow_writes {
+                ConnectionAccess::Write
+            } else {
+                ConnectionAccess::Read
+            },
+        )
+        .await?;
     settings.max_rows = settings.max_rows.clamp(1, 100_000);
     settings.exec_preview_row_limit = settings.exec_preview_row_limit.clamp(0, 1_000_000);
     state.store.set_safety(id, &settings).await
@@ -1916,7 +1979,7 @@ pub async fn get_monitoring_status(
         });
     }
     let live = get_live(&state, id).await?;
-    monitoring::status(live.sql()?, profile.engine).await
+    monitoring::status(live.live().sql()?, profile.engine).await
 }
 
 /// Grant/revoke one fixed PostgreSQL predefined role for CURRENT_USER. This narrow
@@ -1929,13 +1992,14 @@ pub async fn set_postgres_monitoring(
     enabled: bool,
     approved: bool,
 ) -> AppResult<MonitoringStatus> {
-    let profile = state.store.get_connection(id).await?;
+    let operation_scope = state.connections.begin_operation_scope().await;
+    let operation_pin = operation_scope.pin_connection(id).await?;
+    let profile = operation_pin.profile.clone();
     if !profile.workspace_access.can_write() {
         return Err(AppError::Blocked {
             reason: "your workspace role cannot change database monitoring grants".into(),
         });
     }
-    authorize_shared_connection(&state, &profile, true).await?;
     if !matches!(profile.engine, Engine::Postgres) {
         return Err(AppError::Config(
             "pg_monitor is only available for PostgreSQL connections".into(),
@@ -1949,7 +2013,7 @@ pub async fn set_postgres_monitoring(
     if !approved {
         record_monitoring_change(
             &state,
-            &profile,
+            &operation_pin,
             sql,
             "blocked",
             Some("pg_monitor role changes require explicit confirmation".into()),
@@ -1989,11 +2053,28 @@ pub async fn set_postgres_monitoring(
         ))
     })?;
 
-    let live = get_live(&state, id).await?;
-    if let Err(e) = monitoring::set_postgres_role(live.sql()?, enabled).await {
+    let live = match operation_scope
+        .connect(operation_pin.clone(), ConnectionAccess::Write)
+        .await
+    {
+        Ok(live) => live,
+        Err(e) => {
+            record_monitoring_change(
+                &state,
+                &operation_pin,
+                sql,
+                "error",
+                Some(e.to_string()),
+                Some("local-user"),
+            )
+            .await;
+            return Err(e);
+        }
+    };
+    if let Err(e) = monitoring::set_postgres_role(live.live().sql()?, enabled).await {
         record_monitoring_change(
             &state,
-            &profile,
+            &operation_pin,
             sql,
             "error",
             Some(e.to_string()),
@@ -2002,13 +2083,13 @@ pub async fn set_postgres_monitoring(
         .await;
         return Err(e);
     }
-    record_monitoring_change(&state, &profile, sql, "ok", None, Some("local-user")).await;
-    monitoring::status(live.sql()?, profile.engine).await
+    record_monitoring_change(&state, &operation_pin, sql, "ok", None, Some("local-user")).await;
+    monitoring::status(live.live().sql()?, profile.engine).await
 }
 
 async fn record_monitoring_change(
     state: &AppState,
-    profile: &ConnectionProfile,
+    pin: &PinnedConnection,
     sql: &str,
     status: &str,
     error: Option<String>,
@@ -2024,8 +2105,8 @@ async fn record_monitoring_change(
     if let Err(e) = audit::record(
         &state.store,
         RecordArgs {
-            connection_id: profile.id,
-            engine: profile.engine,
+            connection_id: pin.connection_id,
+            engine: pin.profile.engine,
             agent_prompt: None,
             sql: sql.into(),
             kind: QueryKind::Privilege,
@@ -2041,18 +2122,21 @@ async fn record_monitoring_change(
     }
     if let Err(e) = state
         .store
-        .insert_history(&HistoryEntry {
-            id: Uuid::new_v4(),
-            connection_id: profile.id,
-            sql: sql.into(),
-            kind: QueryKind::Privilege,
-            status: status.into(),
-            row_count: None,
-            duration_ms: None,
-            error,
-            executed_at: Utc::now(),
-            origin: "manual".into(),
-        })
+        .insert_history_if_current(
+            pin,
+            &HistoryEntry {
+                id: Uuid::new_v4(),
+                connection_id: pin.connection_id,
+                sql: sql.into(),
+                kind: QueryKind::Privilege,
+                status: status.into(),
+                row_count: None,
+                duration_ms: None,
+                error,
+                executed_at: Utc::now(),
+                origin: "manual".into(),
+            },
+        )
         .await
     {
         tracing::error!("monitoring history insert failed: {e}");
@@ -2247,6 +2331,7 @@ pub async fn send_chat_turn(
         app,
         state.chat.clone(),
         state.store.clone(),
+        state.connections.clone(),
         state.mcp_token.clone(),
         mcp_url,
         thread_id,
@@ -2270,6 +2355,27 @@ pub async fn pick_file(app: tauri::AppHandle) -> Option<String> {
         .blocking_pick_file()
         .and_then(|path| path.into_path().ok())
         .map(|path| path.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+
+    #[test]
+    fn explain_only_write_preview_never_requests_write_credentials() {
+        assert_eq!(
+            preview_connection_access(QueryKind::Write, false),
+            ConnectionAccess::Read
+        );
+        assert_eq!(
+            preview_connection_access(QueryKind::Write, true),
+            ConnectionAccess::Write
+        );
+        assert_eq!(
+            preview_connection_access(QueryKind::Ddl, true),
+            ConnectionAccess::Read
+        );
+    }
 }
 
 #[cfg(test)]

@@ -11,7 +11,6 @@
 pub mod connect;
 pub mod tools;
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -24,7 +23,7 @@ use rmcp::transport::streamable_http_server::StreamableHttpService;
 use tauri::AppHandle;
 use uuid::Uuid;
 
-use crate::connection::Live;
+use crate::connection::ConnectionManager;
 use crate::state::McpRuntime;
 use crate::store::Store;
 use tools::{DbTools, QueryPlanStore};
@@ -33,7 +32,7 @@ pub(crate) use tools::query_plan_store;
 
 /// Shared live-connection cache — the SAME instance as `AppState.connections`, so a
 /// connection edit/delete evicts the agent's cached pool too.
-pub type SharedConns = Arc<Mutex<HashMap<Uuid, Live>>>;
+pub type SharedConns = ConnectionManager;
 
 /// Fixed loopback port for the Streamable HTTP MCP endpoint.
 pub const MCP_PORT: u16 = 7686;
