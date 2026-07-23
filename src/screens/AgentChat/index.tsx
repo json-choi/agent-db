@@ -19,6 +19,8 @@ import {
   connectionThreads,
   loadProviderStrings,
   saveProviderString,
+  shouldShowOptimisticUser,
+  shouldShowStreamingAssistant,
   useAgentChat,
 } from "../../lib/agentChat";
 import { useAgentFeed, type AgentActivity } from "../../lib/agentFeed";
@@ -320,15 +322,23 @@ export default function AgentChat({
       error: m.error,
     }));
     if (pendingTurn && pendingTurn.threadId === threadId) {
-      list.push({ id: `${pendingTurn.turnId}-user`, role: "user", text: pendingTurn.userText });
-      list.push({
-        id: pendingTurn.turnId,
-        role: "assistant",
-        text: pendingTurn.assistantText,
-        pending: !pendingTurn.done,
-        error: pendingTurn.error,
-        turnStartIso: pendingTurn.turnStartIso,
-      });
+      if (shouldShowOptimisticUser(persisted, pendingTurn)) {
+        list.push({
+          id: pendingTurn.userMessageId,
+          role: "user",
+          text: pendingTurn.userText,
+        });
+      }
+      if (shouldShowStreamingAssistant(persisted, pendingTurn)) {
+        list.push({
+          id: pendingTurn.turnId,
+          role: "assistant",
+          text: pendingTurn.assistantText,
+          pending: !pendingTurn.done,
+          error: pendingTurn.error,
+          turnStartIso: pendingTurn.turnStartIso,
+        });
+      }
     }
     return list;
   }, [persisted, pendingTurn, threadId]);

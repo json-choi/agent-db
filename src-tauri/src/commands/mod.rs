@@ -2204,13 +2204,20 @@ pub async fn delete_chat_thread(state: State<'_, AppState>, thread_id: Uuid) -> 
 /// `agent:chat_event`/`agent:chat_done`; this call itself only resolves once the CLI
 /// process exits, so the frontend should treat its rejection as "failed to even
 /// start" (bad binary, etc.) and rely on `agent:chat_done` for the actual turn outcome.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatTurnMessageIds {
+    turn_id: Uuid,
+    user_message_id: Uuid,
+}
+
 #[tauri::command]
 pub async fn send_chat_turn(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     thread_id: Uuid,
     message: String,
-    turn_id: Uuid,
+    message_ids: ChatTurnMessageIds,
     model: Option<String>,
     effort: Option<String>,
 ) -> AppResult<()> {
@@ -2238,7 +2245,8 @@ pub async fn send_chat_turn(
         mcp_url,
         thread_id,
         message,
-        turn_id,
+        message_ids.turn_id,
+        message_ids.user_message_id,
         model,
         effort,
     )

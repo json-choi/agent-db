@@ -396,13 +396,14 @@ export function sendChatTurn(
   threadId: string,
   message: string,
   turnId: string,
+  userMessageId: string,
   model?: string,
   effort?: string,
 ): Promise<void> {
   return invoke("send_chat_turn", {
     threadId,
     message,
-    turnId,
+    messageIds: { turnId, userMessageId },
     model: model ?? null,
     effort: effort ?? null,
   });

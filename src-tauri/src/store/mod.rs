@@ -1488,15 +1488,18 @@ impl Store {
         Ok(())
     }
 
-    pub async fn insert_chat_message(
+    /// Insert a chat message using the caller's identifier. Agent chat reuses its
+    /// optimistic message UUIDs here so a mid-turn refetch can reconcile each local
+    /// message with the durable row instead of rendering both.
+    pub async fn insert_chat_message_with_id(
         &self,
         thread_id: Uuid,
+        id: Uuid,
         role: &str,
         text: &str,
         error: Option<&str>,
     ) -> AppResult<ChatMessageRecord> {
         self.get_chat_thread(thread_id).await?;
-        let id = Uuid::new_v4();
         let now = Utc::now();
         sqlx::query(
             r#"INSERT INTO agent_chat_messages (id, thread_id, role, text, error, created_at)
@@ -3012,12 +3015,15 @@ mod tests {
         assert_eq!(thread.title, "");
         assert!(thread.cli_session_id.is_none());
 
-        store
-            .insert_chat_message(thread.id, "user", "hello there", None)
+        let optimistic_user_id = Uuid::new_v4();
+        let inserted_user = store
+            .insert_chat_message_with_id(thread.id, optimistic_user_id, "user", "hello there", None)
             .await
             .unwrap();
+        assert_eq!(inserted_user.id, optimistic_user_id);
+        let assistant_turn_id = Uuid::new_v4();
         store
-            .insert_chat_message(thread.id, "assistant", "hi!", None)
+            .insert_chat_message_with_id(thread.id, assistant_turn_id, "assistant", "hi!", None)
             .await
             .unwrap();
 
@@ -3056,7 +3062,9 @@ mod tests {
 
         let messages = store.list_chat_messages(thread.id).await.unwrap();
         assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].id, optimistic_user_id);
         assert_eq!(messages[0].role, "user");
+        assert_eq!(messages[1].id, assistant_turn_id);
         assert_eq!(messages[1].role, "assistant");
 
         let listed = store.list_chat_threads().await.unwrap();
