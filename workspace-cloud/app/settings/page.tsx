@@ -5,6 +5,7 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "../../lib/auth";
 import { db } from "../../lib/db";
+import { acceptPendingWorkspaceInvitations } from "../../lib/pending-invitations";
 import { member } from "../../lib/schema";
 import { Brand } from "../components/Brand";
 import { CreateWorkspaceForm } from "./CreateWorkspaceForm";
@@ -36,6 +37,12 @@ export default async function SettingsPage({
   if (!session) {
     redirect(`/auth/sign-in?returnTo=${encodeURIComponent(settingsPath)}`);
   }
+  await acceptPendingWorkspaceInvitations({
+    api: auth.api,
+    headers: requestHeaders,
+    user: session.user,
+    activeOrganizationId: session.session.activeOrganizationId,
+  });
   const workspaces = await auth.api.listOrganizations({ headers: requestHeaders });
   const roleRows = workspaces.length > 0
     ? await db.select({ organizationId: member.organizationId, role: member.role })

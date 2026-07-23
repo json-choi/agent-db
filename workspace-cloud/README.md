@@ -43,6 +43,9 @@ them through the unpooled URL with `pnpm workspace:migrate` from the repository 
   and assign Viewer (metadata only), Analyst (read-only), Editor (read/write through
   local safety gates), or Admin roles. Resend delivers email when configured, while the
   settings page always exposes a copyable, email-bound invitation link.
+- A signed-in user with a verified Google email automatically accepts every live
+  invitation for that exact email on the next workspace read. Better Auth still
+  performs the recipient, expiry, role, membership-limit, and state-transition checks.
 - Shared database execution uses a fresh server authorization check. Cached desktop role
   data is for presentation and fail-closed prechecks, not the final permission decision.
 - Identity, membership, invitation, and connection API responses are private `no-store`

@@ -8,11 +8,18 @@ import {
   mutationAllowed,
   privateJson,
 } from "../../../../lib/http";
+import { acceptPendingWorkspaceInvitations } from "../../../../lib/pending-invitations";
 import { member } from "../../../../lib/schema";
 
 export async function GET(request: Request) {
   const session = await auth.api.getSession({ headers: request.headers });
   if (!session) return jsonError("Unauthorized", 401);
+  await acceptPendingWorkspaceInvitations({
+    api: auth.api,
+    headers: request.headers,
+    user: session.user,
+    activeOrganizationId: session.session.activeOrganizationId,
+  });
   const workspaces = await auth.api.listOrganizations({ headers: request.headers });
   const roles = workspaces.length > 0
     ? await db.select({ organizationId: member.organizationId, role: member.role })
