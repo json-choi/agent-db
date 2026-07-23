@@ -17,6 +17,7 @@ describe("workspace query lifecycle", () => {
     client.setQueryData(qk.chatThreads(), [{ id: "thread-1" }]);
     client.setQueryData(qk.chatMessages("thread-1"), [{ id: "message-1" }]);
     client.setQueryData(qk.drivers(), [{ id: "bundled" }]);
+    client.setQueryData(qk.mcpPlatforms(), [{ id: "codex", connected: true }]);
 
     await resetWorkspaceResourceQueries(client);
 
@@ -25,5 +26,8 @@ describe("workspace query lifecycle", () => {
     expect(client.getQueryData(qk.chatThreads())).toBeUndefined();
     expect(client.getQueryData(qk.chatMessages("thread-1"))).toBeUndefined();
     expect(client.getQueryData(qk.drivers())).toEqual([{ id: "bundled" }]);
+    expect(client.getQueryData(qk.mcpPlatforms())).toEqual([
+      { id: "codex", connected: true },
+    ]);
   });
 });

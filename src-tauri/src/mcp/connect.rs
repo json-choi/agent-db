@@ -10,13 +10,16 @@
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
+use std::time::Duration;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
 use serde::Serialize;
 use toml_edit::{value, DocumentMut, Item, Table};
+
+const CLAUDE_CODE_PROBE_TIMEOUT: Duration = Duration::from_secs(4);
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -114,10 +117,16 @@ fn claude_desktop_installed() -> bool {
         }
 }
 
-/// `claude mcp get dopedb` exits 0 only when the server is registered. One CLI spawn
-/// (~1s node startup) per detect — acceptable for a settings screen.
-fn claude_code_connected(claude: Option<&PathBuf>) -> bool {
-    claude.is_some_and(|bin| run(bin, &["mcp", "get", "dopedb"]).is_ok())
+/// `claude mcp get dopedb` exits 0 only when the server is registered. Claude's Node
+/// startup can take seconds, so run it asynchronously and cap the probe rather than
+/// blocking Tauri's invoke handler and the window event loop.
+async fn claude_code_connected(claude: Option<&PathBuf>) -> bool {
+    match claude {
+        Some(bin) => run_probe(bin, &["mcp", "get", "dopedb"], CLAUDE_CODE_PROBE_TIMEOUT)
+            .await
+            .is_ok(),
+        None => false,
+    }
 }
 
 /// `codex mcp add` writes a `[mcp_servers.dopedb]` table; a text probe is enough.
@@ -184,14 +193,15 @@ fn codex_desktop_installed() -> bool {
     }
 }
 
-pub fn detect() -> Vec<PlatformInfo> {
+pub async fn detect() -> Vec<PlatformInfo> {
     let claude = which("claude");
+    let claude_connected = claude_code_connected(claude.as_ref()).await;
     vec![
         PlatformInfo {
             id: "claude-code".into(),
             name: "Claude Code".into(),
             installed: claude.is_some(),
-            connected: claude_code_connected(claude.as_ref()),
+            connected: claude_connected,
             method: "http".into(),
             note: "Adds an HTTP server at user scope (run /mcp to see it).".into(),
         },
@@ -243,6 +253,22 @@ pub(crate) fn run(bin: &Path, args: &[&str]) -> Result<String, String> {
         .env("PATH", augmented_path())
         .output()
         .map_err(|e| e.to_string())?;
+    decode_output(out)
+}
+
+async fn run_probe(bin: &Path, args: &[&str], timeout: Duration) -> Result<String, String> {
+    let mut command = quiet_command(bin);
+    command.args(args).env("PATH", augmented_path());
+    let mut command = tokio::process::Command::from(command);
+    command.kill_on_drop(true);
+    let out = tokio::time::timeout(timeout, command.output())
+        .await
+        .map_err(|_| format!("command timed out after {} ms", timeout.as_millis()))?
+        .map_err(|e| e.to_string())?;
+    decode_output(out)
+}
+
+fn decode_output(out: Output) -> Result<String, String> {
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     } else {
@@ -481,6 +507,26 @@ fn connect_claude_desktop(bridge_path: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn async_probe_times_out_without_blocking_for_process_exit() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::Instant;
+
+        let dir = tempfile::tempdir().unwrap();
+        let shim = dir.path().join("slow-probe");
+        std::fs::write(&shim, b"#!/bin/sh\nexec sleep 5\n").unwrap();
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let started = Instant::now();
+        let error = run_probe(&shim, &[], Duration::from_millis(50))
+            .await
+            .unwrap_err();
+
+        assert!(error.contains("timed out"));
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
 
     #[cfg(windows)]
     #[test]

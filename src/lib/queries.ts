@@ -19,6 +19,9 @@ import {
   listDrivers,
   listHistory,
   listWorkspaces,
+  mcpPlatforms,
+  mcpRuntimeStatus,
+  mcpStatus,
   refreshCatalog,
   runDashboard,
   runDocumentQuery,
@@ -37,6 +40,10 @@ const CATALOG_STALE_MS = Infinity;
 // Logs and row data are cheap to re-read. Repainting from cache is instant either way;
 // this only suppresses a redundant refetch when a user flips between two tabs quickly.
 const LOG_STALE_MS = 10_000;
+// Platform detection starts a local CLI probe. Keep one warm app-wide result so opening
+// Settings or SQL never starts another process on the interaction path.
+const MCP_PLATFORM_STALE_MS = 5 * 60_000;
+const MCP_RUNTIME_STALE_MS = 1_000;
 const SCHEMA_LOAD_TIMEOUT_MS = 12_000;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
@@ -98,6 +105,9 @@ export const qk = {
   dashboards: (connectionId: string) => ["dashboards", connectionId] as const,
   dashboardRun: (dashboardId: string) => ["dashboardRun", dashboardId] as const,
   drivers: () => ["drivers"] as const,
+  mcpPlatforms: () => ["mcpPlatforms"] as const,
+  mcpRuntimeStatus: () => ["mcpRuntimeStatus"] as const,
+  mcpStatus: () => ["mcpStatus"] as const,
   chatThreads: () => ["chatThreads"] as const,
   chatMessages: (threadId: string) => ["chatMessages", threadId] as const,
   agentModels: (provider: AgentProvider) => ["agentModels", provider] as const,
@@ -153,6 +163,30 @@ export function driversQuery() {
     queryKey: qk.drivers(),
     staleTime: Infinity,
     queryFn: listDrivers,
+  });
+}
+
+export function mcpPlatformsQuery() {
+  return queryOptions({
+    queryKey: qk.mcpPlatforms(),
+    staleTime: MCP_PLATFORM_STALE_MS,
+    queryFn: mcpPlatforms,
+  });
+}
+
+export function mcpRuntimeStatusQuery() {
+  return queryOptions({
+    queryKey: qk.mcpRuntimeStatus(),
+    staleTime: MCP_RUNTIME_STALE_MS,
+    queryFn: mcpRuntimeStatus,
+  });
+}
+
+export function mcpStatusQuery() {
+  return queryOptions({
+    queryKey: qk.mcpStatus(),
+    staleTime: Infinity,
+    queryFn: mcpStatus,
   });
 }
 

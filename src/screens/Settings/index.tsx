@@ -17,7 +17,6 @@ export default function Settings({
   onClose,
   refreshSafety,
   initialSection,
-  onMcpChanged,
   availableUpdate,
   onUpdateChecked,
 }: {
@@ -26,8 +25,6 @@ export default function Settings({
   // Re-loads the App's per-connection safety so Safety edits apply without reselecting.
   refreshSafety: () => void;
   initialSection?: Section;
-  // Re-checks global MCP setup status after one-click platform changes.
-  onMcpChanged?: () => void;
   availableUpdate?: Update | null;
   onUpdateChecked?: (update: Update | null) => void;
 }) {
@@ -97,7 +94,7 @@ export default function Settings({
       </aside>
 
       <div className="settings-body">
-        {section === "mcp" && <Mcp onMcpChanged={onMcpChanged} />}
+        {section === "mcp" && <Mcp />}
         {section === "updates" && (
           <Updates initialUpdate={availableUpdate} onChecked={onUpdateChecked} />
         )}

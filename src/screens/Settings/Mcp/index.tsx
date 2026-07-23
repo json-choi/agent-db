@@ -2,23 +2,22 @@
 // lives app-wide in AgentFeedProvider (so agent activity is captured even when this screen
 // is closed); here we render it. Runtime status is the REAL listener state (mcp_runtime_status),
 // not the static config — a bind failure shows a red banner, not a fake "Running".
-import { useEffect, useState } from "react";
-import {
-  connectPlatform,
-  disconnectPlatform,
-  mcpPlatforms,
-  mcpRuntimeStatus,
-  mcpStatus,
-  type McpRuntimeStatus,
-  type McpStatus,
-} from "../../../ipc/commands";
-import type { PlatformInfo } from "../../../ipc/types";
+import { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { connectPlatform, disconnectPlatform } from "../../../ipc/commands";
 import { errMessage } from "../../../ipc/types";
 import ConfirmButton from "../../../components/ConfirmButton";
 import { Icon } from "../../../components/Icon";
 import InfoTip from "../../../components/InfoTip";
+import Skeleton from "../../../components/Skeleton";
 import { useToast } from "../../../components/Toast";
 import { useI18n } from "../../../lib/i18n";
+import {
+  mcpPlatformsQuery,
+  mcpRuntimeStatusQuery,
+  mcpStatusQuery,
+  qk,
+} from "../../../lib/queries";
 import "./mcp.css";
 
 interface Result {
@@ -26,47 +25,24 @@ interface Result {
   msg: string;
 }
 
-export default function Mcp({ onMcpChanged }: { onMcpChanged?: () => void }) {
+export default function Mcp() {
   const { t } = useI18n();
   const toast = useToast();
-  const [status, setStatus] = useState<McpStatus | null>(null);
-  const [runtime, setRuntime] = useState<McpRuntimeStatus | null>(null);
-  const [statusErr, setStatusErr] = useState<string | null>(null);
-  const [platforms, setPlatforms] = useState<PlatformInfo[]>([]);
-  const [platErr, setPlatErr] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  const statusQ = useQuery(mcpStatusQuery());
+  const runtimeQ = useQuery(mcpRuntimeStatusQuery());
+  const platformsQ = useQuery(mcpPlatformsQuery());
   const [results, setResults] = useState<Record<string, Result>>({});
   const [connecting, setConnecting] = useState<string | null>(null);
-
-  const refreshPlatforms = () =>
-    mcpPlatforms()
-      .then((ps) => {
-        setPlatforms(ps);
-        setPlatErr(null);
-      })
-      .catch((e) => setPlatErr(errMessage(e)));
-
-  useEffect(() => {
-    mcpStatus()
-      .then((s) => {
-        setStatus(s);
-        setStatusErr(null);
-      })
-      .catch((e) => setStatusErr(errMessage(e)));
-    void refreshPlatforms();
-    // The server binds in a spawned setup task; if our first read wins the race we'd show a
-    // false "not running" banner. Poll until it reports running, then stop.
-    let iv: ReturnType<typeof setInterval>;
-    const poll = () =>
-      mcpRuntimeStatus()
-        .then((r) => {
-          setRuntime(r);
-          if (r.httpRunning) clearInterval(iv);
-        })
-        .catch((e) => setStatusErr(errMessage(e)));
-    void poll();
-    iv = setInterval(poll, 2000);
-    return () => clearInterval(iv);
-  }, []);
+  const status = statusQ.data ?? null;
+  const runtime = runtimeQ.data ?? null;
+  const platforms = platformsQ.data ?? [];
+  const statusErr = statusQ.error
+    ? errMessage(statusQ.error)
+    : runtimeQ.error
+      ? errMessage(runtimeQ.error)
+      : null;
+  const platErr = platformsQ.error ? errMessage(platformsQ.error) : null;
 
   async function runPlatformAction(
     id: string,
@@ -78,8 +54,7 @@ export default function Mcp({ onMcpChanged }: { onMcpChanged?: () => void }) {
       const msg = await action(id);
       setResults((r) => ({ ...r, [id]: { ok: true, msg } }));
       toast(toastLabel(platforms.find((p) => p.id === id)?.name ?? id));
-      await refreshPlatforms();
-      onMcpChanged?.();
+      await queryClient.invalidateQueries({ queryKey: qk.mcpPlatforms() });
     } catch (e) {
       const msg = errMessage(e);
       setResults((r) => ({ ...r, [id]: { ok: false, msg } }));
@@ -118,29 +93,43 @@ export default function Mcp({ onMcpChanged }: { onMcpChanged?: () => void }) {
     <div className="screen mcp">
       <h2>{t("mcp.server")}</h2>
 
-      {running ? (
-        <div className="mcp-status">
-          <span className="dot-on" /> {t("mcp.httpRunning")}{status && <> · <code>{status.url}</code></>}
-          <InfoTip label="Claude Code · Cursor · VS Code" />
-        </div>
+      {runtimeQ.isPending ? (
+        <Skeleton lines={2} />
       ) : (
-        <div className="error">
-          {t("mcp.httpNotRunning")}
-          {runtime?.error ? ` ${runtime.error}` : statusErr ? ` ${statusErr}` : ""}
-        </div>
+        <>
+          {running ? (
+            <div className="mcp-status">
+              <span className="dot-on" /> {t("mcp.httpRunning")}
+              {status && (
+                <>
+                  {" "}
+                  · <code>{status.url}</code>
+                </>
+              )}
+              <InfoTip label="Claude Code · Cursor · VS Code" />
+            </div>
+          ) : (
+            <div className="error">
+              {t("mcp.httpNotRunning")}
+              {runtime?.error ? ` ${runtime.error}` : statusErr ? ` ${statusErr}` : ""}
+            </div>
+          )}
+          {/* Bridge listener (7687) is the path Claude Desktop / Codex use. If it's down,
+              those clients can't reach the app even though HTTP works. */}
+          <div className={bridge ? "mcp-status" : "error"}>
+            {bridge ? <span className="dot-on" /> : null} {t("mcp.stdioBridge")}{" "}
+            {bridge ? t("mcp.bridgeReady") : t("mcp.bridgeDown")}
+            <InfoTip label="Claude Desktop · Codex" />
+            {!bridge && runtime?.error ? ` — ${runtime.error}` : ""}
+          </div>
+        </>
       )}
-      {/* Bridge listener (7687) is the path Claude Desktop / Codex use. If it's down,
-          those clients can't reach the app even though HTTP works. */}
-      <div className={bridge ? "mcp-status" : "error"}>
-        {bridge ? <span className="dot-on" /> : null} {t("mcp.stdioBridge")}{" "}
-        {bridge ? t("mcp.bridgeReady") : t("mcp.bridgeDown")}
-        <InfoTip label="Claude Desktop · Codex" />
-        {!bridge && runtime?.error ? ` — ${runtime.error}` : ""}
-      </div>
 
       <h3>{t("mcp.connectAgent")}</h3>
       {platErr ? (
         <div className="error">{t("mcp.platformDetectFailed", { error: platErr })}</div>
+      ) : platformsQ.isPending ? (
+        <Skeleton lines={3} />
       ) : platforms.length === 0 ? (
         <div className="muted">{t("mcp.noPlatforms")}</div>
       ) : (
