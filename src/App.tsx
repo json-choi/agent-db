@@ -177,6 +177,54 @@ function ConnectionPicker({
   );
 }
 
+// Compact workbench rail: keeps the high-frequency destinations visible without
+// stealing space from the database tree. The selected connection remains the
+// single context for every destination.
+function WorkbenchRail({
+  tab,
+  onTab,
+  onSettings,
+}: {
+  tab: Tab;
+  onTab: (tab: Tab) => void;
+  onSettings: () => void;
+}) {
+  const { t } = useI18n();
+  const items: Array<{ id: Tab; icon: "database" | "table" | "play" | "dashboard" | "chart" | "list"; label: I18nKey }> = [
+    { id: "data", icon: "database", label: "tabs.data" },
+    { id: "schema", icon: "table", label: "tabs.schema" },
+    { id: "sql", icon: "play", label: "tabs.sql" },
+    { id: "dashboard", icon: "dashboard", label: "tabs.dashboard" },
+    { id: "activity", icon: "chart", label: "tabs.activity" },
+    { id: "agent", icon: "list", label: "tabs.agent" },
+  ];
+  return (
+    <aside className="workbench-rail" aria-label={t("app.connectionPickerTitle")}>
+      <div className="workbench-rail-brand">d</div>
+      <div className="workbench-rail-items">
+        {items.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            className={`workbench-rail-button${tab === item.id ? " active" : ""}`}
+            onClick={() => onTab(item.id)}
+            title={t(item.label)}
+            aria-label={t(item.label)}
+            aria-pressed={tab === item.id}
+          >
+            <Icon name={item.icon} />
+          </button>
+        ))}
+      </div>
+      <div className="workbench-rail-bottom">
+        <button type="button" className="workbench-rail-button" onClick={onSettings} title={t("common.settings")} aria-label={t("common.settings")}>
+          <Icon name="gear" />
+        </button>
+      </div>
+    </aside>
+  );
+}
+
 function Shell() {
   const { t } = useI18n();
   const { unseen, latest, markSeen } = useAgentFeed();
@@ -772,8 +820,23 @@ function Shell() {
   return (
     <div
       className="app"
-      style={{ gridTemplateColumns: `${sidebarW}px 5px minmax(0, 1fr)` }}
+      style={{ gridTemplateColumns: `48px ${sidebarW}px 5px minmax(0, 1fr)` }}
     >
+      <WorkbenchRail
+        tab={tab}
+        onTab={(next) => {
+          if (next === "sql") preloadSqlEditor();
+          setSettingsOpen(false);
+          setEditing(null);
+          setSchemaDiffGroupKey(null);
+          setTab(next);
+        }}
+        onSettings={() => {
+          setSettingsSection(undefined);
+          setSettingsOpen(true);
+          setSchemaDiffGroupKey(null);
+        }}
+      />
       <DatabaseExplorer
         workspaceAccount={<WorkspaceAccount onScopeChanged={reloadWorkspaceScope} />}
         workspaceHeader={

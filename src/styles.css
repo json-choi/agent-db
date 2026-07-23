@@ -1,9 +1,67 @@
 .app {
   display: grid;
   /* Middle track is the drag divider; the real width is set inline from App state. */
-  grid-template-columns: 240px 5px minmax(0, 1fr);
+  grid-template-columns: 48px 240px 5px minmax(0, 1fr);
   height: 100dvh;
   overflow: hidden;
+}
+
+/* The rail is the stable navigation spine of the workbench. It intentionally
+   stays narrower than the database tree so the selected connection remains the
+   visual anchor, like the reference Chat2DB layout. */
+.workbench-rail {
+  z-index: var(--ds-z-raised);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 0;
+  padding: var(--ds-space-2) var(--ds-space-1);
+  border-right: var(--ds-border-width) solid var(--ds-sidebar-border);
+  background: var(--ds-bg-sidebar);
+  color: var(--ds-text-muted);
+}
+.workbench-rail-brand {
+  width: var(--ds-control-lg);
+  height: var(--ds-control-lg);
+  display: grid;
+  place-items: center;
+  margin-bottom: var(--ds-space-4);
+  border: var(--ds-border-width) solid var(--ds-border-strong);
+  border-radius: var(--ds-radius-sm);
+  color: var(--ds-text);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-font-size-title);
+  font-weight: 700;
+}
+.workbench-rail-items,
+.workbench-rail-bottom {
+  display: grid;
+  justify-items: center;
+  gap: var(--ds-space-2);
+}
+.workbench-rail-bottom {
+  margin-top: auto;
+}
+.workbench-rail-button {
+  width: var(--ds-control-lg);
+  height: var(--ds-control-lg);
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--ds-radius-sm);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: var(--ds-font-size-title);
+}
+.workbench-rail-button:hover,
+.workbench-rail-button.active {
+  background: var(--ds-accent-soft);
+  color: var(--ds-accent-text);
+}
+.workbench-rail-button.active {
+  box-shadow: inset 2px 0 0 var(--ds-accent-text);
 }
 
 .sidebar-resizer {
@@ -374,7 +432,7 @@
 
 @media (min-width: 561px) and (max-width: 760px) {
   .app {
-    grid-template-columns: minmax(190px, 34vw) 5px minmax(0, 1fr) !important;
+    grid-template-columns: 44px minmax(190px, 34vw) 5px minmax(0, 1fr) !important;
   }
 }
 
@@ -390,6 +448,10 @@
   }
 
   .sidebar-resizer {
+    display: none;
+  }
+
+  .workbench-rail {
     display: none;
   }
 
