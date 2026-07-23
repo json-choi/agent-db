@@ -125,4 +125,3 @@ export function isProviderKind(value: string): value is ProviderKind {
 export function providerDescriptor(provider: string) {
   return providerCatalog.find((item) => item.id === provider) ?? null;
 }
-
