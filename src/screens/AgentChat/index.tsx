@@ -1,6 +1,6 @@
-// Connection-scoped Agent workspace: the sidebar's selected database is the sole context,
-// while this screen owns conversation history, provider/model controls, and the composer.
-// MCP result/audit details stay available through a secondary log action instead of a tab.
+// Connection-scoped Agent workspace: the explorer's selected database is the sole context.
+// It can render full-width or inside the workbench's right dock while retaining conversation
+// history, provider/model controls, and the secondary MCP result log action.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { deleteChatThread } from "../../ipc/commands";
@@ -189,10 +189,12 @@ function ThreadRow({
 }
 
 export default function AgentChat({
+  compact = false,
   onOpenLogs,
   onOpenMcpSettings,
   selectedConnection,
 }: {
+  compact?: boolean;
   onOpenLogs: () => void;
   onOpenMcpSettings: () => void;
   selectedConnection: ConnectionProfile;
@@ -242,7 +244,9 @@ export default function AgentChat({
   );
   // Orca-style project navigation stays visible by default, but users can collapse it and
   // the preference remains local to this device.
-  const [railOpen, setRailOpen] = useState(() => localStorage.getItem(RAIL_OPEN_KEY) !== "0");
+  const [railOpen, setRailOpen] = useState(
+    () => !compact && localStorage.getItem(RAIL_OPEN_KEY) !== "0",
+  );
   function toggleRail() {
     setRailOpen((open) => {
       localStorage.setItem(RAIL_OPEN_KEY, open ? "0" : "1");
@@ -412,7 +416,7 @@ export default function AgentChat({
   const showCancel = !!pendingTurn && !pendingTurn.done && pendingTurn.threadId === threadId;
 
   return (
-    <div className="agent-chat-screen screen">
+    <div className={`agent-chat-screen screen${compact ? " compact" : ""}`}>
       <div className="agent-chat-layout">
         {railOpen && (
         <aside className="agent-chat-rail">

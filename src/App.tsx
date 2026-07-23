@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import { listen } from "@tauri-apps/api/event";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { useQuery } from "@tanstack/react-query";
@@ -40,20 +47,10 @@ import { AgentChatProvider } from "./lib/agentChat";
 import { AgentFeedProvider, useAgentFeed } from "./lib/agentFeed";
 import { useI18n, type I18nKey } from "./lib/i18n";
 
-// App-level tabs. Every workbench tab, including Agent, inherits the one connection selected
-// in the sidebar. Agent activity/result details live behind a secondary log dialog instead
-// of competing with the conversation as another top-level tab.
-type Tab = "data" | "schema" | "sql" | "dashboard" | "documents" | "activity" | "agent";
-const ALL_TABS: Tab[] = ["data", "schema", "sql", "dashboard", "documents", "activity", "agent"];
-const TAB_LABELS: Record<Tab, I18nKey> = {
-  data: "tabs.data",
-  schema: "tabs.schema",
-  sql: "tabs.sql",
-  dashboard: "tabs.dashboard",
-  documents: "tabs.documents",
-  activity: "tabs.activity",
-  agent: "tabs.agent",
-};
+// Primary workbench destinations live in the icon rail. Agent is a persistent right-hand
+// dock, so every surface shares the one connection selected in the database explorer.
+type Tab = "data" | "schema" | "sql" | "dashboard" | "documents" | "activity";
+const ALL_TABS: Tab[] = ["data", "schema", "sql", "dashboard", "documents", "activity"];
 
 // `null` = not editing; "new" = blank form; a profile = edit that profile.
 type Editing = ConnectionProfile | "new" | null;
@@ -182,27 +179,64 @@ function ConnectionPicker({
 // single context for every destination.
 function WorkbenchRail({
   tab,
+  visibleTabs,
+  agentOpen,
+  agentAvailable,
+  settingsOpen,
+  unseen,
+  agentButtonRef,
   onTab,
+  onAgent,
   onSettings,
 }: {
-  tab: Tab;
+  tab: Tab | null;
+  visibleTabs: Tab[];
+  agentOpen: boolean;
+  agentAvailable: boolean;
+  settingsOpen: boolean;
+  unseen: number;
+  agentButtonRef: RefObject<HTMLButtonElement | null>;
   onTab: (tab: Tab) => void;
+  onAgent: () => void;
   onSettings: () => void;
 }) {
   const { t } = useI18n();
-  const items: Array<{ id: Tab; icon: "database" | "table" | "play" | "dashboard" | "chart" | "list"; label: I18nKey }> = [
+  const items: Array<{
+    id: Tab;
+    icon: "database" | "table" | "play" | "dashboard" | "chart" | "list";
+    label: I18nKey;
+  }> = [
     { id: "data", icon: "database", label: "tabs.data" },
     { id: "schema", icon: "table", label: "tabs.schema" },
     { id: "sql", icon: "play", label: "tabs.sql" },
     { id: "dashboard", icon: "dashboard", label: "tabs.dashboard" },
+    { id: "documents", icon: "list", label: "tabs.documents" },
     { id: "activity", icon: "chart", label: "tabs.activity" },
-    { id: "agent", icon: "list", label: "tabs.agent" },
   ];
   return (
-    <aside className="workbench-rail" aria-label={t("app.connectionPickerTitle")}>
+    <nav
+      className="workbench-rail"
+      aria-label={t("app.workbenchNavigation")}
+      onKeyDown={(event) => {
+        if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) {
+          return;
+        }
+        const buttons = [
+          ...event.currentTarget.querySelectorAll<HTMLButtonElement>(
+            ".workbench-rail-button:not(:disabled)",
+          ),
+        ];
+        const current = buttons.indexOf(event.target as HTMLButtonElement);
+        if (current < 0) return;
+        event.preventDefault();
+        const direction =
+          event.key === "ArrowDown" || event.key === "ArrowRight" ? 1 : -1;
+        buttons[(current + direction + buttons.length) % buttons.length]?.focus();
+      }}
+    >
       <div className="workbench-rail-brand">d</div>
       <div className="workbench-rail-items">
-        {items.map((item) => (
+        {items.filter((item) => visibleTabs.includes(item.id)).map((item) => (
           <button
             key={item.id}
             type="button"
@@ -210,18 +244,41 @@ function WorkbenchRail({
             onClick={() => onTab(item.id)}
             title={t(item.label)}
             aria-label={t(item.label)}
-            aria-pressed={tab === item.id}
+            aria-current={tab === item.id ? "page" : undefined}
           >
             <Icon name={item.icon} />
           </button>
         ))}
+        <span className="workbench-rail-separator" />
+        <button
+          ref={agentButtonRef}
+          type="button"
+          className={`workbench-rail-button${agentOpen ? " active" : ""}`}
+          onClick={onAgent}
+          title={t("tabs.agent")}
+          aria-label={t("tabs.agent")}
+          aria-pressed={agentOpen}
+          disabled={!agentAvailable}
+        >
+          <Icon name="sidebar" />
+          {unseen > 0 && (
+            <span className="workbench-rail-count">{unseen > 9 ? "9+" : unseen}</span>
+          )}
+        </button>
       </div>
       <div className="workbench-rail-bottom">
-        <button type="button" className="workbench-rail-button" onClick={onSettings} title={t("common.settings")} aria-label={t("common.settings")}>
+        <button
+          type="button"
+          className={`workbench-rail-button${settingsOpen ? " active" : ""}`}
+          onClick={onSettings}
+          title={t("common.settings")}
+          aria-label={t("common.settings")}
+          aria-current={settingsOpen ? "page" : undefined}
+        >
           <Icon name="gear" />
         </button>
       </div>
-    </aside>
+    </nav>
   );
 }
 
@@ -262,9 +319,15 @@ function Shell() {
   const [tab, setTab] = useState<Tab>(() => {
     const saved = localStorage.getItem("tab");
     if (saved === "history" || saved === "audit") return "activity";
-    if (saved === "chat") return "agent";
+    if (saved === "chat" || saved === "agent") return "data";
     return (ALL_TABS as string[]).includes(saved ?? "") ? (saved as Tab) : "data";
   });
+  const [agentDockOpen, setAgentDockOpen] = useState(
+    () => localStorage.getItem("agentDockOpen") !== "0",
+  );
+  const [agentOverlay, setAgentOverlay] = useState(
+    () => window.matchMedia("(max-width: 900px)").matches,
+  );
   const [sqlDraft, setSqlDraft] = useState("SELECT 1;");
   // Mirrors sqlDraft for MongoDB connections, where an Activity row click routes here
   // instead of the (absent) SQL tab — see loadSql below.
@@ -278,6 +341,9 @@ function Shell() {
   const [schemaDiffGroupKey, setSchemaDiffGroupKey] = useState<string | null>(null);
   const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
   const [agentLogOpen, setAgentLogOpen] = useState(false);
+  const agentButtonRef = useRef<HTMLButtonElement | null>(null);
+  const agentCloseRef = useRef<HTMLButtonElement | null>(null);
+  const agentDockRef = useRef<HTMLElement | null>(null);
   const updateCheckInFlight = useRef(false);
   const lastUpdateCheckAt = useRef(0);
   const mcpPlatformsQ = useQuery({
@@ -334,6 +400,7 @@ function Shell() {
   }, [selectedId]);
 
   const selected = conns.find((c) => c.id === selectedId) ?? null;
+  const showAgentDock = agentDockOpen && !!selected && !settingsOpen && editing === null;
   // Schema diff is a SQL-only comparison feature — a group whose connections are MongoDB
   // is never a valid diff candidate, even if one somehow carries a schemaGroup value.
   const schemaGroups = useMemo(
@@ -373,6 +440,61 @@ function Shell() {
     if (selectionPending) return;
     if (!visibleTabs.includes(tab)) setTab("data");
   }, [selectionPending, visibleTabs, tab]);
+
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 900px)");
+    const sync = () => setAgentOverlay(media.matches);
+    media.addEventListener("change", sync);
+    return () => media.removeEventListener("change", sync);
+  }, []);
+
+  useEffect(() => {
+    if (!showAgentDock || !agentOverlay) return;
+    const close = () => {
+      localStorage.setItem("agentDockOpen", "0");
+      setAgentDockOpen(false);
+      window.requestAnimationFrame(() => agentButtonRef.current?.focus());
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        close();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = [
+        ...(agentDockRef.current?.querySelectorAll<HTMLElement>(
+          'button:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+        ) ?? []),
+      ];
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (
+        event.shiftKey &&
+        (document.activeElement === first ||
+          !agentDockRef.current?.contains(document.activeElement))
+      ) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    const inertTargets = [
+      document.querySelector<HTMLElement>(".main"),
+      document.querySelector<HTMLElement>(".sidebar"),
+    ].filter((target): target is HTMLElement => target !== null);
+    inertTargets.forEach((target) => target.setAttribute("inert", ""));
+    const focusFrame = window.requestAnimationFrame(() => agentCloseRef.current?.focus());
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener("keydown", onKeyDown);
+      inertTargets.forEach((target) => target.removeAttribute("inert"));
+    };
+  }, [agentOverlay, showAgentDock]);
 
   // CodeMirror is intentionally split out of the startup bundle. Warm that chunk only
   // after a SQL-capable connection exists, using idle time so the first SQL click does
@@ -458,14 +580,12 @@ function Shell() {
     };
   }, []);
 
-  // Nudge (not hijack) when a new result lands while the user is off the Agent tab. Skip
+  // Nudge (not hijack) when a new result lands while the Agent dock is hidden. Skip
   // the mount baseline so it doesn't fire on load; guard on result id so it fires once per
   // result; throttle to one toast per 30s so a burst of agent queries yields a single nudge.
   const seenResultId = useRef<number | null>(null);
   const surfaceInit = useRef(true);
   const lastToastAt = useRef(0);
-  // Tab button refs so ArrowLeft/Right moves DOM focus with the selection (roving tabindex).
-  const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   useEffect(() => {
     if (surfaceInit.current) {
       surfaceInit.current = false;
@@ -475,12 +595,12 @@ function Shell() {
     if (latest && latest.id !== seenResultId.current) {
       seenResultId.current = latest.id;
       const now = Date.now();
-      if (tab !== "agent" && now - lastToastAt.current > 30000) {
+      if (!showAgentDock && now - lastToastAt.current > 30000) {
         lastToastAt.current = now;
         toast(t("app.toastAgentQuery"));
       }
     }
-  }, [latest, tab, toast]);
+  }, [latest, showAgentDock, toast]);
 
   // Agent is now the conversation itself; activity is only considered seen after the user
   // explicitly opens the secondary log surface.
@@ -542,6 +662,11 @@ function Shell() {
     setSettingsOpen(true);
     setSchemaDiffGroupKey(null);
     setEditing(null);
+  }
+
+  function openAgentDock() {
+    localStorage.setItem("agentDockOpen", "1");
+    setAgentDockOpen(true);
   }
 
   function syncAvailableUpdate(update: Update | null) {
@@ -637,11 +762,11 @@ function Shell() {
     );
 
     // Every workbench view needs the global connection context. With no connection selected,
-    // the tab bar stays reachable but the current view asks for one explicit selection.
+    // the rail stays reachable but the current view asks for one explicit selection.
     const needsConn = (
       <ConnectionPicker
         connections={conns}
-        onSelect={(id) => selectConnection(id, tab === "agent" ? "agent" : "data")}
+        onSelect={(id) => selectConnection(id, tab)}
         onNew={startNewConnection}
       />
     );
@@ -665,68 +790,10 @@ function Shell() {
                 )}
               </div>
             </div>
-            {(tab === "agent" || unseen > 0) && (
-              <div className="main-policy ds-command-group ds-control-row">
-                <button
-                  className="btn small agent-jump"
-                  onClick={() => setAgentLogOpen(true)}
-                  title={t("agentChat.logsFor", { name: selected.name || t("app.unnamed") })}
-                  aria-label={t("agentChat.logsFor", { name: selected.name || t("app.unnamed") })}
-                >
-                  <Icon name="list" />
-                  {t("agentChat.logs")}
-                  {unseen > 0 && <span className="tab-dot">{unseen > 9 ? "9+" : unseen}</span>}
-                </button>
-              </div>
-            )}
           </header>
         )}
 
-        <nav className="tabs ds-control-row" role="tablist">
-          {visibleTabs.map((tabId) => (
-            <button
-              key={tabId}
-              ref={(el) => {
-                tabRefs.current[tabId] = el;
-              }}
-              role="tab"
-              aria-selected={tabId === tab}
-              // Roving tabindex: only the active tab is in the Tab order; arrows move within.
-              tabIndex={tabId === tab ? 0 : -1}
-              className={tabId === tab ? "tab active" : "tab"}
-              onClick={() => setTab(tabId)}
-              onPointerEnter={tabId === "sql" ? preloadSqlEditor : undefined}
-              onFocus={tabId === "sql" ? preloadSqlEditor : undefined}
-              // Arrow keys move focus+selection across TABS, wrapping — mirrors the sidebar tree.
-              onKeyDown={(e) => {
-                if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-                e.preventDefault();
-                const i = visibleTabs.findIndex((x) => x === tab);
-                const d = e.key === "ArrowRight" ? 1 : -1;
-                const next = visibleTabs[(i + d + visibleTabs.length) % visibleTabs.length];
-                setTab(next);
-                tabRefs.current[next]?.focus();
-              }}
-            >
-              {t(TAB_LABELS[tabId])}
-              {tabId === "agent" && unseen > 0 && (
-                <span className="tab-dot">{unseen > 9 ? "9+" : unseen}</span>
-              )}
-            </button>
-          ))}
-        </nav>
-
-        <section className="tab-body" role="tabpanel">
-          {tab === "agent" &&
-            (selected ? (
-              <AgentChat
-                onOpenLogs={() => setAgentLogOpen(true)}
-                onOpenMcpSettings={openMcpSettings}
-                selectedConnection={selected}
-              />
-            ) : (
-              needsConn
-            ))}
+        <section className="tab-body">
           {tab === "data" &&
             (!selected ? (
               needsConn
@@ -784,7 +851,7 @@ function Shell() {
                 connection={selected}
                 focusId={dashboardFocusId}
                 onFocusConsumed={consumeDashboardFocus}
-                onOpenAgent={() => setTab("agent")}
+                onOpenAgent={openAgentDock}
               />
             ) : (
               needsConn
@@ -816,20 +883,40 @@ function Shell() {
     mcpBadge === "server"
       ? t("mcp.badgeServerDownTitle")
       : t("mcp.badgeDisconnectedTitle");
-
   return (
     <div
-      className="app"
-      style={{ gridTemplateColumns: `48px ${sidebarW}px 5px minmax(0, 1fr)` }}
+      className={`app${showAgentDock ? " agent-open" : ""}`}
+      style={{
+        gridTemplateColumns: `48px ${sidebarW}px 5px minmax(0, 1fr) ${
+          showAgentDock ? "minmax(300px, 360px)" : "0px"
+        }`,
+      }}
     >
       <WorkbenchRail
-        tab={tab}
+        tab={settingsOpen ? null : tab}
+        visibleTabs={visibleTabs}
+        agentOpen={showAgentDock}
+        agentAvailable={!!selected}
+        settingsOpen={settingsOpen}
+        unseen={unseen}
+        agentButtonRef={agentButtonRef}
         onTab={(next) => {
           if (next === "sql") preloadSqlEditor();
           setSettingsOpen(false);
           setEditing(null);
           setSchemaDiffGroupKey(null);
           setTab(next);
+        }}
+        onAgent={() => {
+          if (settingsOpen || editing !== null || !agentDockOpen) {
+            setSettingsOpen(false);
+            setEditing(null);
+            setSchemaDiffGroupKey(null);
+            openAgentDock();
+            return;
+          }
+          localStorage.setItem("agentDockOpen", "0");
+          setAgentDockOpen(false);
         }}
         onSettings={() => {
           setSettingsSection(undefined);
@@ -850,7 +937,7 @@ function Shell() {
         selectedTableKey={selectedTable ? tableKey(selectedTable) : null}
         activeSchemaGroupKey={schemaDiffGroupKey}
         onSelectConn={(id) => {
-          selectConnection(id, tab === "agent" ? "agent" : "data");
+          selectConnection(id, tab);
         }}
         onOpenTable={(conn, t) => {
           setSelectedId(conn.id);
@@ -894,11 +981,6 @@ function Shell() {
             return current;
           });
         }}
-        onOpenSettings={() => {
-          setSettingsSection(undefined);
-          setSettingsOpen(true);
-          setSchemaDiffGroupKey(null);
-        }}
       />
       <div
         className="sidebar-resizer"
@@ -941,6 +1023,58 @@ function Shell() {
           </div>
         )}
       </main>
+      {showAgentDock && selected && (
+        <aside
+          ref={agentDockRef}
+          className="agent-dock"
+          aria-label={t("tabs.agent")}
+          role={agentOverlay ? "dialog" : undefined}
+          aria-modal={agentOverlay || undefined}
+        >
+          <header className="agent-dock-head">
+            <strong>{t("tabs.agent")}</strong>
+            <div className="ds-control-row">
+              <button
+                ref={agentCloseRef}
+                type="button"
+                className="btn small"
+                onClick={() => setAgentLogOpen(true)}
+                title={t("agentChat.logsFor", {
+                  name: selected.name || t("app.unnamed"),
+                })}
+                aria-label={t("agentChat.logsFor", {
+                  name: selected.name || t("app.unnamed"),
+                })}
+              >
+                <Icon name="list" />
+                {unseen > 0 && (
+                  <span className="tab-dot">{unseen > 9 ? "9+" : unseen}</span>
+                )}
+              </button>
+              <button
+                type="button"
+                className="btn small"
+                onClick={() => {
+                  localStorage.setItem("agentDockOpen", "0");
+                  setAgentDockOpen(false);
+                }}
+                title={t("common.close")}
+                aria-label={t("common.close")}
+              >
+                <Icon name="close" />
+              </button>
+            </div>
+          </header>
+          <div className="agent-dock-body">
+            <AgentChat
+              compact
+              onOpenLogs={() => setAgentLogOpen(true)}
+              onOpenMcpSettings={openMcpSettings}
+              selectedConnection={selected}
+            />
+          </div>
+        </aside>
+      )}
       {agentLogOpen && selected && (
         <AgentLogDialog
           connection={selected}

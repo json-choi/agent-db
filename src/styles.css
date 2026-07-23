@@ -1,7 +1,7 @@
 .app {
   display: grid;
   /* Middle track is the drag divider; the real width is set inline from App state. */
-  grid-template-columns: 48px 240px 5px minmax(0, 1fr);
+  grid-template-columns: 48px 240px 5px minmax(0, 1fr) 0;
   height: 100dvh;
   overflow: hidden;
 }
@@ -43,6 +43,7 @@
   margin-top: auto;
 }
 .workbench-rail-button {
+  position: relative;
   width: var(--ds-control-lg);
   height: var(--ds-control-lg);
   display: grid;
@@ -55,10 +56,39 @@
   cursor: pointer;
   font-size: var(--ds-font-size-title);
 }
+.workbench-rail-separator {
+  width: var(--ds-control-sm);
+  height: var(--ds-border-width);
+  margin: var(--ds-space-1) 0;
+  background: var(--ds-border-strong);
+}
+.workbench-rail-count {
+  position: absolute;
+  top: calc(var(--ds-optical-offset-sm) * -1);
+  right: calc(var(--ds-optical-offset-sm) * -1);
+  min-width: 14px;
+  height: 14px;
+  display: grid;
+  place-items: center;
+  padding: 0 var(--ds-chip-pad-x-2xs);
+  border-radius: var(--ds-radius-pill);
+  background: var(--ds-accent);
+  color: var(--ds-text-inverse);
+  font-size: var(--ds-font-size-2xs);
+  font-weight: 700;
+}
 .workbench-rail-button:hover,
 .workbench-rail-button.active {
   background: var(--ds-accent-soft);
   color: var(--ds-accent-text);
+}
+.workbench-rail-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.38;
+}
+.workbench-rail-button:focus-visible {
+  outline: none;
+  box-shadow: var(--ds-focus-ring);
 }
 .workbench-rail-button.active {
   box-shadow: inset 2px 0 0 var(--ds-accent-text);
@@ -96,6 +126,34 @@
   min-width: 0;
   background: transparent;
 }
+.agent-dock {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-left: var(--ds-border-width) solid var(--ds-border-subtle);
+  background: var(--ds-surface-0);
+}
+.agent-dock-head {
+  min-height: calc(var(--ds-control-lg) + var(--ds-space-2));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ds-space-2);
+  padding: var(--ds-space-1) var(--ds-space-2);
+  border-bottom: var(--ds-border-width) solid var(--ds-border-subtle);
+}
+.agent-dock-head > strong {
+  overflow: hidden;
+  font-size: var(--ds-font-size-ui);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-dock-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
 .main-head {
   display: flex;
   align-items: flex-start;
@@ -103,9 +161,6 @@
   padding: var(--ds-space-2) var(--ds-space-3);
   border-bottom: var(--ds-border-width) solid var(--ds-border-subtle);
   background: var(--ds-surface-elevated);
-}
-.main-policy {
-  flex-shrink: 0;
 }
 .app-title-line {
   flex-wrap: nowrap;
@@ -145,11 +200,6 @@
   font-size: var(--ds-font-size-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.agent-jump {
-  color: var(--ds-accent-text);
-  border-color: color-mix(in srgb, var(--ds-accent) 45%, var(--ds-border-subtle));
-  background: var(--ds-accent-soft);
 }
 .placeholder {
   display: flex;
@@ -314,43 +364,7 @@
   flex-shrink: 0;
 }
 
-/* Tabs */
-.tabs {
-  display: flex;
-  gap: var(--ds-segment-gap);
-  padding: var(--ds-space-1) var(--ds-space-2) 0;
-  border-bottom: var(--ds-border-width) solid var(--ds-border-subtle);
-  background: var(--ds-surface-0);
-  overflow-x: auto;
-  scrollbar-width: thin;
-}
-.tab {
-  border: none;
-  background: transparent;
-  color: var(--ds-text-muted);
-  min-width: 0;
-  min-height: var(--ds-control-md);
-  padding: 0 var(--ds-space-2);
-  cursor: pointer;
-  font-size: var(--ds-font-size-ui);
-  display: inline-flex;
-  align-items: center;
-  gap: var(--ds-space-2);
-  /* Reserve the active underline's space so switching tabs doesn't shift the row. */
-  border-bottom: var(--ds-border-width-strong) solid transparent;
-  margin-bottom: var(--ds-active-offset);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.tab:hover {
-  color: var(--ds-text);
-}
-.tab.active {
-  color: var(--ds-accent-text);
-  border-bottom-color: var(--ds-accent-text);
-}
-/* Unseen-count pill next to the Agent tab label. */
+/* Unseen-count pill used by the Agent dock log button. */
 .tab-dot {
   min-width: 16px;
   height: 16px;
@@ -398,16 +412,9 @@
   .main-head {
     flex-direction: column;
   }
-  .main-policy {
-    justify-content: flex-start;
-  }
 }
 
 @media (max-width: 760px) {
-  .tab {
-    flex: 0 0 auto;
-  }
-
   .tab-body,
   .settings-body,
   .main-view,
@@ -430,9 +437,31 @@
   }
 }
 
-@media (min-width: 561px) and (max-width: 760px) {
+@media (min-width: 901px) and (max-width: 1400px) {
   .app {
-    grid-template-columns: 44px minmax(190px, 34vw) 5px minmax(0, 1fr) !important;
+    grid-template-columns: 48px minmax(200px, 23vw) 5px minmax(360px, 1fr) 0 !important;
+  }
+
+  .app.agent-open {
+    grid-template-columns:
+      48px minmax(200px, 23vw) 5px minmax(360px, 1fr)
+      minmax(260px, 30vw) !important;
+  }
+}
+
+@media (min-width: 561px) and (max-width: 900px) {
+  .app {
+    grid-template-columns: 44px minmax(190px, 34vw) 5px minmax(0, 1fr) 0 !important;
+  }
+}
+
+@media (max-width: 900px) {
+  .agent-dock {
+    position: fixed;
+    inset: 0 0 0 auto;
+    z-index: var(--ds-z-modal);
+    width: min(400px, calc(100vw - 44px));
+    box-shadow: var(--ds-shadow-popover);
   }
 }
 
@@ -440,6 +469,7 @@
   .app {
     grid-template-columns: minmax(0, 1fr) !important;
     grid-template-rows: clamp(238px, 44dvh, 300px) minmax(0, 1fr);
+    height: calc(100dvh - 48px);
   }
 
   .sidebar {
@@ -452,7 +482,48 @@
   }
 
   .workbench-rail {
+    position: fixed;
+    inset: auto 0 0;
+    z-index: var(--ds-z-modal);
+    width: 100%;
+    height: 48px;
+    flex-direction: row;
+    justify-content: space-between;
+    padding: var(--ds-space-1) var(--ds-space-2);
+    border-top: var(--ds-border-width) solid var(--ds-sidebar-border);
+    border-right: 0;
+  }
+
+  .workbench-rail-brand {
     display: none;
+  }
+
+  .workbench-rail-items,
+  .workbench-rail-bottom {
+    display: flex;
+    align-items: center;
+    gap: var(--ds-space-1);
+  }
+
+  .workbench-rail-items {
+    min-width: 0;
+    overflow-x: auto;
+  }
+
+  .workbench-rail-bottom {
+    flex: 0 0 auto;
+    margin-top: 0;
+    margin-left: var(--ds-space-1);
+  }
+
+  .workbench-rail-separator {
+    width: var(--ds-border-width);
+    height: var(--ds-control-sm);
+    margin: 0 var(--ds-space-1);
+  }
+
+  .agent-dock {
+    bottom: 48px;
   }
 
   .main {

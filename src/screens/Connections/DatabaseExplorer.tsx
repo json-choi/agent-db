@@ -177,7 +177,6 @@ export function DatabaseExplorer({
   onEdit,
   onDeleted,
   onConnectionUpdated,
-  onOpenSettings,
   workspaceAccount,
   workspaceHeader,
 }: {
@@ -191,7 +190,6 @@ export function DatabaseExplorer({
   onEdit: (conn: ConnectionProfile) => void;
   onDeleted: (id: string) => void;
   onConnectionUpdated: (conn: ConnectionProfile) => void;
-  onOpenSettings: () => void;
   workspaceAccount?: ReactNode;
   workspaceHeader?: ReactNode;
 }) {
@@ -1090,15 +1088,6 @@ export function DatabaseExplorer({
 
       <div className="sidebar-foot ds-control-row">
         {workspaceAccount}
-        <button
-          type="button"
-          className="sidebar-foot-action"
-          onClick={onOpenSettings}
-          title={t("common.settings")}
-          aria-label={t("common.settings")}
-        >
-          <Icon name="gear" />
-        </button>
       </div>
 
       {dragPreview &&

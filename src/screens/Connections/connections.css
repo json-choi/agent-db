@@ -552,32 +552,6 @@
   background: var(--ds-bg-sidebar);
 }
 
-.sidebar-foot-action {
-  width: var(--ds-control-md);
-  min-width: var(--ds-control-md);
-  height: var(--ds-control-md);
-  min-height: var(--ds-control-md);
-  display: inline-grid;
-  flex: 0 0 var(--ds-control-md);
-  place-items: center;
-  padding: 0;
-  border: 0;
-  border-radius: var(--ds-radius-sm);
-  background: transparent;
-  color: var(--ds-text-muted);
-  cursor: pointer;
-}
-
-.sidebar-foot-action:hover {
-  background: var(--ds-hover);
-  color: var(--ds-text);
-}
-
-.sidebar-foot-action:focus-visible {
-  outline: none;
-  box-shadow: var(--ds-focus-ring);
-}
-
 @media (max-width: 760px) {
   .connection-driver-grid {
     grid-template-columns: minmax(0, 1fr);

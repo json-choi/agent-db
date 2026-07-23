@@ -11,10 +11,27 @@
   overflow: hidden;
 }
 
+.agent-chat-screen.compact {
+  height: 100%;
+  margin: 0;
+}
+
 .agent-chat-layout {
   display: flex;
   flex: 1 1 auto;
   min-height: 0;
+}
+
+.agent-chat-screen.compact .agent-chat-layout {
+  position: relative;
+}
+
+.agent-chat-screen.compact .agent-chat-rail {
+  position: absolute;
+  inset: 0 auto 0 0;
+  z-index: var(--ds-z-popover);
+  width: min(272px, calc(100% - var(--ds-space-5)));
+  box-shadow: var(--ds-shadow-popover);
 }
 
 /* Flat project-style rail: one divider, no card wrapper or nested surface. */
@@ -109,6 +126,41 @@
   padding: var(--ds-space-3) var(--ds-space-4);
   container-name: agent-main;
   container-type: inline-size;
+}
+
+.agent-chat-screen.compact .agent-chat-main {
+  gap: var(--ds-space-1);
+  padding: var(--ds-space-2);
+}
+
+.agent-chat-screen.compact .agent-chat-topbar {
+  flex-wrap: wrap;
+}
+
+.agent-chat-screen.compact .agent-chat-provider-label,
+.agent-chat-screen.compact .agent-chat-context-label {
+  display: none;
+}
+
+.agent-chat-screen.compact .agent-chat-provider-select {
+  min-width: 104px;
+}
+
+.agent-chat-screen.compact .agent-chat-connection-chip {
+  max-width: 100%;
+}
+
+.agent-chat-screen.compact .agent-chat-connection-chip > strong {
+  max-width: 104px;
+}
+
+.agent-chat-screen.compact .agent-chat-conversation {
+  gap: var(--ds-space-2);
+}
+
+.agent-chat-screen.compact .agent-chat-suggestions {
+  flex-direction: column;
+  width: 100%;
 }
 
 .agent-chat-topbar {
