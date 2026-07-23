@@ -2,9 +2,12 @@
 //! Every query is first reviewed by `plan_query`; `run_query` accepts only the resulting
 //! single-use id and still runs through the authoritative database read-only session.
 
+#[cfg(test)]
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+#[cfg(test)]
+use std::sync::Mutex;
+use std::time::Duration;
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock};
@@ -18,68 +21,19 @@ use uuid::Uuid;
 use chrono::Utc;
 
 use crate::audit::{self, RecordArgs};
-use crate::connection::{ConnectionAccess, ConnectionContext, ConnectionManager, DbPool};
+use crate::connection::{ConnectionAccess, ConnectionContext, ConnectionManager};
 use crate::error::AppError;
 use crate::model::{
     ConnectionProfile, DashboardKind, DocumentPage, DocumentQuery, Engine, HistoryEntry, QueryKind,
 };
-use crate::monitoring::{self, HealthSnapshot};
-use crate::safety::{self, PoolRef};
+use crate::safety;
 use crate::services::{
     AgentConnectionSummary, AgentDashboardCommitError, AgentDashboardPrepareError,
-    AgentDashboardPresentation, ApplicationServices, CatalogReadPolicy,
-    LegacyConnectionResolutionError,
+    AgentDashboardPresentation, AgentQueryInvocationOrigin, AgentQueryPlanError,
+    AgentQueryPlanRequest, AgentQueryRunError, AgentQueryRunPrepareError, ApplicationServices,
+    CatalogReadPolicy, LegacyConnectionResolutionError, MAX_AGENT_ROWS, QUERY_PLAN_TTL,
 };
-use crate::store::{AccountScope, PinnedConnection, Store};
-
-const QUERY_PLAN_TTL: Duration = Duration::from_secs(30);
-const MAX_QUERY_PLANS: usize = 256;
-const MAX_AGENT_ROWS: u64 = 1000;
-
-/// One single-use query proposal. Execution accepts only its id, so an agent cannot
-/// replace the reviewed connection, SQL, or row cap between planning and execution.
-#[derive(Clone)]
-pub(crate) struct PlannedQuery {
-    connection_id: Uuid,
-    identity: PlannedConnectionIdentity,
-    sql: String,
-    max_rows: u64,
-    decision: String,
-    created_at: Instant,
-}
-
-/// Non-secret authority snapshot bound to a reviewed query. A connection UUID is
-/// not sufficient because the same id can resolve differently after an account or
-/// workspace switch. The scope generation also rejects A → B → A reuse.
-#[derive(Clone, PartialEq, Eq)]
-struct PlannedConnectionIdentity {
-    workspace_id: Uuid,
-    account_scope: AccountScope,
-    scope_generation: i64,
-    connection_revision: i64,
-    binding_revision: i64,
-    binding_updated_at: String,
-}
-
-impl From<&PinnedConnection> for PlannedConnectionIdentity {
-    fn from(pin: &PinnedConnection) -> Self {
-        Self {
-            workspace_id: pin.scope.workspace_id,
-            account_scope: pin.scope.account_scope.clone(),
-            scope_generation: pin.scope.generation,
-            connection_revision: pin.connection_revision,
-            binding_revision: pin.binding_revision,
-            binding_updated_at: pin.binding_updated_at.clone(),
-        }
-    }
-}
-
-/// Query plans are shared by the HTTP and stdio MCP listeners in this app process.
-pub(crate) type QueryPlanStore = Arc<Mutex<HashMap<Uuid, PlannedQuery>>>;
-
-pub(crate) fn query_plan_store() -> QueryPlanStore {
-    Arc::new(Mutex::new(HashMap::new()))
-}
+use crate::store::{PinnedConnection, Store};
 
 #[derive(Clone)]
 pub(crate) struct DbTools {
@@ -89,7 +43,6 @@ pub(crate) struct DbTools {
     conns: ConnectionManager,
     /// Transport-neutral application services shared with the Tauri adapter.
     services: ApplicationServices,
-    plans: QueryPlanStore,
 }
 
 /// Keeps MCP behavior independent from Tauri's concrete runtime so headless contract
@@ -219,14 +172,12 @@ impl DbTools {
         app: AppHandle,
         conns: ConnectionManager,
         services: ApplicationServices,
-        plans: QueryPlanStore,
     ) -> Self {
         Self {
             store,
             events: ToolEventSink::tauri(app),
             conns,
             services,
-            plans,
         }
     }
 
@@ -235,7 +186,6 @@ impl DbTools {
         store: Store,
         conns: ConnectionManager,
         services: ApplicationServices,
-        plans: QueryPlanStore,
     ) -> (Self, RecordedToolEvents) {
         let (events, recorded) = ToolEventSink::recording();
         (
@@ -244,7 +194,6 @@ impl DbTools {
                 events,
                 conns,
                 services,
-                plans,
             },
             recorded,
         )
@@ -343,14 +292,6 @@ fn err(e: AppError) -> McpError {
     McpError::internal_error(e.to_string(), None)
 }
 
-fn pool_ref(db: &DbPool) -> PoolRef<'_> {
-    match db {
-        DbPool::Postgres(p) => PoolRef::Postgres(p),
-        DbPool::Mysql(p) => PoolRef::Mysql(p),
-        DbPool::Sqlite(p) => PoolRef::Sqlite(p),
-    }
-}
-
 /// Cap any single cell whose serialized form exceeds 4KB to a preview + ellipsis, so a
 /// giant TEXT/BLOB column can't blow up the Tauri event bus. Only used for the live
 /// event payload — the agent's tool result keeps the full untruncated cells.
@@ -372,65 +313,6 @@ fn truncate_cells(rows: &[Vec<serde_json::Value>]) -> Vec<Vec<serde_json::Value>
                 .collect()
         })
         .collect()
-}
-
-fn planning_guidance(
-    profile: &ConnectionProfile,
-    health: &HealthSnapshot,
-    estimated_rows: Option<i64>,
-    estimate_limit: i64,
-) -> (String, Vec<String>, Vec<String>) {
-    let mut caution = false;
-    let mut notices = Vec::new();
-    let mut suggestions = Vec::new();
-
-    if profile.env.as_deref() == Some("prod") {
-        caution = true;
-        notices.push("This connection is labeled production.".into());
-        suggestions
-            .push("Prefer a read replica or a bounded time range for production analysis.".into());
-    }
-    if health.level != "normal" {
-        caution = true;
-    }
-    notices.extend(health.reasons.clone());
-    if health.coverage == "limited" {
-        caution = true;
-        suggestions.push(
-            "Enable PostgreSQL pg_monitor in DopeDB settings for fuller aggregate load checks."
-                .into(),
-        );
-    }
-    match estimated_rows {
-        Some(rows) if rows > estimate_limit.max(0) => {
-            caution = true;
-            notices.push(format!(
-                "EXPLAIN estimates {rows} result/plan rows, above the configured {estimate_limit} review threshold."
-            ));
-            suggestions.push(
-                "Add a selective time/filter condition or aggregate before joining large log tables."
-                    .into(),
-            );
-        }
-        None if profile.env.as_deref() == Some("prod") => {
-            caution = true;
-            notices.push(
-                "EXPLAIN did not provide a usable row estimate for this production query.".into(),
-            );
-            suggestions.push("Review the plan and narrow the query before execution.".into());
-        }
-        _ => {}
-    }
-    if health.level == "busy" {
-        suggestions.push("Wait for database pressure to fall before running this query.".into());
-    }
-    suggestions.sort();
-    suggestions.dedup();
-    (
-        if caution { "caution" } else { "ready" }.into(),
-        notices,
-        suggestions,
-    )
 }
 
 fn document_query_payload(
@@ -655,124 +537,72 @@ impl DbTools {
                 "sql": args.sql,
             }),
         );
-        let context = self.pin(resolved.id).await?;
-        let profile = context.pin().profile.clone();
-        // MongoDB has no SQL surface — point the agent at the typed document tool
-        // instead of letting the fail-safe classifier return a misleading verdict.
-        if profile.engine.is_document() {
-            return Err(McpError::invalid_params(
-                "this is a MongoDB connection — SQL planning does not apply; call \
-                 run_document_query with a typed find/aggregate/countDocuments request",
-                None,
-            ));
-        }
-
-        let cls = safety::classify(&args.sql, profile.engine).map_err(err)?;
-        if !matches!(cls.kind, QueryKind::Read) || cls.statement_count != 1 {
-            let msg = "plan_query accepts exactly one read-only SELECT statement";
-            self.emit(
-                "agent:result",
-                json!({
-                    "tool": "plan_query",
-                    "connection": profile.name,
-                    "connectionId": profile.id,
-                    "error": msg,
-                }),
-            );
-            self.audit(
-                profile.id,
-                profile.engine,
-                &args.sql,
-                cls.kind,
-                "mcp:plan_query",
-                Some(msg.to_string()),
-            )
-            .await;
-            return Err(McpError::invalid_params(msg, None));
-        }
-
-        let settings = self.store.get_safety(profile.id).await.map_err(err)?;
-        let cap = args
-            .max_rows
-            .unwrap_or(settings.max_rows)
-            .min(MAX_AGENT_ROWS);
-        let identity = PlannedConnectionIdentity::from(context.pin());
-        let lease = context.connect().await.map_err(err)?;
-        let live = lease.live().sql().map_err(err)?;
-        let preview = safety::preview(pool_ref(live.ro()), &args.sql, &cls, &settings)
+        let receipt = match self
+            .services
+            .query
+            .plan_agent_read(AgentQueryPlanRequest {
+                connection_id: resolved.id,
+                sql: args.sql,
+                max_rows: args.max_rows,
+                origin: AgentQueryInvocationOrigin::Mcp,
+            })
             .await
-            .map_err(err)?;
-        let health = monitoring::snapshot(live, profile.engine).await;
-        let (decision, notices, suggestions) = planning_guidance(
-            &profile,
-            &health,
-            preview.estimated_rows,
-            settings.exec_preview_row_limit,
-        );
-        let plan_id = Uuid::new_v4();
         {
-            let mut plans = self.plans.lock().unwrap();
-            plans.retain(|_, plan| plan.created_at.elapsed() <= QUERY_PLAN_TTL);
-            if plans.len() >= MAX_QUERY_PLANS {
-                if let Some(oldest) = plans
-                    .iter()
-                    .min_by_key(|(_, plan)| plan.created_at)
-                    .map(|(id, _)| *id)
-                {
-                    plans.remove(&oldest);
-                }
+            Ok(receipt) => receipt,
+            Err(AgentQueryPlanError::DocumentConnection) => {
+                return Err(McpError::invalid_params(
+                    "this is a MongoDB connection — SQL planning does not apply; call \
+                     run_document_query with a typed find/aggregate/countDocuments request",
+                    None,
+                ))
             }
-            plans.insert(
-                plan_id,
-                PlannedQuery {
-                    connection_id: profile.id,
-                    identity,
-                    sql: args.sql.clone(),
-                    max_rows: cap,
-                    decision: decision.clone(),
-                    created_at: Instant::now(),
-                },
-            );
-        }
-        self.audit(
-            profile.id,
-            profile.engine,
-            &args.sql,
-            QueryKind::Read,
-            "mcp:plan_query",
-            None,
-        )
-        .await;
+            Err(AgentQueryPlanError::NotSingleRead(rejection)) => {
+                let message = "plan_query accepts exactly one read-only SELECT statement";
+                self.emit(
+                    "agent:result",
+                    json!({
+                        "tool": "plan_query",
+                        "connection": rejection.connection_name(),
+                        "connectionId": rejection.connection_id(),
+                        "error": message,
+                    }),
+                );
+                rejection.audit_after_result().await;
+                return Err(McpError::invalid_params(message, None));
+            }
+            Err(AgentQueryPlanError::Application(error)) => return Err(err(error)),
+        };
+        let plan = receipt.plan();
         self.emit(
             "agent:result",
             json!({
                 "tool": "plan_query",
-                "connection": profile.name,
-                "connectionId": profile.id,
-                "sql": args.sql,
-                "planId": plan_id,
-                "decision": decision,
-                "estimatedRows": preview.estimated_rows,
-                "healthLevel": health.level,
-                "monitoringCoverage": health.coverage,
-                "noticeCount": notices.len(),
-                "notices": notices,
-                "suggestions": suggestions,
+                "connection": plan.connection_name,
+                "connectionId": plan.connection_id,
+                "sql": plan.sql,
+                "planId": plan.plan_id,
+                "decision": plan.decision,
+                "estimatedRows": plan.estimated_rows,
+                "healthLevel": plan.health.level,
+                "monitoringCoverage": plan.health.coverage,
+                "noticeCount": plan.notices.len(),
+                "notices": plan.notices,
+                "suggestions": plan.suggestions,
             }),
         );
         let out = json!({
-            "connection": profile.name,
-            "connectionId": profile.id,
-            "environment": profile.env,
-            "sql": args.sql,
-            "planId": plan_id,
+            "connection": plan.connection_name,
+            "connectionId": plan.connection_id,
+            "environment": plan.environment,
+            "sql": plan.sql,
+            "planId": plan.plan_id,
             "singleUse": true,
             "expiresInSeconds": QUERY_PLAN_TTL.as_secs(),
-            "decision": decision,
-            "notices": notices,
-            "suggestions": suggestions,
-            "estimatedRows": preview.estimated_rows,
-            "health": health,
+            "decision": plan.decision,
+            "notices": plan.notices,
+            "suggestions": plan.suggestions,
+            "estimatedRows": plan.estimated_rows,
+            "health": plan.health,
             "nextAction": "Review these notices, then call run_query with this exact planId. If you change the SQL, call plan_query again.",
         });
         Ok(CallToolResult::success(vec![ContentBlock::text(
@@ -794,184 +624,107 @@ impl DbTools {
     ) -> Result<CallToolResult, McpError> {
         let plan_id = Uuid::parse_str(&args.plan_id)
             .map_err(|e| McpError::invalid_params(format!("invalid plan_id: {e}"), None))?;
-        let plan = self.plans.lock().unwrap().remove(&plan_id).ok_or_else(|| {
-            McpError::invalid_params(
-                "plan_id is unknown, expired, or already used; call plan_query again",
-                None,
-            )
-        })?;
-        if plan.created_at.elapsed() > QUERY_PLAN_TTL {
-            return Err(McpError::invalid_params(
-                "plan_id expired; database health must be checked again with plan_query",
-                None,
-            ));
-        }
-        // Pin first, before looking up the profile or opening the DB. This compares
-        // against the exact workspace/account snapshot reviewed by plan_query and
-        // rejects both cross-account reuse and A → B → A reuse.
-        let context = self.pin(plan.connection_id).await?;
-        if PlannedConnectionIdentity::from(context.pin()) != plan.identity {
-            return Err(McpError::invalid_params(
-                "workspace, account, or connection access changed; call plan_query again",
-                None,
-            ));
-        }
-        let operation_pin = context.pin().clone();
-        let profile = context.pin().profile.clone();
-        let cls = safety::classify(&plan.sql, profile.engine).map_err(err)?;
-        if !matches!(cls.kind, QueryKind::Read) || cls.statement_count != 1 {
-            return Err(McpError::invalid_params(
-                "stored plan no longer validates as one read-only statement",
-                None,
-            ));
-        }
+        let prepared = match self.services.query.prepare_agent_run(plan_id).await {
+            Ok(prepared) => prepared,
+            Err(AgentQueryRunPrepareError::UnknownOrAlreadyUsed) => {
+                return Err(McpError::invalid_params(
+                    "plan_id is unknown, expired, or already used; call plan_query again",
+                    None,
+                ))
+            }
+            Err(AgentQueryRunPrepareError::Expired) => {
+                return Err(McpError::invalid_params(
+                    "plan_id expired; database health must be checked again with plan_query",
+                    None,
+                ))
+            }
+            Err(AgentQueryRunPrepareError::AuthorityChanged) => {
+                return Err(McpError::invalid_params(
+                    "workspace, account, or connection access changed; call plan_query again",
+                    None,
+                ))
+            }
+            Err(AgentQueryRunPrepareError::StoredPlanInvalid) => {
+                return Err(McpError::invalid_params(
+                    "stored plan no longer validates as one read-only statement",
+                    None,
+                ))
+            }
+            Err(AgentQueryRunPrepareError::Application(error)) => return Err(err(error)),
+        };
+        let event_context = prepared.event_context().clone();
         self.emit(
             "agent:tool_call",
             json!({
                 "tool": "run_query",
-                "connection": profile.name,
-                "connectionId": profile.id,
-                "planId": plan_id,
-                "sql": plan.sql,
+                "connection": event_context.connection_name,
+                "connectionId": event_context.connection_id,
+                "planId": event_context.plan_id,
+                "sql": event_context.sql,
             }),
         );
-        let live = match context.connect().await.map_err(err) {
-            Ok(live) => live,
-            Err(e) => {
-                let message = e.message.to_string();
-                self.audit(
-                    profile.id,
-                    profile.engine,
-                    &plan.sql,
-                    QueryKind::Read,
-                    "mcp:run_query",
-                    Some(message.clone()),
-                )
-                .await;
-                if let Err(history_error) = self
-                    .history(
-                        &operation_pin,
-                        &plan.sql,
-                        "error",
-                        None,
-                        None,
-                        Some(message.clone()),
-                    )
-                    .await
-                {
-                    tracing::error!("MCP connection-error history insert failed: {history_error}");
-                }
+        let receipt = match prepared.execute().await {
+            Ok(receipt) => receipt,
+            Err(AgentQueryRunError::Connection(error)) => {
+                let message = error.to_string();
                 self.emit(
                     "agent:result",
                     json!({
                         "tool": "run_query",
-                        "connection": profile.name,
-                        "connectionId": profile.id,
-                        "planId": plan_id,
-                        "sql": plan.sql,
+                        "connection": event_context.connection_name,
+                        "connectionId": event_context.connection_id,
+                        "planId": event_context.plan_id,
+                        "sql": event_context.sql,
                         "error": message,
                     }),
                 );
-                return Err(e);
+                return Err(err(error));
             }
-        };
-
-        // L2 authoritative read-only session — a misclassified write is rejected at the DB.
-        // (`sql()` cannot fail here: plan_query never issues planIds for MongoDB.)
-        let result = match safety::run_read_only(
-            pool_ref(live.live().sql().map_err(err)?.ro()),
-            &plan.sql,
-            plan.max_rows,
-        )
-        .await
-        {
-            Ok(result) => result,
-            Err(e) => {
-                let message = e.to_string();
-                self.audit(
-                    profile.id,
-                    profile.engine,
-                    &plan.sql,
-                    QueryKind::Read,
-                    "mcp:run_query",
-                    Some(message.clone()),
-                )
-                .await;
-                if let Err(history_error) = self
-                    .history(
-                        &operation_pin,
-                        &plan.sql,
-                        "error",
-                        None,
-                        None,
-                        Some(message.clone()),
-                    )
-                    .await
-                {
-                    tracing::error!("MCP failed-query history insert failed: {history_error}");
-                }
+            Err(AgentQueryRunError::Execution(failure)) => {
+                let message = failure.error().to_string();
                 self.emit(
                     "agent:result",
                     json!({
                         "tool": "run_query",
-                        "connection": profile.name,
-                        "connectionId": profile.id,
-                        "planId": plan_id,
-                        "sql": plan.sql,
+                        "connection": event_context.connection_name,
+                        "connectionId": event_context.connection_id,
+                        "planId": event_context.plan_id,
+                        "sql": event_context.sql,
                         "error": message,
                     }),
                 );
-                return Err(err(e));
+                return Err(err(failure.into_error()));
             }
-        };
-        self.audit(
-            profile.id,
-            profile.engine,
-            &plan.sql,
-            QueryKind::Read,
-            "mcp:run_query",
-            None,
-        )
-        .await;
-        let query_run_id = match self
-            .history(
-                &operation_pin,
-                &plan.sql,
-                "ok",
-                Some(result.row_count as i64),
-                Some(result.duration_ms as i64),
-                None,
-            )
-            .await
-        {
-            Ok(id) => id,
-            Err(e) => {
-                let message =
-                    format!("query succeeded but its consent handle could not be persisted: {e}");
+            Err(AgentQueryRunError::ConsentHandlePersistence(failure)) => {
+                let message = format!(
+                    "query succeeded but its consent handle could not be persisted: {}",
+                    failure.error()
+                );
                 self.emit(
                     "agent:result",
                     json!({
                         "tool": "run_query",
-                        "connection": profile.name,
-                        "connectionId": profile.id,
-                        "planId": plan_id,
-                        "sql": plan.sql,
+                        "connection": event_context.connection_name,
+                        "connectionId": event_context.connection_id,
+                        "planId": event_context.plan_id,
+                        "sql": event_context.sql,
                         "error": message,
                     }),
                 );
-                return Err(err(e));
+                return Err(err(failure.into_error()));
             }
         };
-
+        let run = receipt.run();
+        let result = &run.result;
         self.emit(
             "agent:result",
             json!({
                 "tool": "run_query",
-                "connection": profile.name,
-                "connectionId": profile.id,
-                "planId": plan_id,
-                "queryRunId": query_run_id,
-                "sql": plan.sql,
+                "connection": run.connection_name,
+                "connectionId": run.connection_id,
+                "planId": run.plan_id,
+                "queryRunId": run.query_run_id,
+                "sql": run.sql,
                 "columns": result.columns,
                 // Per-cell truncation for the event bus only; the agent result below is full.
                 "rows": truncate_cells(&result.rows),
@@ -983,12 +736,12 @@ impl DbTools {
 
         // Agent gets compact columns-once JSON.
         let out = json!({
-            "connection": profile.name,
-            "connectionId": profile.id,
-            "planId": plan_id,
-            "planningDecision": plan.decision,
-            "queryRunId": query_run_id,
-            "sql": plan.sql,
+            "connection": run.connection_name,
+            "connectionId": run.connection_id,
+            "planId": run.plan_id,
+            "planningDecision": run.planning_decision,
+            "queryRunId": run.query_run_id,
+            "sql": run.sql,
             "columns": result.columns,
             "rows": result.rows,
             "rowCount": result.row_count,
@@ -1329,22 +1082,6 @@ mod tests {
         }
     }
 
-    fn quiet_health(coverage: &str) -> HealthSnapshot {
-        HealthSnapshot {
-            level: "normal".into(),
-            coverage: coverage.into(),
-            total_connections: Some(1),
-            max_connections: Some(100),
-            connection_usage_percent: Some(1.0),
-            active_queries: Some(1),
-            long_running_queries: Some(0),
-            lock_waits: Some(0),
-            replication_lag_seconds: None,
-            reasons: vec!["No aggregate database-pressure warning was detected.".into()],
-            captured_at: Utc::now(),
-        }
-    }
-
     async fn dashboard_harness() -> (DbTools, RecordedToolEvents, Store, Uuid, Uuid) {
         let options = SqliteConnectOptions::from_str("sqlite::memory:")
             .unwrap()
@@ -1394,8 +1131,7 @@ mod tests {
 
         let connections = ConnectionManager::new(store.clone());
         let services = ApplicationServices::new(store.clone(), connections.clone());
-        let (tools, events) =
-            DbTools::new_for_test(store.clone(), connections, services, query_plan_store());
+        let (tools, events) = DbTools::new_for_test(store.clone(), connections, services);
         (tools, events, store, connection_id, query_run_id)
     }
 
@@ -1517,19 +1253,6 @@ mod tests {
         let s = out[0][0].as_str().unwrap();
         assert!(s.ends_with('…')); // oversized cell became a marked preview
         assert!(s.chars().count() <= CELL_PREVIEW_MAX + 1);
-    }
-
-    #[test]
-    fn production_and_limited_coverage_force_agent_caution() {
-        let (decision, notices, suggestions) = planning_guidance(
-            &profile(Some("prod")),
-            &quiet_health("limited"),
-            Some(10),
-            50_000,
-        );
-        assert_eq!(decision, "caution");
-        assert!(notices.iter().any(|n| n.contains("production")));
-        assert!(suggestions.iter().any(|n| n.contains("pg_monitor")));
     }
 
     /// Regression guard for the exact bug that shipped once: `claude::ALLOWED_TOOLS`
@@ -1688,57 +1411,5 @@ mod tests {
                 "redacted response leaked {forbidden}"
             );
         }
-    }
-
-    #[test]
-    fn planned_query_is_single_use_in_the_shared_store() {
-        let store = query_plan_store();
-        let id = Uuid::new_v4();
-        let identity = PlannedConnectionIdentity {
-            workspace_id: Uuid::new_v4(),
-            account_scope: AccountScope::Personal,
-            scope_generation: 1,
-            connection_revision: 1,
-            binding_revision: 0,
-            binding_updated_at: String::new(),
-        };
-        store.lock().unwrap().insert(
-            id,
-            PlannedQuery {
-                connection_id: Uuid::new_v4(),
-                identity,
-                sql: "SELECT 1".into(),
-                max_rows: 10,
-                decision: "ready".into(),
-                created_at: Instant::now(),
-            },
-        );
-        assert!(store.lock().unwrap().remove(&id).is_some());
-        assert!(store.lock().unwrap().remove(&id).is_none());
-    }
-
-    #[test]
-    fn planned_query_identity_rejects_scope_and_revision_changes() {
-        let workspace_id = Uuid::new_v4();
-        let identity = PlannedConnectionIdentity {
-            workspace_id,
-            account_scope: AccountScope::WorkspaceUser("account-a".into()),
-            scope_generation: 7,
-            connection_revision: 3,
-            binding_revision: 2,
-            binding_updated_at: "2026-07-24T00:00:00Z".into(),
-        };
-
-        let mut switched_account = identity.clone();
-        switched_account.account_scope = AccountScope::WorkspaceUser("account-b".into());
-        assert!(identity != switched_account);
-
-        let mut reselected_scope = identity.clone();
-        reselected_scope.scope_generation += 2;
-        assert!(identity != reselected_scope);
-
-        let mut changed_binding = identity.clone();
-        changed_binding.binding_revision += 1;
-        assert!(identity != changed_binding);
     }
 }

@@ -27,9 +27,7 @@ use crate::connection::ConnectionManager;
 use crate::services::ApplicationServices;
 use crate::state::McpRuntime;
 use crate::store::Store;
-use tools::{DbTools, QueryPlanStore};
-
-pub(crate) use tools::query_plan_store;
+use tools::DbTools;
 
 /// Shared live-connection cache — the SAME instance as `AppState.connections`, so a
 /// connection edit/delete evicts the agent's cached pool too.
@@ -356,7 +354,6 @@ pub async fn serve_mcp(
     token: String,
     conns: SharedConns,
     services: ApplicationServices,
-    plans: QueryPlanStore,
     runtime: Arc<Mutex<McpRuntime>>,
 ) -> std::io::Result<()> {
     let service = StreamableHttpService::new(
@@ -366,7 +363,6 @@ pub async fn serve_mcp(
                 app.clone(),
                 conns.clone(),
                 services.clone(),
-                plans.clone(),
             ))
         },
         Arc::new(LocalSessionManager::default()),
@@ -448,7 +444,6 @@ pub async fn serve_stdio_bridge(
     token: String,
     conns: SharedConns,
     services: ApplicationServices,
-    plans: QueryPlanStore,
     runtime: Arc<Mutex<McpRuntime>>,
 ) -> std::io::Result<()> {
     let listener = match tokio::net::TcpListener::bind(("127.0.0.1", MCP_BRIDGE_PORT)).await {
@@ -477,7 +472,6 @@ pub async fn serve_stdio_bridge(
         let app = app.clone();
         let conns = conns.clone();
         let services = services.clone();
-        let plans = plans.clone();
         let token = token.clone();
         tokio::spawn(async move {
             let (r, w) = stream.into_split();
@@ -492,7 +486,7 @@ pub async fn serve_stdio_bridge(
                 tracing::warn!("bridge auth failed — dropping connection");
                 return; // unauthenticated — drop the connection
             }
-            let handler = DbTools::new(store, app, conns, services, plans);
+            let handler = DbTools::new(store, app, conns, services);
             match rmcp::serve_server(handler, (reader, w)).await {
                 Ok(service) => {
                     let _ = service.waiting().await;

@@ -17,6 +17,8 @@ use crate::model::{
     ConnectionProfile, DocumentPage, DocumentQuery, Engine, HistoryEntry, Provider, QueryKind,
     RiskLevel, WorkspaceConnectionAccess, WorkspaceCredentialMode,
 };
+use crate::monitoring::HealthSnapshot;
+use crate::services::planning_guidance;
 use crate::store::{Store, TEST_SCHEMA};
 
 use super::*;
@@ -92,8 +94,7 @@ impl SqliteHarness {
         let connections = ConnectionManager::new(store.clone());
         let services =
             crate::services::ApplicationServices::new(store.clone(), connections.clone());
-        let (tools, events) =
-            DbTools::new_for_test(store.clone(), connections, services, query_plan_store());
+        let (tools, events) = DbTools::new_for_test(store.clone(), connections, services);
 
         Self {
             store,
@@ -431,6 +432,198 @@ async fn sqlite_read_flow_matches_phase_zero_golden() {
     harness.close().await;
 }
 
+#[tokio::test]
+async fn query_plan_is_shared_and_single_use_across_mcp_handlers() {
+    let harness = SqliteHarness::new().await;
+    let (other_handler, _) = DbTools::new_for_test(
+        harness.store.clone(),
+        harness.tools.conns.clone(),
+        harness.tools.services.clone(),
+    );
+    let plan = tool_json(
+        harness
+            .tools
+            .plan_query(Parameters(PlanQueryArgs {
+                connection: harness.selector(),
+                sql: "SELECT id FROM users ORDER BY id".into(),
+                max_rows: Some(1),
+            }))
+            .await
+            .unwrap(),
+    );
+    let plan_id = plan["planId"].as_str().unwrap().to_string();
+
+    other_handler
+        .run_query(Parameters(RunQueryArgs {
+            plan_id: plan_id.clone(),
+        }))
+        .await
+        .unwrap();
+    let reused = harness
+        .tools
+        .run_query(Parameters(RunQueryArgs { plan_id }))
+        .await
+        .unwrap_err();
+    let wire = serde_json::to_value(reused).unwrap();
+    assert_eq!(wire["code"], -32602);
+    assert_eq!(
+        wire["message"],
+        "plan_id is unknown, expired, or already used; call plan_query again"
+    );
+
+    drop(other_handler);
+    harness.close().await;
+}
+
+#[tokio::test]
+async fn execution_failure_adapter_emits_the_exact_error_result() {
+    let harness = SqliteHarness::new().await;
+    let context = harness.tools.pin(harness.connection_id).await.unwrap();
+    let plan_id = Uuid::new_v4();
+    harness.tools.services.query.seed_plan_for_test(
+        plan_id,
+        context.pin(),
+        "SELECT no_such_function()".into(),
+        1,
+        "ready".into(),
+        Instant::now(),
+    );
+    drop(context);
+
+    let error = harness
+        .tools
+        .run_query(Parameters(RunQueryArgs {
+            plan_id: plan_id.to_string(),
+        }))
+        .await
+        .unwrap_err();
+    let wire = serde_json::to_value(error).unwrap();
+    assert_eq!(wire["code"], -32603);
+    let message = wire["message"].as_str().unwrap();
+    assert!(message.contains("no_such_function"));
+
+    {
+        let events = harness.events.lock().unwrap();
+        assert_eq!(
+            events.as_slice(),
+            [
+                json!({
+                    "event": "agent:tool_call",
+                    "payload": {
+                        "tool": "run_query",
+                        "connection": SQLITE_CONNECTION_NAME,
+                        "connectionId": harness.connection_id,
+                        "planId": plan_id,
+                        "sql": "SELECT no_such_function()",
+                    },
+                }),
+                json!({
+                    "event": "agent:result",
+                    "payload": {
+                        "tool": "run_query",
+                        "connection": SQLITE_CONNECTION_NAME,
+                        "connectionId": harness.connection_id,
+                        "planId": plan_id,
+                        "sql": "SELECT no_such_function()",
+                        "error": message,
+                    },
+                }),
+            ]
+        );
+    }
+
+    harness.close().await;
+}
+
+#[tokio::test]
+async fn consent_history_failure_adapter_never_emits_success_rows() {
+    let harness = SqliteHarness::new().await;
+    let context = harness.tools.pin(harness.connection_id).await.unwrap();
+    let plan_id = Uuid::new_v4();
+    harness.tools.services.query.seed_plan_for_test(
+        plan_id,
+        context.pin(),
+        "SELECT id, name FROM users ORDER BY id".into(),
+        2,
+        "ready".into(),
+        Instant::now(),
+    );
+    drop(context);
+    sqlx::raw_sql(
+        "CREATE TRIGGER fail_success_query_history_adapter
+         BEFORE INSERT ON query_history
+         WHEN NEW.status = 'ok'
+         BEGIN
+           SELECT RAISE(FAIL, 'forced adapter consent history failure');
+         END;",
+    )
+    .execute(harness.store.pool())
+    .await
+    .unwrap();
+
+    let error = harness
+        .tools
+        .run_query(Parameters(RunQueryArgs {
+            plan_id: plan_id.to_string(),
+        }))
+        .await
+        .unwrap_err();
+    let wire = serde_json::to_value(error).unwrap();
+    assert_eq!(wire["code"], -32603);
+    let internal_message = wire["message"].as_str().unwrap();
+    assert!(internal_message.contains("forced adapter consent history failure"));
+    let event_message = format!(
+        "query succeeded but its consent handle could not be persisted: {internal_message}"
+    );
+
+    {
+        let events = harness.events.lock().unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            events[0],
+            json!({
+                "event": "agent:tool_call",
+                "payload": {
+                    "tool": "run_query",
+                    "connection": SQLITE_CONNECTION_NAME,
+                    "connectionId": harness.connection_id,
+                    "planId": plan_id,
+                    "sql": "SELECT id, name FROM users ORDER BY id",
+                },
+            })
+        );
+        assert_eq!(
+            events[1],
+            json!({
+                "event": "agent:result",
+                "payload": {
+                    "tool": "run_query",
+                    "connection": SQLITE_CONNECTION_NAME,
+                    "connectionId": harness.connection_id,
+                    "planId": plan_id,
+                    "sql": "SELECT id, name FROM users ORDER BY id",
+                    "error": event_message,
+                },
+            })
+        );
+        let serialized = events[1].to_string();
+        for forbidden in ["queryRunId", "\"rows\"", "Ada", "Linus"] {
+            assert!(
+                !serialized.contains(forbidden),
+                "consent failure event leaked {forbidden}"
+            );
+        }
+    }
+    assert!(harness
+        .store
+        .list_history(harness.connection_id)
+        .await
+        .unwrap()
+        .is_empty());
+
+    harness.close().await;
+}
+
 #[test]
 fn pure_payloads_match_phase_zero_golden() {
     let mut prod = profile(
@@ -577,20 +770,16 @@ async fn mcp_owned_errors_match_phase_zero_golden() {
     actual.push(error_case("usedPlan", error));
 
     let context = harness.tools.pin(harness.connection_id).await.unwrap();
-    let identity = PlannedConnectionIdentity::from(context.pin());
-    drop(context);
     let expired_id = Uuid::parse_str("018f1111-2222-7333-8444-555566667779").unwrap();
-    harness.tools.plans.lock().unwrap().insert(
+    harness.tools.services.query.seed_plan_for_test(
         expired_id,
-        PlannedQuery {
-            connection_id: harness.connection_id,
-            identity,
-            sql: "SELECT 1".into(),
-            max_rows: 1,
-            decision: "ready".into(),
-            created_at: Instant::now() - QUERY_PLAN_TTL - Duration::from_secs(1),
-        },
+        context.pin(),
+        "SELECT 1".into(),
+        1,
+        "ready".into(),
+        Instant::now() - QUERY_PLAN_TTL - Duration::from_secs(1),
     );
+    drop(context);
     let error = harness
         .tools
         .run_query(Parameters(RunQueryArgs {

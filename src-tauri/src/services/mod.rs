@@ -4,6 +4,7 @@
 mod catalog_service;
 mod connection_service;
 mod dashboard_service;
+mod query_service;
 
 pub(crate) use catalog_service::{CatalogReadPolicy, CatalogService};
 pub(crate) use connection_service::{
@@ -12,6 +13,12 @@ pub(crate) use connection_service::{
 pub(crate) use dashboard_service::{
     AgentDashboardCommitError, AgentDashboardPrepareError, AgentDashboardPresentation,
     DashboardService,
+};
+#[cfg(test)]
+pub(crate) use query_service::planning_guidance;
+pub(crate) use query_service::{
+    AgentQueryInvocationOrigin, AgentQueryPlanError, AgentQueryPlanRequest, AgentQueryRunError,
+    AgentQueryRunPrepareError, QueryService, MAX_AGENT_ROWS, QUERY_PLAN_TTL,
 };
 
 use crate::connection::ConnectionManager;
@@ -24,6 +31,7 @@ pub(crate) struct ApplicationServices {
     pub(crate) connections: ConnectionService,
     pub(crate) catalog: CatalogService,
     pub(crate) dashboard: DashboardService,
+    pub(crate) query: QueryService,
 }
 
 impl ApplicationServices {
@@ -31,7 +39,8 @@ impl ApplicationServices {
         Self {
             connections: ConnectionService::new(store.clone()),
             catalog: CatalogService::new(store.clone(), connections.clone()),
-            dashboard: DashboardService::new(store, connections),
+            dashboard: DashboardService::new(store.clone(), connections.clone()),
+            query: QueryService::new(store, connections),
         }
     }
 }
