@@ -14,14 +14,13 @@ import type {
 import { errDetails, errMessage, type AppErrorDetails } from "../../ipc/types";
 import {
   classifySql,
-  mcpPlatforms,
   openAgentApp,
   previewSql,
   runScript,
   runSql,
 } from "../../ipc/commands";
 import type { PreviewReport } from "../../ipc/types";
-import { catalogQuery } from "../../lib/queries";
+import { catalogQuery, mcpPlatformsQuery } from "../../lib/queries";
 import { splitStatements } from "../../lib/sqlStatements";
 import { Icon } from "../../components/Icon";
 import LazySqlViewer from "../../components/LazySqlViewer";
@@ -248,8 +247,7 @@ export default function Sql({
   const [runErr, setRunErr] = useState<QueryErrorInfo | null>(null);
   const [lastAttempt, setLastAttempt] = useState<LastAttempt | null>(null);
   const [elapsed, setElapsed] = useState(0);
-  const [agentPlatforms, setAgentPlatforms] = useState<PlatformInfo[]>([]);
-  const [agentErr, setAgentErr] = useState<string | null>(null);
+  const [agentActionErr, setAgentActionErr] = useState<string | null>(null);
   const [askingAgent, setAskingAgent] = useState<string | null>(null);
 
   // EXPLAIN plan (read-only preview) shown above the results, independent of execution.
@@ -329,23 +327,11 @@ export default function Sql({
   // #8: feed schema-aware autocomplete. Same introspected Catalog the sidebar tree and the
   // Schema view read, served from the shared query cache. Failure just leaves completion off.
   const { data: catalog } = useQuery(catalogQuery(connection.id));
-
-  useEffect(() => {
-    let alive = true;
-    mcpPlatforms()
-      .then((ps) => {
-        if (alive) {
-          setAgentPlatforms(ps);
-          setAgentErr(null);
-        }
-      })
-      .catch((e) => {
-        if (alive) setAgentErr(errMessage(e));
-      });
-    return () => {
-      alive = false;
-    };
-  }, []);
+  // The app shell keeps this global query warm. SQL consumes the cached result instead of
+  // spawning a platform CLI probe while the editor is trying to paint.
+  const agentPlatformsQ = useQuery(mcpPlatformsQuery());
+  const agentPlatforms = agentPlatformsQ.data ?? [];
+  const agentErr = agentActionErr ?? (agentPlatformsQ.error ? errMessage(agentPlatformsQ.error) : null);
 
   const openTargets = useMemo(
     () =>
@@ -367,13 +353,13 @@ export default function Sql({
   async function openAgent(platform: PlatformInfo) {
     if (askingAgent) return;
     setAskingAgent(platform.id);
-    setAgentErr(null);
+    setAgentActionErr(null);
     try {
       await openAgentApp(platform.id);
       toast(t("sql.openAgentReady", { name: agentLabel(platform) }));
     } catch (e) {
       const msg = errMessage(e);
-      setAgentErr(msg);
+      setAgentActionErr(msg);
       toast(msg, "error");
     } finally {
       setAskingAgent(null);

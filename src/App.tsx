@@ -2,12 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { useQuery } from "@tanstack/react-query";
-import {
-  getSafety,
-  listConnections,
-  mcpPlatforms,
-  mcpRuntimeStatus,
-} from "./ipc/commands";
+import { getSafety, listConnections } from "./ipc/commands";
 import type {
   CatalogTable,
   ConnectionProfile,
@@ -16,7 +11,12 @@ import type {
 } from "./ipc/types";
 import { errMessage } from "./ipc/types";
 import { hasCapability, isDocumentEngine } from "./lib/capabilities";
-import { driversQuery, isTransientDbError } from "./lib/queries";
+import {
+  driversQuery,
+  isTransientDbError,
+  mcpPlatformsQuery,
+  mcpRuntimeStatusQuery,
+} from "./lib/queries";
 import { buildConnectionSections, type SchemaConnectionGroup } from "./lib/schemaDiff";
 import { tableKey, tableLabel } from "./lib/tableRef";
 import { ConnectionForm, DatabaseExplorer } from "./screens/Connections";
@@ -74,7 +74,14 @@ export default function App() {
 const SIDEBAR_MIN = 180;
 const SIDEBAR_MAX = 520;
 const SIDEBAR_DEFAULT = 240;
+const MCP_PLATFORM_REFRESH_INTERVAL_MS = 5 * 60_000;
+const MCP_RUNTIME_REFRESH_INTERVAL_MS = 30_000;
+const MCP_STARTUP_POLL_INTERVAL_MS = 2_000;
 const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
+
+function preloadSqlEditor() {
+  void import("./components/SqlViewer").catch(() => undefined);
+}
 
 function connectionEndpoint(conn: ConnectionProfile) {
   if (conn.engine === "sqlite") return conn.database || conn.host || "sqlite";
@@ -221,13 +228,31 @@ function Shell() {
     "mcp" | "safety" | "updates" | undefined
   >(undefined);
   const [schemaDiffGroupKey, setSchemaDiffGroupKey] = useState<string | null>(null);
-  const [mcpBadge, setMcpBadge] = useState<McpBadgeState | null>(null);
-  const [mcpBadgeReady, setMcpBadgeReady] = useState(false);
-  const [mcpRefreshTick, setMcpRefreshTick] = useState(0);
   const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
   const [agentLogOpen, setAgentLogOpen] = useState(false);
   const updateCheckInFlight = useRef(false);
   const lastUpdateCheckAt = useRef(0);
+  const mcpPlatformsQ = useQuery({
+    ...mcpPlatformsQuery(),
+    refetchInterval: MCP_PLATFORM_REFRESH_INTERVAL_MS,
+  });
+  const mcpRuntimeQ = useQuery({
+    ...mcpRuntimeStatusQuery(),
+    refetchInterval: (query) =>
+      query.state.data?.httpRunning
+        ? MCP_RUNTIME_REFRESH_INTERVAL_MS
+        : MCP_STARTUP_POLL_INTERVAL_MS,
+  });
+  const mcpBadgeReady = !mcpPlatformsQ.isPending && !mcpRuntimeQ.isPending;
+  const mcpBadge: McpBadgeState | null = !mcpBadgeReady
+    ? null
+    : mcpRuntimeQ.isError ||
+        !mcpRuntimeQ.data?.httpRunning ||
+        !mcpRuntimeQ.data.bridgeRunning
+      ? "server"
+      : mcpPlatformsQ.isError || !mcpPlatformsQ.data?.some((platform) => platform.connected)
+        ? "disconnected"
+        : null;
 
   const openDashboard = useCallback((dashboard: Dashboard) => {
     setSelectedId(dashboard.connectionId);
@@ -301,6 +326,19 @@ function Shell() {
     if (!visibleTabs.includes(tab)) setTab("data");
   }, [selectionPending, visibleTabs, tab]);
 
+  // CodeMirror is intentionally split out of the startup bundle. Warm that chunk only
+  // after a SQL-capable connection exists, using idle time so the first SQL click does
+  // not also pay module download/parse cost.
+  useEffect(() => {
+    if (!selected || !supportsSql) return;
+    if (typeof window.requestIdleCallback === "function") {
+      const id = window.requestIdleCallback(preloadSqlEditor, { timeout: 1_500 });
+      return () => window.cancelIdleCallback(id);
+    }
+    const id = window.setTimeout(preloadSqlEditor, 300);
+    return () => window.clearTimeout(id);
+  }, [selected?.id, supportsSql]);
+
   useEffect(() => {
     if (schemaDiffGroupKey && !activeSchemaGroup) setSchemaDiffGroupKey(null);
   }, [activeSchemaGroup, schemaDiffGroupKey]);
@@ -371,43 +409,6 @@ function Shell() {
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, []);
-
-  // Global MCP attention signal: if the local server/bridge is down, or no supported
-  // agent platform has DopeDB registered, keep a small setup affordance visible.
-  useEffect(() => {
-    let cancelled = false;
-
-    async function refreshMcpBadge() {
-      try {
-        const runtime = await mcpRuntimeStatus();
-        if (cancelled) return;
-        let serverNeedsAttention = !runtime.httpRunning || !runtime.bridgeRunning;
-        if (serverNeedsAttention) {
-          await new Promise((resolve) => window.setTimeout(resolve, 1500));
-          if (cancelled) return;
-          const retry = await mcpRuntimeStatus();
-          serverNeedsAttention = !retry.httpRunning || !retry.bridgeRunning;
-        }
-        const platforms = await mcpPlatforms();
-        if (cancelled) return;
-        const hasConnectedPlatform = platforms.some((p) => p.connected);
-        setMcpBadge(
-          serverNeedsAttention ? "server" : hasConnectedPlatform ? null : "disconnected",
-        );
-      } catch {
-        if (!cancelled) setMcpBadge("disconnected");
-      } finally {
-        if (!cancelled) setMcpBadgeReady(true);
-      }
-    }
-
-    void refreshMcpBadge();
-    const iv = window.setInterval(() => void refreshMcpBadge(), 30000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(iv);
-    };
-  }, [mcpRefreshTick]);
 
   // Nudge (not hijack) when a new result lands while the user is off the Agent tab. Skip
   // the mount baseline so it doesn't fire on load; guard on result id so it fires once per
@@ -495,10 +496,6 @@ function Shell() {
     setEditing(null);
   }
 
-  function refreshMcpConnectionState() {
-    setMcpRefreshTick((tick) => tick + 1);
-  }
-
   function syncAvailableUpdate(update: Update | null) {
     lastUpdateCheckAt.current = Date.now();
     setAvailableUpdate(update);
@@ -528,7 +525,6 @@ function Shell() {
           connection={selected}
           initialSection={settingsSection}
           refreshSafety={refreshSafety}
-          onMcpChanged={refreshMcpConnectionState}
           availableUpdate={availableUpdate}
           onUpdateChecked={syncAvailableUpdate}
           onClose={() => setSettingsOpen(false)}
@@ -651,6 +647,8 @@ function Shell() {
               tabIndex={tabId === tab ? 0 : -1}
               className={tabId === tab ? "tab active" : "tab"}
               onClick={() => setTab(tabId)}
+              onPointerEnter={tabId === "sql" ? preloadSqlEditor : undefined}
+              onFocus={tabId === "sql" ? preloadSqlEditor : undefined}
               // Arrow keys move focus+selection across TABS, wrapping — mirrors the sidebar tree.
               onKeyDown={(e) => {
                 if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;

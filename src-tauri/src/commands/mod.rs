@@ -2103,27 +2103,32 @@ pub fn mcp_status(state: State<'_, AppState>) -> serde_json::Value {
 
 /// Detect which AI platforms are installed (for one-click connect buttons).
 #[tauri::command]
-pub fn mcp_platforms() -> Vec<crate::mcp::connect::PlatformInfo> {
-    crate::mcp::connect::detect()
+pub async fn mcp_platforms() -> Vec<crate::mcp::connect::PlatformInfo> {
+    crate::mcp::connect::detect().await
 }
 
 /// One-click connect: write/merge the MCP config for the given platform so the user
 /// doesn't hand-edit JSON/TOML. Their local token is filled in automatically.
 #[tauri::command]
-pub fn connect_platform(state: State<'_, AppState>, platform: String) -> AppResult<String> {
-    crate::mcp::connect::connect(
-        &platform,
-        &state.mcp_token,
-        &crate::mcp::mcp_url(),
-        &crate::mcp::bridge_binary_path(),
-    )
+pub async fn connect_platform(state: State<'_, AppState>, platform: String) -> AppResult<String> {
+    let token = state.mcp_token.clone();
+    let url = crate::mcp::mcp_url();
+    let bridge_path = crate::mcp::bridge_binary_path();
+    tokio::task::spawn_blocking(move || {
+        crate::mcp::connect::connect(&platform, &token, &url, &bridge_path)
+    })
+    .await
+    .map_err(|error| AppError::Config(format!("platform connection task failed: {error}")))?
     .map_err(AppError::Config)
 }
 
 /// One-click disconnect: remove the dopedb entry from the platform's MCP config.
 #[tauri::command]
-pub fn disconnect_platform(platform: String) -> AppResult<String> {
-    crate::mcp::connect::disconnect(&platform).map_err(AppError::Config)
+pub async fn disconnect_platform(platform: String) -> AppResult<String> {
+    tokio::task::spawn_blocking(move || crate::mcp::connect::disconnect(&platform))
+        .await
+        .map_err(|error| AppError::Config(format!("platform disconnection task failed: {error}")))?
+        .map_err(AppError::Config)
 }
 
 /// Open a supported local AI app after the frontend has copied a SQL prompt.
