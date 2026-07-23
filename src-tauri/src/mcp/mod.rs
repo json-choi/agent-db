@@ -99,7 +99,11 @@ pub fn mcp_json_path() -> PathBuf {
 }
 
 pub fn mcp_url() -> String {
-    format!("http://127.0.0.1:{MCP_PORT}/mcp")
+    mcp_url_for_port(MCP_PORT)
+}
+
+fn mcp_url_for_port(port: u16) -> String {
+    format!("http://127.0.0.1:{port}/mcp")
 }
 
 /// Load the persisted bearer token, or mint + persist a new 256-bit one. Persisted so
@@ -371,20 +375,65 @@ pub async fn serve_mcp(
         .nest_service("/mcp", service)
         .layer(axum::middleware::from_fn_with_state(token, require_bearer));
 
-    // Bind first so we can report a taken port instead of the UI lying "Running".
-    let listener = match tokio::net::TcpListener::bind(("127.0.0.1", MCP_PORT)).await {
-        Ok(l) => l,
+    // The installed app owns the stable external-integration port. Development often
+    // runs alongside it, so an address collision gets a process-local fallback used by
+    // in-app Agent chat rather than routing the child CLI into the other app instance.
+    let (listener, bind_warning) =
+        match tokio::net::TcpListener::bind(("127.0.0.1", MCP_PORT)).await {
+            Ok(listener) => (listener, None),
+            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+                let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+                (
+                    listener,
+                    Some(format!(
+                        "MCP HTTP port {MCP_PORT} is used by another DopeDB instance; \
+                         in-app Agent chat is using a temporary local port."
+                    )),
+                )
+            }
+            Err(e) => {
+                let mut rt = runtime.lock().unwrap();
+                rt.http_running = false;
+                rt.http_port = None;
+                rt.http_url = None;
+                rt.http_fallback = false;
+                rt.last_error = Some(format!("MCP HTTP bind on 127.0.0.1:{MCP_PORT} failed: {e}"));
+                return Err(e);
+            }
+        };
+    let actual_port = match listener.local_addr() {
+        Ok(address) => address.port(),
         Err(e) => {
             let mut rt = runtime.lock().unwrap();
             rt.http_running = false;
-            rt.last_error = Some(format!("MCP HTTP bind on 127.0.0.1:{MCP_PORT} failed: {e}"));
+            rt.http_port = None;
+            rt.http_url = None;
+            rt.http_fallback = false;
+            rt.last_error = Some(format!("MCP HTTP listener address unavailable: {e}"));
             return Err(e);
         }
     };
-    runtime.lock().unwrap().http_running = true;
-    tracing::info!("MCP server listening on {}", mcp_url());
+    let actual_url = mcp_url_for_port(actual_port);
+    {
+        let mut rt = runtime.lock().unwrap();
+        rt.http_running = true;
+        rt.http_port = Some(actual_port);
+        rt.http_url = Some(actual_url.clone());
+        rt.http_fallback = actual_port != MCP_PORT;
+        rt.last_error = bind_warning.clone();
+    }
+    if let Some(warning) = bind_warning {
+        tracing::warn!("{warning}");
+    }
+    tracing::info!("MCP server listening on {actual_url}");
     let r = axum::serve(listener, router).await;
-    runtime.lock().unwrap().http_running = false;
+    {
+        let mut rt = runtime.lock().unwrap();
+        rt.http_running = false;
+        rt.http_port = None;
+        rt.http_url = None;
+        rt.http_fallback = false;
+    }
     r
 }
 
@@ -486,6 +535,9 @@ pub fn mcp_runtime_status(state: tauri::State<'_, crate::state::AppState>) -> se
     serde_json::json!({
         "httpRunning": rt.http_running,
         "bridgeRunning": rt.bridge_running,
+        "httpPort": rt.http_port,
+        "httpUrl": rt.http_url,
+        "httpFallback": rt.http_fallback,
         "error": rt.last_error,
     })
 }

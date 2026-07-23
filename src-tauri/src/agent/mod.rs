@@ -332,6 +332,7 @@ pub async fn send_turn(
     state: ChatState,
     store: Store,
     mcp_token: String,
+    mcp_url: String,
     thread_id: Uuid,
     message: String,
     turn_id: Uuid,
@@ -382,6 +383,7 @@ pub async fn send_turn(
             &cli_message,
             resume.as_deref(),
             &mcp_token,
+            &mcp_url,
             model.as_deref(),
             effort.as_deref(),
         ),
@@ -389,6 +391,7 @@ pub async fn send_turn(
             &cli_message,
             resume.as_deref(),
             &mcp_token,
+            &mcp_url,
             model.as_deref(),
             effort.as_deref(),
         ),
@@ -463,7 +466,10 @@ pub async fn send_turn(
                 // behavior exactly), so it reflects only the structured signal + exit code.
                 let mut p = progress.lock().unwrap();
                 let ok = status.success() && p.error.is_none();
-                if p.error.is_none() {
+                // Both CLIs can write informational lines to stderr on a successful
+                // turn (Codex currently prints "Reading additional input…"). Persist
+                // stderr only when the process actually failed.
+                if !ok && p.error.is_none() {
                     p.error = stderr_tail;
                 }
                 drop(p);

@@ -310,6 +310,9 @@ export function mcpStatus(): Promise<McpStatus> {
 export interface McpRuntimeStatus {
   httpRunning: boolean;
   bridgeRunning: boolean;
+  httpPort: number | null;
+  httpUrl: string | null;
+  httpFallback: boolean;
   error: string | null;
 }
 

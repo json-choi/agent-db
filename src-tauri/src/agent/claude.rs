@@ -41,29 +41,28 @@ const DISALLOWED_TOOLS: [&str; 10] = [
     "Task",
 ];
 
-/// A static, single-run MCP config file. It holds no secret: the real bearer token is
+/// A process-local MCP config file. It holds no secret: the real bearer token is
 /// referenced as the `${DOPEDB_MCP_TOKEN}` placeholder (Claude Code expands `${VAR}`
-/// in `--mcp-config` from the child's own environment) and passed only as an env var
-/// to the spawned process, so the token is never written to disk in plaintext.
-fn mcp_config_path() -> AppResult<PathBuf> {
+/// in `--mcp-config` from the child's own environment) and passed only as an env var.
+/// The process id prevents two concurrently running DopeDB instances from overwriting
+/// each other's fallback-port config.
+fn mcp_config_path(mcp_url: &str) -> AppResult<PathBuf> {
     let dir = dirs::data_dir()
         .ok_or_else(|| AppError::Config("no data dir".into()))?
         .join("dopedb");
     std::fs::create_dir_all(&dir)?;
-    let path = dir.join("agent-mcp-config.json");
-    if !path.exists() {
-        let body = serde_json::json!({
-            "mcpServers": {
-                "dopedb": {
-                    "type": "http",
-                    "url": crate::mcp::mcp_url(),
-                    "headers": { "Authorization": "Bearer ${DOPEDB_MCP_TOKEN}" }
-                }
+    let path = dir.join(format!("agent-mcp-config-{}.json", std::process::id()));
+    let body = serde_json::json!({
+        "mcpServers": {
+            "dopedb": {
+                "type": "http",
+                "url": mcp_url,
+                "headers": { "Authorization": "Bearer ${DOPEDB_MCP_TOKEN}" }
             }
-        })
-        .to_string();
-        crate::mcp::write_private(&path, body.as_bytes()); // reused: 0600 / Windows ACL
-    }
+        }
+    })
+    .to_string();
+    crate::mcp::write_private(&path, body.as_bytes()); // reused: 0600 / Windows ACL
     Ok(path)
 }
 
@@ -75,12 +74,13 @@ pub(super) fn command(
     message: &str,
     resume: Option<&str>,
     token: &str,
+    mcp_url: &str,
     model: Option<&str>,
     effort: Option<&str>,
 ) -> AppResult<Command> {
     let bin = which("claude")
         .ok_or_else(|| AppError::Agent("Claude Code (`claude`) not found".into()))?;
-    let cfg = mcp_config_path()?;
+    let cfg = mcp_config_path(mcp_url)?;
     let mut cmd: Command = quiet_command(&bin).into();
     cmd.args(build_args(
         message,

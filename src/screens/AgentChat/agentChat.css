@@ -107,6 +107,8 @@
   min-width: 0;
   min-height: 0;
   padding: var(--ds-space-3) var(--ds-space-4);
+  container-name: agent-main;
+  container-type: inline-size;
 }
 
 .agent-chat-topbar {
@@ -118,32 +120,67 @@
   min-height: var(--ds-control-lg);
 }
 
-.agent-chat-provider-tabs {
-  --ds-row-control-size: var(--ds-control-md);
+.agent-chat-provider-switcher {
   display: inline-flex;
+  align-items: center;
   align-self: center;
   flex: 0 0 auto;
-  gap: var(--ds-space-2);
+  gap: var(--ds-space-1);
+  min-width: 0;
 }
 
-.agent-chat-provider-seg {
-  min-width: 88px;
-  min-height: var(--ds-control-md);
-  padding: 0 var(--ds-space-3);
-  border: none;
-  border-bottom: var(--ds-border-width-strong) solid transparent;
-  border-radius: 0;
-  background: transparent;
+.agent-chat-provider-label {
   color: var(--ds-text-muted);
+  font-size: var(--ds-font-size-sm);
+}
+
+.agent-chat-provider-label::after {
+  content: "·";
+  margin-left: var(--ds-space-1);
+}
+
+.agent-chat-provider-select {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-width: 132px;
+}
+
+/* One compact mode control replaces the old tab strip. The wrapper supplies the chevron,
+   while the native select keeps keyboard and screen-reader behavior intact. */
+.agent-chat-provider-switcher .agent-chat-provider-select select {
+  width: 100%;
+  height: var(--ds-control-md);
+  min-height: var(--ds-control-md);
+  padding: 0 calc(var(--ds-space-4) + var(--ds-space-1)) 0 var(--ds-space-3);
+  appearance: none;
+  border: var(--ds-border-width) solid var(--ds-border-subtle);
+  border-radius: var(--ds-radius-pill);
+  background: var(--ds-surface-1);
+  color: var(--ds-text);
   cursor: pointer;
   font: inherit;
-  font-size: var(--ds-font-size-ui);
+  font-size: var(--ds-font-size-sm);
+  font-weight: 650;
 }
 
-.agent-chat-provider-seg.active {
-  background: transparent;
-  color: var(--ds-accent-text);
-  border-bottom-color: var(--ds-accent-text);
+.agent-chat-provider-switcher .agent-chat-provider-select select:hover {
+  border-color: var(--ds-border-strong);
+  background: var(--ds-hover);
+}
+
+.agent-chat-provider-switcher .agent-chat-provider-select select:focus-visible {
+  outline: none;
+  box-shadow: var(--ds-focus-ring);
+}
+
+.agent-chat-provider-select > .icon {
+  position: absolute;
+  right: var(--ds-space-2);
+  width: 14px;
+  height: 14px;
+  color: var(--ds-text-muted);
+  pointer-events: none;
 }
 
 /* Read-only context indicator: it reinforces the app-wide selection without becoming a
@@ -156,6 +193,7 @@
   margin-left: auto;
   color: var(--ds-text-muted);
   font-size: var(--ds-font-size-sm);
+  white-space: nowrap;
 }
 
 .agent-chat-connection-chip > strong {
@@ -305,6 +343,10 @@
   align-self: flex-start;
 }
 
+.agent-chat-progress {
+  font-size: var(--ds-font-size-xs);
+}
+
 /* Composer: one rounded shell (reusing .card) holding the textarea and a pill control row. */
 .agent-chat-composer {
   display: flex;
@@ -347,6 +389,29 @@
   font-size: var(--ds-font-size-sm);
 }
 
+/* Respond to the actual Agent pane, not only the window: both the app sidebar and thread
+   rail can consume width independently. Labels collapse before controls or DB context clip. */
+@container agent-main (max-width: 520px) {
+  .agent-chat-provider-label,
+  .agent-chat-context-label {
+    display: none;
+  }
+
+  .agent-chat-provider-select {
+    min-width: 112px;
+  }
+}
+
+@container agent-main (max-width: 360px) {
+  .agent-chat-provider-select {
+    min-width: 104px;
+  }
+
+  .agent-chat-connection-chip .env-chip {
+    display: none;
+  }
+}
+
 @media (max-width: 760px) {
   .agent-chat-screen {
     height: calc(100% + var(--ds-space-3) + var(--ds-space-3));
@@ -372,12 +437,8 @@
     max-width: 100%;
   }
 
-  .agent-chat-context-label {
+  .agent-chat-context-label,
+  .agent-chat-provider-label {
     display: none;
-  }
-
-  .agent-chat-provider-seg {
-    min-width: 0;
-    padding-inline: var(--ds-space-2);
   }
 }
