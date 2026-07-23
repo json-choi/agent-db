@@ -55,4 +55,7 @@ bash "$PROJECT_ROOT/src-tauri/sign-dev.sh" "$binary"
 if [ "${DOPEDB_SIGNED_RUNNER_CHECK_ONLY:-0}" = "1" ]; then
   exit 0
 fi
+if [ "${#app_args[@]}" -eq 0 ]; then
+  exec "$binary"
+fi
 exec "$binary" "${app_args[@]}"
