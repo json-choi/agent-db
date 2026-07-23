@@ -24,6 +24,7 @@ use tauri::AppHandle;
 use uuid::Uuid;
 
 use crate::connection::ConnectionManager;
+use crate::services::ApplicationServices;
 use crate::state::McpRuntime;
 use crate::store::Store;
 use tools::{DbTools, QueryPlanStore};
@@ -354,6 +355,7 @@ pub async fn serve_mcp(
     store: Store,
     token: String,
     conns: SharedConns,
+    services: ApplicationServices,
     plans: QueryPlanStore,
     runtime: Arc<Mutex<McpRuntime>>,
 ) -> std::io::Result<()> {
@@ -363,6 +365,7 @@ pub async fn serve_mcp(
                 store.clone(),
                 app.clone(),
                 conns.clone(),
+                services.clone(),
                 plans.clone(),
             ))
         },
@@ -444,6 +447,7 @@ pub async fn serve_stdio_bridge(
     store: Store,
     token: String,
     conns: SharedConns,
+    services: ApplicationServices,
     plans: QueryPlanStore,
     runtime: Arc<Mutex<McpRuntime>>,
 ) -> std::io::Result<()> {
@@ -472,6 +476,7 @@ pub async fn serve_stdio_bridge(
         let store = store.clone();
         let app = app.clone();
         let conns = conns.clone();
+        let services = services.clone();
         let plans = plans.clone();
         let token = token.clone();
         tokio::spawn(async move {
@@ -487,7 +492,7 @@ pub async fn serve_stdio_bridge(
                 tracing::warn!("bridge auth failed — dropping connection");
                 return; // unauthenticated — drop the connection
             }
-            let handler = DbTools::new(store, app, conns, plans);
+            let handler = DbTools::new(store, app, conns, services, plans);
             match rmcp::serve_server(handler, (reader, w)).await {
                 Ok(service) => {
                     let _ = service.waiting().await;

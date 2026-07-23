@@ -59,22 +59,24 @@ pub fn run() {
             // connection edits/deletes evict the agent's pools and the UI can tell
             // "actually listening" from "config exists".
             let conns = st.connections.clone();
+            let services = st.services.clone();
             let runtime = st.mcp_runtime.clone();
             let plans = mcp::query_plan_store();
             let handle = app.handle().clone();
             // HTTP endpoint (Claude Code / Cursor / …).
             {
-                let (store, token, handle, conns, plans, runtime) = (
+                let (store, token, handle, conns, services, plans, runtime) = (
                     store.clone(),
                     token.clone(),
                     handle.clone(),
                     conns.clone(),
+                    services.clone(),
                     plans.clone(),
                     runtime.clone(),
                 );
                 tauri::async_runtime::spawn(async move {
                     if let Err(e) =
-                        mcp::serve_mcp(handle, store, token, conns, plans, runtime).await
+                        mcp::serve_mcp(handle, store, token, conns, services, plans, runtime).await
                     {
                         tracing::error!("MCP HTTP server failed: {e}");
                     }
@@ -83,7 +85,8 @@ pub fn run() {
             // Raw TCP listener the stdio bridge dials (Claude Desktop).
             tauri::async_runtime::spawn(async move {
                 if let Err(e) =
-                    mcp::serve_stdio_bridge(handle, store, token, conns, plans, runtime).await
+                    mcp::serve_stdio_bridge(handle, store, token, conns, services, plans, runtime)
+                        .await
                 {
                     tracing::error!("MCP stdio-bridge failed: {e}");
                 }

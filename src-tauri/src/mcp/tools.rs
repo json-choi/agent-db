@@ -217,9 +217,9 @@ impl DbTools {
         store: Store,
         app: AppHandle,
         conns: ConnectionManager,
+        services: ApplicationServices,
         plans: QueryPlanStore,
     ) -> Self {
-        let services = ApplicationServices::new(store.clone(), conns.clone());
         Self {
             store,
             events: ToolEventSink::tauri(app),
@@ -233,10 +233,10 @@ impl DbTools {
     fn new_for_test(
         store: Store,
         conns: ConnectionManager,
+        services: ApplicationServices,
         plans: QueryPlanStore,
     ) -> (Self, RecordedToolEvents) {
         let (events, recorded) = ToolEventSink::recording();
-        let services = ApplicationServices::new(store.clone(), conns.clone());
         (
             Self {
                 store,
