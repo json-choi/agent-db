@@ -1188,13 +1188,18 @@ impl Store {
         self.pin_connection_with_access(id, true).await
     }
 
-    /// Resolve a connection for saved-dashboard metadata. A Viewer may inspect and
-    /// manage dashboard definitions without receiving database execution authority.
+    /// Resolve connection metadata for local inspection. A Viewer may inspect
+    /// definitions without receiving target-database execution authority.
+    pub(crate) async fn pin_connection_for_view(&self, id: Uuid) -> AppResult<PinnedConnection> {
+        self.pin_connection_with_access(id, false).await
+    }
+
+    /// Dashboard metadata uses the generic view-capable connection pin.
     pub(crate) async fn pin_connection_for_dashboard(
         &self,
         id: Uuid,
     ) -> AppResult<PinnedConnection> {
-        self.pin_connection_with_access(id, false).await
+        self.pin_connection_for_view(id).await
     }
 
     async fn pin_connection_with_access(

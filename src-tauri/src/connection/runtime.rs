@@ -218,12 +218,14 @@ impl ConnectionOperationScope {
         self.manager.inner.store.pin_connection_for_read(id).await
     }
 
+    /// Pin connection metadata for local inspection without granting target-database
+    /// execution. Read/Write authorization still happens if the scope is connected.
+    pub(crate) async fn pin_connection_for_view(&self, id: Uuid) -> AppResult<PinnedConnection> {
+        self.manager.inner.store.pin_connection_for_view(id).await
+    }
+
     pub(crate) async fn pin_dashboard_connection(&self, id: Uuid) -> AppResult<PinnedConnection> {
-        self.manager
-            .inner
-            .store
-            .pin_connection_for_dashboard(id)
-            .await
+        self.pin_connection_for_view(id).await
     }
 
     pub(crate) async fn pin_dashboard(&self, id: Uuid) -> AppResult<PinnedDashboard> {

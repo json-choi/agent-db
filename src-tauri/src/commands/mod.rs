@@ -19,16 +19,17 @@ use crate::connection::{self, ConnectionAccess, ConnectionLease, DbPool};
 use crate::error::{AppError, AppResult};
 use crate::executor;
 use crate::model::{
-    Classification, ConnectionProfile, Dashboard, DashboardDraft, DocumentQuery, Engine,
-    ExecOutcome, HistoryEntry, MonitoringStatus, PlatformFeatureFlags, PreviewMode, PreviewReport,
-    QueryKind, QueryResult, SafetySettings, Workspace, WorkspaceAuthState, WorkspaceAuthUser,
-    WorkspaceConnectionAccess, WorkspaceCredentialMode, WorkspaceDeviceAuthorization,
-    WorkspaceFeatureState, WorkspaceKind, WorkspaceLoginPoll,
+    ConnectionProfile, Dashboard, DashboardDraft, DocumentQuery, Engine, ExecOutcome, HistoryEntry,
+    MonitoringStatus, PlatformFeatureFlags, QueryKind, QueryResult, SafetySettings, Workspace,
+    WorkspaceAuthState, WorkspaceAuthUser, WorkspaceConnectionAccess, WorkspaceCredentialMode,
+    WorkspaceDeviceAuthorization, WorkspaceFeatureState, WorkspaceKind, WorkspaceLoginPoll,
 };
 use crate::monitoring;
-use crate::safety::{classify, decide, preview, GateDecision, PoolRef};
+use crate::safety::{classify, decide, GateDecision, PoolRef};
 use crate::services::{
-    CatalogReadPolicy, DesktopDocumentReadError, DesktopDocumentReadRequest, DocumentReadReceipt,
+    CatalogReadPolicy, DesktopDocumentReadError, DesktopDocumentReadRequest,
+    DesktopSqlClassificationReceipt, DesktopSqlClassificationRequest, DesktopSqlInspectionError,
+    DesktopSqlPreviewReceipt, DesktopSqlPreviewRequest, DocumentReadReceipt,
 };
 use crate::state::AppState;
 use crate::store::PinnedConnection;
@@ -1115,17 +1116,16 @@ pub async fn classify_sql(
     state: State<'_, AppState>,
     id: Uuid,
     sql: String,
-) -> AppResult<Classification> {
-    let profile = state.store.get_connection(id).await?;
-    classify(&sql, profile.engine)
-}
-
-fn preview_connection_access(kind: QueryKind, execute_preview_enabled: bool) -> ConnectionAccess {
-    if matches!(kind, QueryKind::Write) && execute_preview_enabled {
-        ConnectionAccess::Write
-    } else {
-        ConnectionAccess::Read
-    }
+) -> AppResult<DesktopSqlClassificationReceipt> {
+    state
+        .services
+        .query
+        .classify_desktop_sql(DesktopSqlClassificationRequest {
+            connection_id: id,
+            sql,
+        })
+        .await
+        .map_err(DesktopSqlInspectionError::into_error)
 }
 
 #[tauri::command]
@@ -1133,63 +1133,16 @@ pub async fn preview_sql(
     state: State<'_, AppState>,
     id: Uuid,
     sql: String,
-) -> AppResult<PreviewReport> {
-    let profile = state.store.get_connection(id).await?;
-    let settings = state.store.get_safety(id).await?;
-    let classification = classify(&sql, profile.engine)?;
-    let needs_write_pool = !matches!(classification.kind, QueryKind::Read);
-
-    if needs_write_pool && !profile.workspace_access.can_write() {
-        return Ok(PreviewReport {
-            mode: PreviewMode::Skipped,
-            estimated_rows: None,
-            exact_rows: None,
-            plan: None,
-            note: Some("workspace role is read-only — write preview skipped".into()),
-        });
-    }
-    // A write/DDL preview runs a real execute+rollback (takes row locks, fires
-    // triggers/NOTIFY). Never do that on a writes-disabled connection — skip it.
-    if needs_write_pool && !settings.allow_writes {
-        return Ok(PreviewReport {
-            mode: PreviewMode::Skipped,
-            estimated_rows: None,
-            exact_rows: None,
-            plan: None,
-            note: Some(
-                "writes are disabled for this connection — impact preview skipped (no rows locked)"
-                    .into(),
-            ),
-        });
-    }
-
-    let live = get_live_with_access(
-        &state,
-        id,
-        preview_connection_access(classification.kind, settings.explain_preview),
-    )
-    .await?;
-    let live = live.live().sql()?;
-
-    // explain_preview off → EXPLAIN-plan only, never execute+rollback. EXPLAIN (no
-    // ANALYZE) plans a write without running it, so route the write through the
-    // Read/EXPLAIN branch to honor the toggle.
-    if matches!(classification.kind, QueryKind::Write) && !settings.explain_preview {
-        let explain_only = Classification {
-            kind: QueryKind::Read,
-            ..classification
-        };
-        return preview(pool_ref(&live.read_pool), &sql, &explain_only, &settings).await;
-    }
-
-    // Reads preview via EXPLAIN on the read-only pool; write previews execute + roll
-    // back, which must run on the read/write pool.
-    let db = if needs_write_pool {
-        &live.write_pool
-    } else {
-        &live.read_pool
-    };
-    preview(pool_ref(db), &sql, &classification, &settings).await
+) -> AppResult<DesktopSqlPreviewReceipt> {
+    state
+        .services
+        .query
+        .preview_desktop_sql(DesktopSqlPreviewRequest {
+            connection_id: id,
+            sql,
+        })
+        .await
+        .map_err(DesktopSqlInspectionError::into_error)
 }
 
 // ── execution (L4 gate → executor → audit) ───────────────────────────────────
@@ -1849,9 +1802,9 @@ pub async fn set_safety(
     if !profile.workspace_access.can_write() {
         settings.allow_writes = false;
     }
-    let _authorization = state
+    let _mutation = state
         .connections
-        .pin(
+        .begin_connection_mutation(
             id,
             if settings.allow_writes {
                 ConnectionAccess::Write
@@ -2262,27 +2215,6 @@ pub async fn pick_file(app: tauri::AppHandle) -> Option<String> {
         .blocking_pick_file()
         .and_then(|path| path.into_path().ok())
         .map(|path| path.to_string_lossy().into_owned())
-}
-
-#[cfg(test)]
-mod preview_tests {
-    use super::*;
-
-    #[test]
-    fn explain_only_write_preview_never_requests_write_credentials() {
-        assert_eq!(
-            preview_connection_access(QueryKind::Write, false),
-            ConnectionAccess::Read
-        );
-        assert_eq!(
-            preview_connection_access(QueryKind::Write, true),
-            ConnectionAccess::Write
-        );
-        assert_eq!(
-            preview_connection_access(QueryKind::Ddl, true),
-            ConnectionAccess::Read
-        );
-    }
 }
 
 #[cfg(test)]

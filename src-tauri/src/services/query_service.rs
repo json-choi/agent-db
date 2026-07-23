@@ -12,10 +12,14 @@ use uuid::Uuid;
 
 use crate::audit::{self, RecordArgs};
 use crate::connection::{
-    ConnectionAccess, ConnectionContext, ConnectionLease, ConnectionManager, DbPool,
+    ConnectionAccess, ConnectionContext, ConnectionLease, ConnectionManager,
+    ConnectionOperationScope, DbPool,
 };
 use crate::error::AppError;
-use crate::model::{ConnectionProfile, Engine, HistoryEntry, QueryKind, QueryResult};
+use crate::model::{
+    Classification, ConnectionProfile, Engine, HistoryEntry, PreviewMode, PreviewReport, QueryKind,
+    QueryResult, SafetySettings,
+};
 use crate::monitoring::{self, HealthSnapshot};
 use crate::safety::{self, PoolRef};
 use crate::store::{AccountScope, PinnedConnection, Store};
@@ -30,6 +34,79 @@ pub(crate) const MAX_QUERY_PLANS: usize = 256;
 
 /// Hard agent result cap, independent of a connection's more permissive setting.
 pub(crate) const MAX_AGENT_ROWS: u64 = 1000;
+
+/// Desktop SQL-classification input after the Tauri adapter has decoded its wire
+/// arguments. The service resolves the connection engine from one authority pin;
+/// adapters never pass a separately fetched profile or engine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DesktopSqlClassificationRequest {
+    pub(crate) connection_id: Uuid,
+    pub(crate) sql: String,
+}
+
+/// Desktop impact-preview input. Connection selection and permissions remain
+/// service-owned so a transport cannot mix profiles fetched from different scopes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DesktopSqlPreviewRequest {
+    pub(crate) connection_id: Uuid,
+    pub(crate) sql: String,
+}
+
+/// Classification result retaining the active workspace/account scope through
+/// adapter serialization. Its serialized form is exactly the legacy
+/// [`Classification`] payload.
+pub(crate) struct DesktopSqlClassificationReceipt {
+    classification: Classification,
+    _scope: ConnectionOperationScope,
+}
+
+impl serde::Serialize for DesktopSqlClassificationReceipt {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serde::Serialize::serialize(&self.classification, serializer)
+    }
+}
+
+/// Authority retained by an impact preview. Pre-connection skipped reports keep
+/// the operation scope itself; reports that touched the database keep the exact
+/// connection lease used to produce them.
+enum DesktopSqlPreviewAuthority {
+    Scope { _scope: ConnectionOperationScope },
+    Lease { _lease: Box<ConnectionLease> },
+}
+
+/// Preview result retaining its authority boundary through adapter serialization.
+/// Its serialized form is exactly the legacy [`PreviewReport`] payload.
+pub(crate) struct DesktopSqlPreviewReceipt {
+    report: PreviewReport,
+    _authority: DesktopSqlPreviewAuthority,
+}
+
+impl serde::Serialize for DesktopSqlPreviewReceipt {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serde::Serialize::serialize(&self.report, serializer)
+    }
+}
+
+/// Desktop classification/preview failures retain the structured `AppError`
+/// contract currently returned by Tauri.
+#[derive(Debug)]
+pub(crate) enum DesktopSqlInspectionError {
+    Application(AppError),
+}
+
+impl DesktopSqlInspectionError {
+    pub(crate) fn into_error(self) -> AppError {
+        match self {
+            Self::Application(error) => error,
+        }
+    }
+}
 
 /// Trusted local adapter family that initiated a query capability. The value is
 /// frozen into the plan so a later runner cannot relabel its audit provenance.
@@ -431,6 +508,116 @@ impl QueryService {
         }
     }
 
+    /// Classify SQL against the engine from one scope-pinned connection. The
+    /// returned receipt keeps that scope stable while the adapter serializes the
+    /// legacy classification payload.
+    pub(crate) async fn classify_desktop_sql(
+        &self,
+        request: DesktopSqlClassificationRequest,
+    ) -> Result<DesktopSqlClassificationReceipt, DesktopSqlInspectionError> {
+        let operation_scope = self.connections.begin_operation_scope().await;
+        let pin = operation_scope
+            .pin_connection_for_view(request.connection_id)
+            .await
+            .map_err(DesktopSqlInspectionError::Application)?;
+        let classification = safety::classify(&request.sql, pin.profile.engine)
+            .map_err(DesktopSqlInspectionError::Application)?;
+
+        Ok(DesktopSqlClassificationReceipt {
+            classification,
+            _scope: operation_scope,
+        })
+    }
+
+    /// Produce the desktop L3 impact preview from one authority snapshot.
+    ///
+    /// Pre-connection policy skips deliberately avoid opening a target pool.
+    /// Database-backed previews consume the same operation scope that pinned the
+    /// profile, closing the previous connection/profile re-acquisition window.
+    pub(crate) async fn preview_desktop_sql(
+        &self,
+        request: DesktopSqlPreviewRequest,
+    ) -> Result<DesktopSqlPreviewReceipt, DesktopSqlInspectionError> {
+        let operation_scope = self.connections.begin_operation_scope().await;
+        let pin = operation_scope
+            .pin_connection_for_view(request.connection_id)
+            .await
+            .map_err(DesktopSqlInspectionError::Application)?;
+        let settings = self
+            .store
+            .get_safety(pin.connection_id)
+            .await
+            .map_err(DesktopSqlInspectionError::Application)?;
+        let classification = safety::classify(&request.sql, pin.profile.engine)
+            .map_err(DesktopSqlInspectionError::Application)?;
+        let is_non_read = !matches!(classification.kind, QueryKind::Read);
+
+        if !is_non_read && !pin.profile.workspace_access.can_read() {
+            return Err(DesktopSqlInspectionError::Application(AppError::Blocked {
+                reason: "workspace role cannot execute this connection".into(),
+            }));
+        }
+        if is_non_read && !pin.profile.workspace_access.can_write() {
+            return Ok(DesktopSqlPreviewReceipt {
+                report: skipped_preview_report(
+                    "workspace role is read-only — write preview skipped",
+                ),
+                _authority: DesktopSqlPreviewAuthority::Scope {
+                    _scope: operation_scope,
+                },
+            });
+        }
+        if is_non_read && !settings.allow_writes {
+            return Ok(DesktopSqlPreviewReceipt {
+                report: skipped_preview_report(
+                    "writes are disabled for this connection — impact preview skipped (no rows locked)",
+                ),
+                _authority: DesktopSqlPreviewAuthority::Scope {
+                    _scope: operation_scope,
+                },
+            });
+        }
+
+        let access = desktop_preview_connection_access(&classification, &settings);
+        let lease = operation_scope
+            .connect(pin, access)
+            .await
+            .map_err(DesktopSqlInspectionError::Application)?;
+        let live = lease
+            .live()
+            .sql()
+            .map_err(DesktopSqlInspectionError::Application)?;
+
+        // explain_preview off means plan-only for a write. Reclassifying only this
+        // L3 invocation to Read keeps safety::preview on its EXPLAIN branch.
+        let report = if matches!(classification.kind, QueryKind::Write) && !settings.explain_preview
+        {
+            let explain_only = Classification {
+                kind: QueryKind::Read,
+                ..classification
+            };
+            safety::preview(pool_ref(live.ro()), &request.sql, &explain_only, &settings)
+                .await
+                .map_err(DesktopSqlInspectionError::Application)?
+        } else {
+            let db = if access == ConnectionAccess::Write {
+                &live.write_pool
+            } else {
+                live.ro()
+            };
+            safety::preview(pool_ref(db), &request.sql, &classification, &settings)
+                .await
+                .map_err(DesktopSqlInspectionError::Application)?
+        };
+
+        Ok(DesktopSqlPreviewReceipt {
+            report,
+            _authority: DesktopSqlPreviewAuthority::Lease {
+                _lease: Box::new(lease),
+            },
+        })
+    }
+
     /// Classify, preview, and inspect aggregate health before minting one immutable
     /// single-use plan. A `caution` decision is guidance and never an execution block.
     pub(crate) async fn plan_agent_read(
@@ -728,6 +915,27 @@ fn bounded_max_rows(requested: Option<u64>, configured: u64) -> u64 {
     requested.unwrap_or(configured).min(MAX_AGENT_ROWS)
 }
 
+fn desktop_preview_connection_access(
+    classification: &Classification,
+    settings: &SafetySettings,
+) -> ConnectionAccess {
+    if matches!(classification.kind, QueryKind::Write) && settings.explain_preview {
+        ConnectionAccess::Write
+    } else {
+        ConnectionAccess::Read
+    }
+}
+
+fn skipped_preview_report(note: &str) -> PreviewReport {
+    PreviewReport {
+        mode: PreviewMode::Skipped,
+        estimated_rows: None,
+        exact_rows: None,
+        plan: None,
+        note: Some(note.into()),
+    }
+}
+
 fn pool_ref(db: &DbPool) -> PoolRef<'_> {
     match db {
         DbPool::Postgres(pool) => PoolRef::Postgres(pool),
@@ -894,7 +1102,7 @@ mod tests {
 
     use super::*;
     use crate::model::{
-        Provider, WorkspaceConnectionAccess, WorkspaceCredentialMode, WorkspaceKind,
+        Provider, RiskLevel, WorkspaceConnectionAccess, WorkspaceCredentialMode, WorkspaceKind,
     };
     use crate::store::{ActiveResourceScope, CatalogCachePolicy, TEST_SCHEMA};
 
@@ -941,6 +1149,18 @@ mod tests {
         }
     }
 
+    fn classification(kind: QueryKind, rollback_safe: bool) -> Classification {
+        Classification {
+            kind,
+            risk: RiskLevel::Low,
+            statement_count: 1,
+            no_where: false,
+            tables: vec![],
+            notes: vec![],
+            rollback_safe,
+        }
+    }
+
     fn stored_plan(created_at: Instant, identity: PlannedConnectionIdentity) -> StoredReadPlan {
         StoredReadPlan {
             connection_id: Uuid::from_u128(2),
@@ -952,6 +1172,69 @@ mod tests {
             created_at,
             insertion_order: 0,
         }
+    }
+
+    #[test]
+    fn desktop_preview_access_preserves_legacy_access_matrix() {
+        let mut settings = SafetySettings {
+            allow_writes: true,
+            explain_preview: true,
+            ..SafetySettings::default()
+        };
+
+        assert_eq!(
+            desktop_preview_connection_access(&classification(QueryKind::Read, false), &settings),
+            ConnectionAccess::Read
+        );
+        assert_eq!(
+            desktop_preview_connection_access(&classification(QueryKind::Write, true), &settings),
+            ConnectionAccess::Write
+        );
+        assert_eq!(
+            desktop_preview_connection_access(&classification(QueryKind::Write, false), &settings),
+            ConnectionAccess::Write
+        );
+        assert_eq!(
+            desktop_preview_connection_access(&classification(QueryKind::Ddl, false), &settings),
+            ConnectionAccess::Read
+        );
+        assert_eq!(
+            desktop_preview_connection_access(
+                &classification(QueryKind::Privilege, false),
+                &settings
+            ),
+            ConnectionAccess::Read
+        );
+
+        settings.explain_preview = false;
+        assert_eq!(
+            desktop_preview_connection_access(&classification(QueryKind::Write, true), &settings),
+            ConnectionAccess::Read
+        );
+    }
+
+    #[test]
+    fn desktop_static_preview_reports_keep_exact_legacy_messages() {
+        let workspace =
+            skipped_preview_report("workspace role is read-only — write preview skipped");
+        assert_eq!(workspace.mode, PreviewMode::Skipped);
+        assert_eq!(workspace.estimated_rows, None);
+        assert_eq!(workspace.exact_rows, None);
+        assert_eq!(workspace.plan, None);
+        assert_eq!(
+            workspace.note.as_deref(),
+            Some("workspace role is read-only — write preview skipped")
+        );
+
+        let disabled = skipped_preview_report(
+            "writes are disabled for this connection — impact preview skipped (no rows locked)",
+        );
+        assert_eq!(
+            disabled.note.as_deref(),
+            Some(
+                "writes are disabled for this connection — impact preview skipped (no rows locked)"
+            )
+        );
     }
 
     #[test]
@@ -1191,6 +1474,531 @@ mod tests {
                 .close()
                 .expect("temporary SQLite directory must be removable after pool shutdown");
         }
+
+        async fn user_name(&self, id: i64) -> String {
+            let lease = self
+                .connections
+                .acquire(self.connection_id, ConnectionAccess::Read)
+                .await
+                .unwrap();
+            let live = lease.live().sql().unwrap();
+            match live.ro() {
+                DbPool::Sqlite(pool) => sqlx::query_scalar("SELECT name FROM users WHERE id = ?")
+                    .bind(id)
+                    .fetch_one(pool)
+                    .await
+                    .unwrap(),
+                _ => panic!("query-service harness must use SQLite"),
+            }
+        }
+
+        async fn set_connection_access_for_test(&self, access: &str) {
+            sqlx::query(
+                "UPDATE connections
+                 SET workspace_access = ?2, revision = revision + 1
+                 WHERE id = ?1",
+            )
+            .bind(self.connection_id.to_string())
+            .bind(access)
+            .execute(self.store.pool())
+            .await
+            .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn desktop_classification_is_view_capable_and_holds_scope_through_serialization() {
+        let harness = SqliteHarness::new().await;
+        harness.set_connection_access_for_test("view").await;
+
+        let receipt = harness
+            .service
+            .classify_desktop_sql(DesktopSqlClassificationRequest {
+                connection_id: harness.connection_id,
+                sql: "SELECT id FROM users".into(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(receipt.classification.kind, QueryKind::Read);
+        let serialized = serde_json::to_value(&receipt).unwrap();
+        assert_eq!(
+            serialized,
+            serde_json::json!({
+                "kind": "read",
+                "risk": "low",
+                "statementCount": 1,
+                "noWhere": false,
+                "tables": ["users"],
+                "notes": [],
+                "rollbackSafe": false
+            }),
+            "desktop classification must retain the literal legacy wire contract"
+        );
+        assert_eq!(
+            serialized,
+            serde_json::to_value(&receipt.classification).unwrap(),
+            "receipt serialization must preserve the legacy Classification shape"
+        );
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(100),
+                harness.connections.begin_scope_mutation(),
+            )
+            .await
+            .is_err(),
+            "classification receipt must retain the scope guard through serialization"
+        );
+        drop(receipt);
+        let mutation = tokio::time::timeout(
+            Duration::from_secs(5),
+            harness.connections.begin_scope_mutation(),
+        )
+        .await
+        .expect("scope writer must proceed after classification receipt drop");
+        drop(mutation);
+
+        harness.set_connection_access_for_test("local").await;
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn desktop_preview_preserves_viewer_gate_order_and_exact_messages() {
+        let harness = SqliteHarness::new().await;
+        harness.set_connection_access_for_test("view").await;
+
+        let write_receipt = harness
+            .service
+            .preview_desktop_sql(DesktopSqlPreviewRequest {
+                connection_id: harness.connection_id,
+                sql: "UPDATE users SET name = 'Grace' WHERE id = 1".into(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(write_receipt.report.mode, PreviewMode::Skipped);
+        assert_eq!(
+            write_receipt.report.note.as_deref(),
+            Some("workspace role is read-only — write preview skipped")
+        );
+        assert_eq!(
+            serde_json::to_value(&write_receipt).unwrap(),
+            serde_json::json!({
+                "mode": "skipped",
+                "estimatedRows": null,
+                "exactRows": null,
+                "plan": null,
+                "note": "workspace role is read-only — write preview skipped"
+            }),
+            "desktop preview must retain the literal legacy wire contract"
+        );
+        drop(write_receipt);
+
+        let read_error = match harness
+            .service
+            .preview_desktop_sql(DesktopSqlPreviewRequest {
+                connection_id: harness.connection_id,
+                sql: "SELECT id FROM users".into(),
+            })
+            .await
+        {
+            Err(error) => error.into_error(),
+            Ok(_) => panic!("viewer read preview must fail at target authorization"),
+        };
+        assert_eq!(
+            serde_json::to_value(&read_error).unwrap(),
+            serde_json::json!({
+                "kind": "blocked",
+                "message": "blocked: workspace role cannot execute this connection"
+            }),
+            "desktop preview errors must retain the literal legacy AppError wire contract"
+        );
+        assert!(matches!(
+            read_error,
+            AppError::Blocked { reason }
+                if reason == "workspace role cannot execute this connection"
+        ));
+
+        harness.set_connection_access_for_test("local").await;
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn desktop_preconnection_skips_do_not_open_the_target_database() {
+        let harness = SqliteHarness::new().await;
+        let invalid_database = harness
+            .directory
+            .path()
+            .join("missing-parent")
+            .join("target.db")
+            .to_string_lossy()
+            .into_owned();
+
+        let mut writes_disabled = harness.profile.clone();
+        writes_disabled.database = invalid_database.clone();
+        writes_disabled.allow_writes = true;
+        harness
+            .store
+            .upsert_connection(&writes_disabled)
+            .await
+            .unwrap();
+        let mut settings = harness
+            .store
+            .get_safety(harness.connection_id)
+            .await
+            .unwrap();
+        settings.allow_writes = false;
+        harness
+            .store
+            .set_safety(harness.connection_id, &settings)
+            .await
+            .unwrap();
+
+        let disabled_receipt = harness
+            .service
+            .preview_desktop_sql(DesktopSqlPreviewRequest {
+                connection_id: harness.connection_id,
+                sql: "DELETE FROM users WHERE id = 1".into(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            disabled_receipt.report.note.as_deref(),
+            Some(
+                "writes are disabled for this connection — impact preview skipped (no rows locked)"
+            )
+        );
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(100),
+                harness.connections.begin_scope_mutation(),
+            )
+            .await
+            .is_err(),
+            "pre-connection skipped receipt must retain its scope guard through serialization"
+        );
+        drop(disabled_receipt);
+        let mutation = tokio::time::timeout(
+            Duration::from_secs(5),
+            harness.connections.begin_scope_mutation(),
+        )
+        .await
+        .expect("scope writer must proceed after skipped preview receipt drop");
+        drop(mutation);
+
+        harness.set_connection_access_for_test("view").await;
+        settings.allow_writes = true;
+        harness
+            .store
+            .set_safety(harness.connection_id, &settings)
+            .await
+            .unwrap();
+        let readonly_receipt = harness
+            .service
+            .preview_desktop_sql(DesktopSqlPreviewRequest {
+                connection_id: harness.connection_id,
+                sql: "DELETE FROM users WHERE id = 1".into(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            readonly_receipt.report.note.as_deref(),
+            Some("workspace role is read-only — write preview skipped")
+        );
+        drop(readonly_receipt);
+
+        harness.set_connection_access_for_test("local").await;
+        harness
+            .store
+            .upsert_connection(&harness.profile)
+            .await
+            .unwrap();
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn desktop_read_preview_preserves_wire_shape_and_lease_guard() {
+        let harness = SqliteHarness::new().await;
+        let receipt = harness
+            .service
+            .preview_desktop_sql(DesktopSqlPreviewRequest {
+                connection_id: harness.connection_id,
+                sql: "SELECT id, name FROM users ORDER BY id".into(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(receipt.report.mode, PreviewMode::Explain);
+        assert_eq!(
+            serde_json::to_value(&receipt).unwrap(),
+            serde_json::to_value(&receipt.report).unwrap(),
+            "receipt serialization must preserve the legacy PreviewReport shape"
+        );
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(100),
+                harness.connections.begin_scope_mutation(),
+            )
+            .await
+            .is_err(),
+            "preview receipt must retain the live lease through serialization"
+        );
+        drop(receipt);
+        let mutation = tokio::time::timeout(
+            Duration::from_secs(5),
+            harness.connections.begin_scope_mutation(),
+        )
+        .await
+        .expect("scope writer must proceed after preview receipt drop");
+        drop(mutation);
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn desktop_preview_receipt_serializes_safety_mutation_until_drop() {
+        let harness = SqliteHarness::new().await;
+        let receipt = harness
+            .service
+            .preview_desktop_sql(DesktopSqlPreviewRequest {
+                connection_id: harness.connection_id,
+                sql: "SELECT id FROM users".into(),
+            })
+            .await
+            .unwrap();
+
+        let mut updated = harness
+            .store
+            .get_safety(harness.connection_id)
+            .await
+            .unwrap();
+        assert_eq!(updated.max_rows, 1000);
+        updated.max_rows = 77;
+
+        let store = harness.store.clone();
+        let connections = harness.connections.clone();
+        let connection_id = harness.connection_id;
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let mut updater = tokio::spawn(async move {
+            started_tx
+                .send(())
+                .expect("test must observe safety mutation start");
+            let _mutation = connections
+                .begin_connection_mutation(connection_id, ConnectionAccess::Read)
+                .await
+                .unwrap();
+            store.set_safety(connection_id, &updated).await.unwrap();
+        });
+        started_rx
+            .await
+            .expect("safety mutation task must reach the scope writer");
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), &mut updater)
+                .await
+                .is_err(),
+            "safety mutation must wait while the preview receipt retains its authority"
+        );
+        assert_eq!(
+            harness
+                .store
+                .get_safety(harness.connection_id)
+                .await
+                .unwrap()
+                .max_rows,
+            1000,
+            "waiting mutation must not publish settings early"
+        );
+
+        drop(receipt);
+        tokio::time::timeout(Duration::from_secs(5), updater)
+            .await
+            .expect("safety mutation must proceed after preview receipt drop")
+            .expect("safety mutation task must succeed");
+        assert_eq!(
+            harness
+                .store
+                .get_safety(harness.connection_id)
+                .await
+                .unwrap()
+                .max_rows,
+            77
+        );
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn desktop_write_preview_disabled_is_read_authorized_and_explain_only() {
+        let harness = SqliteHarness::new().await;
+        let mut settings = harness
+            .store
+            .get_safety(harness.connection_id)
+            .await
+            .unwrap();
+        settings.allow_writes = true;
+        settings.explain_preview = false;
+        harness
+            .store
+            .set_safety(harness.connection_id, &settings)
+            .await
+            .unwrap();
+
+        // The profile write gate remains false. Success therefore proves that this
+        // branch requested Read access and never entered execute+rollback.
+        assert!(!harness.profile.allow_writes);
+        let receipt = harness
+            .service
+            .preview_desktop_sql(DesktopSqlPreviewRequest {
+                connection_id: harness.connection_id,
+                sql: "UPDATE users SET name = 'Grace' WHERE id = 1".into(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(receipt.report.mode, PreviewMode::Explain);
+        assert_eq!(receipt.report.exact_rows, None);
+        drop(receipt);
+        assert_eq!(harness.user_name(1).await, "Ada");
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn desktop_rollback_preview_requires_write_and_rolls_back_exactly() {
+        let harness = SqliteHarness::new().await;
+        let mut writable = harness.profile.clone();
+        writable.allow_writes = true;
+        harness.store.upsert_connection(&writable).await.unwrap();
+        let mut settings = harness
+            .store
+            .get_safety(harness.connection_id)
+            .await
+            .unwrap();
+        settings.allow_writes = true;
+        settings.explain_preview = true;
+        harness
+            .store
+            .set_safety(harness.connection_id, &settings)
+            .await
+            .unwrap();
+
+        let receipt = harness
+            .service
+            .preview_desktop_sql(DesktopSqlPreviewRequest {
+                connection_id: harness.connection_id,
+                sql: "UPDATE users SET name = 'Grace' WHERE id = 1".into(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(receipt.report.mode, PreviewMode::ExecRollback);
+        assert_eq!(receipt.report.exact_rows, Some(1));
+        drop(receipt);
+        assert_eq!(harness.user_name(1).await, "Ada");
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn desktop_nonrollback_write_keeps_legacy_write_authorization() {
+        let harness = SqliteHarness::new().await;
+        let mut settings = harness
+            .store
+            .get_safety(harness.connection_id)
+            .await
+            .unwrap();
+        settings.allow_writes = true;
+        settings.explain_preview = true;
+        harness
+            .store
+            .set_safety(harness.connection_id, &settings)
+            .await
+            .unwrap();
+
+        let error = match harness
+            .service
+            .preview_desktop_sql(DesktopSqlPreviewRequest {
+                connection_id: harness.connection_id,
+                sql: "this is not sql".into(),
+            })
+            .await
+        {
+            Err(error) => error.into_error(),
+            Ok(_) => panic!("legacy non-rollback-safe write preview must request Write access"),
+        };
+        assert!(matches!(
+            error,
+            AppError::Blocked { reason }
+                if reason == "your workspace role does not permit this database action"
+        ));
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn desktop_ddl_preview_connects_then_returns_exact_l3_skip() {
+        let harness = SqliteHarness::new().await;
+        let mut settings = harness
+            .store
+            .get_safety(harness.connection_id)
+            .await
+            .unwrap();
+        settings.allow_writes = true;
+        harness
+            .store
+            .set_safety(harness.connection_id, &settings)
+            .await
+            .unwrap();
+
+        let receipt = harness
+            .service
+            .preview_desktop_sql(DesktopSqlPreviewRequest {
+                connection_id: harness.connection_id,
+                sql: "CREATE TABLE preview_only (id INTEGER PRIMARY KEY)".into(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(receipt.report.mode, PreviewMode::Skipped);
+        assert_eq!(
+            receipt.report.note.as_deref(),
+            Some("DDL / privilege change — no row-count preview; review the statement directly.")
+        );
+        drop(receipt);
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn desktop_ddl_preview_preserves_legacy_target_touch_order() {
+        let harness = SqliteHarness::new().await;
+        let mut invalid = harness.profile.clone();
+        invalid.database = harness
+            .directory
+            .path()
+            .join("missing-parent")
+            .join("target.db")
+            .to_string_lossy()
+            .into_owned();
+        harness.store.upsert_connection(&invalid).await.unwrap();
+
+        let mut settings = harness
+            .store
+            .get_safety(harness.connection_id)
+            .await
+            .unwrap();
+        settings.allow_writes = true;
+        harness
+            .store
+            .set_safety(harness.connection_id, &settings)
+            .await
+            .unwrap();
+
+        let error = match harness
+            .service
+            .preview_desktop_sql(DesktopSqlPreviewRequest {
+                connection_id: harness.connection_id,
+                sql: "CREATE TABLE preview_only (id INTEGER PRIMARY KEY)".into(),
+            })
+            .await
+        {
+            Err(error) => error.into_error(),
+            Ok(_) => panic!("legacy DDL preview must touch the target before the L3 skip"),
+        };
+        assert!(
+            matches!(error, AppError::Db(_)),
+            "missing target must surface the legacy database-open error, got {error}"
+        );
+        harness.close().await;
     }
 
     #[tokio::test]
@@ -1540,7 +2348,7 @@ mod tests {
         assert_eq!(plan_receipt.plan().plan_id, plan_id);
         drop(plan_receipt);
         let mutation = tokio::time::timeout(
-            Duration::from_secs(1),
+            Duration::from_secs(5),
             harness.connections.begin_scope_mutation(),
         )
         .await
@@ -1562,7 +2370,7 @@ mod tests {
         assert_eq!(run_receipt.run().query_run_id, query_run_id);
         drop(run_receipt);
         let mutation = tokio::time::timeout(
-            Duration::from_secs(1),
+            Duration::from_secs(5),
             harness.connections.begin_scope_mutation(),
         )
         .await
