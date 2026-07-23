@@ -1,8 +1,9 @@
 # Workspace Collaboration Roadmap
 
 Status: Milestone 0 implemented; Milestone 1 identity/RBAC slice implemented;
-Milestone 2 shared-connection core implemented. The remaining sync, envelope-encryption,
-backup, workspace-deletion, and per-connection-grant exit criteria stay open below.
+Milestone 2 shared-connection core and optional PlanetScale managed-access slice
+implemented. General provider federation, full sync, KMS wrapping, backup,
+workspace-deletion, and per-connection-grant exit criteria stay open below.
 
 This roadmap defines how DopeDB can add team workspaces without turning the
 workspace service into a database proxy or weakening the local safety boundary.
@@ -23,10 +24,14 @@ Use a local-execution, hosted-control-plane architecture:
 
 - The workspace service synchronizes membership, connection templates, dashboards,
   analysis reports, revisions, and collaboration audit events.
-- Each desktop app keeps database credentials in that member's OS credential store.
-- Provider API credentials also remain bound to a member and device by default. The
-  workspace service synchronizes redacted provider resource metadata, not raw API
-  tokens or one-time credentials.
+- Member-local mode keeps database credentials in that member's OS credential store.
+- Optional managed mode encrypts a workspace-owned provider OAuth grant at the control
+  plane and uses it only to create member-specific, least-privilege, short-lived
+  database credentials. Those one-time credentials are never persisted by the
+  service or desktop and are dropped from process memory with the live pool.
+- Provider authentication is adapter-based. Pipedream Connect can later replace
+  direct provider OAuth for broad managed-auth coverage, but DopeDB remains responsible
+  for workspace RBAC, resource scope, audit, and short-lived DB credential issuance.
 - Queries continue to run from the desktop app through the existing Rust safety,
   monitoring, audit, and read-only execution paths.
 - Query result rows are not synchronized by default. Publishing a bounded result
@@ -45,14 +50,19 @@ flowchart LR
     W --> R["connection templates · dashboards · reports"]
     W --> P["provider resources · permissions · approvals"]
     W --> V["revisions · collaboration audit"]
-    A --> KA["A's OS credential store"]
-    B --> KB["B's OS credential store"]
+    A --> KA["A's OS credential store · local mode"]
+    B --> KB["B's OS credential store · local mode"]
     KA --> D["Target database"]
     KB --> D
     KA --> PA["local provider adapter"]
     KB --> PB["local provider adapter"]
     PA --> API["Neon · PlanetScale API"]
     PB --> API
+    W --> MI["encrypted provider grant · managed mode"]
+    MI --> API
+    API --> EP["member-specific TTL DB credential"]
+    EP -.->|"HTTPS once · memory only"| A
+    EP -.->|"HTTPS once · memory only"| B
     A --> SA["local MCP and safety pipeline"]
     B --> SB["local MCP and safety pipeline"]
 ```
@@ -92,8 +102,10 @@ database work remains in the Tauri app.
 ## Goals
 
 - Let a user create a workspace and invite teammates with clear roles.
-- Share connection definitions without sharing raw passwords by default.
+- Share connection definitions without sharing long-lived raw passwords.
 - Let each member bind their own database credential to a shared connection.
+- Let an admin optionally enable provider-backed automatic access that issues a
+  short-lived read or read/write credential from current workspace RBAC.
 - Let each member bind a provider API credential to a workspace integration and
   import only resources that both the provider and workspace authorize.
 - Apply workspace roles, resource grants, provider-token scopes, environment policy,
@@ -108,7 +120,8 @@ database work remains in the Tauri app.
 ## Non-goals for the First Release
 
 - Proxying database traffic through the workspace service.
-- Automatically distributing database passwords, certificates, or cloud tokens.
+- Distributing or retaining static shared database passwords, certificates, or cloud
+  tokens. Managed one-time credentials are explicitly limited, audited, and expiring.
 - Claiming that workspace policy can restrict how a member uses a personal provider
   token outside DopeDB. The external provider remains authoritative for that token.
 - Granting target-database privileges or PostgreSQL roles through workspace membership.
@@ -125,8 +138,8 @@ database work remains in the Tauri app.
 
 | Resource | Workspace data | Local-only data |
 | --- | --- | --- |
-| Connection | engine, host, port, database, SSL, environment, safety policy | username, password, token, certificate, connection URL, advanced parameters, local `secret_ref`, live pool |
-| Provider integration | provider kind, external organization or project ids, imported resource topology, capability snapshot, workspace policy | API token, OAuth refresh token, local `secret_ref`, one-time credentials |
+| Connection | engine, host, port, database, SSL, environment, safety policy, credential mode, redacted provider selector | member-local username/password, token, certificate, connection URL, advanced parameters, local `secret_ref`, live pool |
+| Provider integration | provider kind, external account id, encrypted OAuth envelope, verified scope, status, workspace policy | plaintext OAuth token, deployment encryption key, one-time DB credentials |
 | Provider operation | redacted request, approval state, provider operation id, outcome | unredacted secret responses and local transport diagnostics |
 | Dashboard | title, description, SQL, visualization definition, revision | current result rows |
 | Analysis report | question, narrative, query provenance, warnings, selected visualization | unpublished intermediate results |
@@ -135,9 +148,9 @@ database work remains in the Tauri app.
 | MCP | workspace-scoped connection identifiers and policy | MCP token, client session, single-use query plans |
 | History and audit | explicit collaboration events and published report provenance | full local query history and hash-chained execution audit |
 
-Connection usernames are member-local and are never supplied by a shared default. A
-shared endpoint therefore requires each executable member to bind an individual
-database account, preserving target-database attribution.
+Connection usernames are member-local in the default mode. Managed mode instead creates
+a distinct provider credential for the current workspace member and lease, preserving
+target-database attribution without asking the user to copy a password.
 
 ## Authorization Model
 
@@ -203,21 +216,21 @@ Keep two adapter contracts with no shared secret-bearing configuration object:
   discovery plus capability-gated operations such as branch or compute management.
 
 A provider resource may create or update a workspace connection template through a
-`provider_resource_id`, but the template does not own the provider token. Database
-credentials remain in the existing member/device credential binding, independently
-of the provider API credential.
+redacted selector, but the template never owns or serializes a provider token.
 
-The initial credential mode is member-local: each member stores a provider token in
-the OS credential store and calls the provider from the desktop after a workspace
-authorization check. In this mode, workspace permissions are an enforceable DopeDB
-application boundary, while provider token scopes are the authoritative boundary for
-use outside DopeDB.
+Member-local mode remains available for every driver. Managed mode now stores an
+application-encrypted provider OAuth grant separately from connection templates and
+routes only provider control-plane calls through the workspace service. The first
+operational adapter is PlanetScale: Admin/Owner authorizes OAuth, selects organization,
+database, and branch, and the server creates a 15-minute PostgreSQL role or MySQL
+password matching the member's current read/read-write authority. The native client
+receives it once over HTTPS, creates the pool in Rust, and evicts the pool before expiry.
 
-A later managed credential mode may keep a team service credential in a backend
-Vault or KMS-backed secret store and route provider operations through the workspace
-service. That mode is required for centrally enforced scheduled automation or for
-preventing clients from ever receiving the provider credential. It must not turn the
-workspace service into a database query proxy.
+The deployment key is separate from database ciphertext today. Production hardening
+still needs KMS-wrapped key versions and rotation. Pipedream Connect is a planned
+`ProviderAuthAdapter` option for wider OAuth/API-key coverage; it does not replace
+DopeDB authorization or the provider-specific credential issuer. Managed mode does not
+proxy database queries.
 
 ## Target Data Model
 
@@ -231,7 +244,10 @@ workspace service into a database query proxy.
 - `workspace_connections`: shareable connection template and default safety policy.
 - `connection_permissions`: per-member or per-role connection grants.
 - `workspace_provider_integrations`: provider kind, external account or organization
-  identity, credential mode, status, and workspace policy.
+  identity, encrypted credential envelope, verified scope, status, and workspace policy.
+- `provider_oauth_state`: hashed, expiring, session-bound, single-use OAuth state.
+- `workspace_credential_leases`: secret-free issuer id, member, connection, access
+  mode, expiry, and revocation audit index.
 - `workspace_provider_resources`: imported provider resource tree, stable external
   ids, environment, lifecycle state, redacted metadata, and capability snapshot.
 - `provider_resource_permissions`: per-member or per-role grants and explicit denies
@@ -286,7 +302,8 @@ against current data.
 
 - The service is authoritative for workspace membership, permissions, and the latest
   shared resource revision.
-- The desktop remains authoritative for credentials and actual database execution.
+- The desktop remains authoritative for actual database execution and member-local
+  credentials. The provider remains authoritative for managed credential validity.
 - Local mutations enter an outbox before network transmission.
 - Pushes use optimistic concurrency with the resource revision as a precondition.
 - Pulls use an ordered cursor and include tombstones for deletions.
@@ -299,9 +316,10 @@ against current data.
 - A revoked member loses future sync and workspace key access. The product must state
   honestly that revocation cannot erase data the member already exported.
 
-The first hosted version should use TLS plus per-workspace envelope encryption at
-rest, with data keys wrapped by a managed KMS. Raw credentials remain excluded from
-the service entirely. End-to-end encrypted workspace content can be evaluated later
+The hosted version uses TLS and record-bound AES-256-GCM for managed provider grants.
+KMS-wrapped, versioned data keys and rotation remain required hardening. Plaintext
+provider grants and one-time database passwords are excluded from persistence and
+general logs. End-to-end encrypted workspace content can be evaluated later
 as a separate product and recovery design because it changes search, invitations,
 device recovery, and server-side collaboration behavior.
 
@@ -402,12 +420,13 @@ Exit criteria:
 
 ## Milestone 2 — Shared Connections
 
-Implementation snapshot (2026-07-23): an Editor or higher can copy a Personal
+Implementation snapshot (2026-07-23): an Admin or Owner can copy a Personal
 Workspace connection into a team workspace. The cloud API accepts a strict redacted
 template whose schema has no username, password, token, certificate, connection URL,
 advanced parameter, or `secret_ref` field. The sharer's secret is duplicated only
-inside that device's OS credential store. Other members receive a synchronized template
-with Credentials Required state and bind their own username/password locally. Cached
+inside that device's OS credential store. In member-local mode, other members receive a
+synchronized template with Credentials Required state and bind their own
+username/password locally. Cached
 role authority is enforced in manual queries, scripts, previews, schema introspection,
 dashboards, monitoring grants, and MCP reads. Analyst is read-only; Editor can enter the
 existing local write/approval path; Admin/Owner can manage membership. Credential references,
@@ -421,12 +440,21 @@ The cached role is only a UI hint. Before a shared connection reads, writes, pre
 write, changes a database monitoring grant, or serves an MCP read, the desktop asks the
 control plane to revalidate the active session, current membership, role, workspace id,
 and connection id. The check fails closed when the service is unavailable. Removing a
-member from DopeDB cannot revoke a database credential they already possess; the target
-database administrator must revoke that account separately.
+member in member-local mode cannot revoke a database credential they already possess;
+the target database administrator must revoke that account separately. Managed
+PlanetScale credentials are revoked on role/removal changes when the provider is
+reachable and otherwise expire after at most 15 minutes.
 
-This core deliberately shares only endpoint templates and does not yet satisfy the later
-per-connection grant, shared-template editing, provider-resource, or full tombstone-sync
-deliverables listed below.
+Admins can also connect PlanetScale through OAuth in the web console, discover only
+authorized organizations/databases/branches, and attach a resource to a shared
+connection. The desktop then obtains a member-specific read or read/write credential
+without showing a password dialog. Provider grants are encrypted at rest; lease rows
+contain no plaintext credential; the desktop caches only a live pool until shortly
+before provider expiry.
+
+This core deliberately shares endpoint templates plus one redacted PlanetScale resource
+selector. It does not yet satisfy the later per-connection grant, shared-template editing,
+provider-resource inventory/import, or full tombstone-sync deliverables listed below.
 
 Deliverables:
 
@@ -457,10 +485,10 @@ Exit criteria:
 
 Deliverables:
 
-- Define a provider-neutral adapter and capability contract independently of database
-  drivers.
-- Add Neon and PlanetScale adapters for authenticated resource discovery, capability
-  detection, and import without provider mutations.
+- Generalize the current PlanetScale boundary into a provider-neutral discovery and
+  capability contract independently of database drivers.
+- Add a Neon adapter and expand the PlanetScale pilot from its managed-access selector
+  into persisted resource discovery, capability detection, and idempotent import.
 - Add member/device provider credential bindings backed by the OS credential store.
 - Synchronize only redacted organization, project, database, branch, endpoint,
   compute, lifecycle, and capability metadata.
@@ -537,8 +565,8 @@ Deliverables:
   production, credential, restore, deployment, and destructive actions.
 - Record requester, approver, resource, redacted arguments, provider operation id,
   outcome, and timestamps in the workspace audit stream.
-- Keep member-local execution as the default while separately evaluating managed
-  Vault-backed credentials for scheduled or centrally enforced automation.
+- Keep member-local execution available while expanding managed, short-lived issuers
+  only where the provider can enforce identity, scope, TTL, and revocation.
 
 Exit criteria:
 
@@ -596,8 +624,9 @@ Every milestone must include:
 ## Remaining Product Decisions
 
 - Account recovery and the timing of non-Google identity providers.
-- Member-local provider credentials versus managed Vault-backed credentials for each
-  operation class, including whether either provider offers an appropriate OAuth flow.
+- Member-local provider credentials versus managed or Pipedream-assisted authorization
+  for each remaining provider and operation class; PlanetScale already uses its native
+  OAuth flow for the managed-access pilot.
 - Provider resource refresh intervals, rate-limit budgets, webhook availability, and
   behavior when an imported resource is deleted outside DopeDB.
 - The initial production and destructive-operation approval matrix.

@@ -7,8 +7,21 @@ the marketing `site/` deployment remains independent.
 ## Local setup
 
 Copy `.env.example` to the ignored `workspace-cloud/.env.local` and provide the Neon
-pooler/unpooled URLs, Google OAuth web client credentials, a Better Auth secret, and the
-exact Better Auth URL. To deliver invitation email, also set `RESEND_API_KEY` and a
+pooler/unpooled URLs, Google OAuth web client credentials, a Better Auth secret, the
+exact Better Auth URL, and a random 32-byte base64url `WORKSPACE_CREDENTIAL_KEY`.
+PlanetScale managed access additionally requires `PLANETSCALE_CLIENT_ID` and
+`PLANETSCALE_CLIENT_SECRET`; register this callback:
+
+```text
+http://localhost:3000/api/v1/providers/planet-scale/callback
+```
+
+Configure the PlanetScale OAuth application with the minimum scopes used by the
+managed-access flow: `read_organizations`, `read_databases`, `read_branches`,
+`manage_passwords`, and `manage_production_branch_passwords`. The callback rejects a
+grant missing any of them instead of leaving a partially working integration.
+
+To deliver invitation email, also set `RESEND_API_KEY` and a
 verified `WORKSPACE_INVITATION_FROM` sender; without them, the dashboard keeps the
 email-bound copy-link fallback. Configure this Google redirect URI:
 
@@ -32,8 +45,15 @@ them through the unpooled URL with `pnpm workspace:migrate` from the repository 
   stores each account in a separate operating-system credential item.
 - All application queries use Drizzle ORM; all schema changes use committed Drizzle Kit
   migrations.
-- Target-database passwords and provider API credentials never enter this service.
-- Shared connection rows contain only endpoint metadata and safety defaults. Usernames,
+- Member-local target-database credentials never enter this service. In optional
+  managed mode, a provider OAuth grant is AES-256-GCM encrypted with record-bound AAD
+  before database persistence; the encryption key is held separately in deployment
+  configuration.
+- Managed target-database credentials are generated per member with a 15-minute TTL,
+  returned once to an authenticated native Bearer client, and never inserted into the
+  service database, audit stream, browser UI, or desktop store.
+- Shared connection rows contain endpoint metadata, safety defaults, credential mode,
+  and a redacted provider-resource selector. Usernames,
   passwords, tokens, certificates, connection URLs, SQLite paths, advanced parameters,
   and desktop `secret_ref` values are rejected or absent from the hosted schema.
 - Endpoint metadata currently relies on HTTPS in transit and the managed database's
@@ -48,6 +68,8 @@ them through the unpooled URL with `pnpm workspace:migrate` from the repository 
   performs the recipient, expiry, role, membership-limit, and state-transition checks.
 - Shared database execution uses a fresh server authorization check. Cached desktop role
   data is for presentation and fail-closed prechecks, not the final permission decision.
+- Role downgrade, member removal, provider disconnect, and managed-mode changes attempt
+  immediate provider credential revocation; provider TTL remains the bounded backstop.
 - Identity, membership, invitation, and connection API responses are private `no-store`
   payloads and are covered by restrictive browser security headers.
 

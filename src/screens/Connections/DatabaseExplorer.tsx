@@ -653,7 +653,7 @@ export function DatabaseExplorer({
 
   function renderConnection(c: ConnectionProfile, nested = false) {
     const isSel = c.id === selectedId;
-    const accessLabel =
+    const accessLabelBase =
       c.workspaceAccess === "view"
         ? t("workspace.accessView")
         : c.workspaceAccess === "read"
@@ -663,6 +663,9 @@ export function DatabaseExplorer({
             : c.workspaceAccess === "manage"
               ? t("workspace.accessManage")
               : null;
+    const accessLabel = accessLabelBase && c.credentialMode === "managed"
+      ? `${accessLabelBase} · ${t("workspace.managedCredentials")}`
+      : accessLabelBase;
     const connectionDescription = `${c.engine} · ${c.host}${
       c.engine !== "sqlite" ? `:${c.port}` : ""
     } · ${c.database}`;
@@ -768,7 +771,8 @@ export function DatabaseExplorer({
                   >
                     {t("connections.edit")}
                   </button>
-                ) : c.workspaceAccess !== "view" ? (
+                ) : c.workspaceAccess !== "view"
+                  && c.credentialMode === "memberLocal" ? (
                   <button
                     type="button"
                     onClick={() => {

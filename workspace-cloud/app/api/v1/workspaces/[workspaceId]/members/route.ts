@@ -5,6 +5,7 @@ import { auth } from "../../../../../../lib/auth";
 import { db } from "../../../../../../lib/db";
 import { env } from "../../../../../../lib/env";
 import { isUuid, jsonError, mutationAllowed, privateJson } from "../../../../../../lib/http";
+import { revokeActiveLeases } from "../../../../../../lib/provider-integrations";
 import { invitation, member, user, workspaceAuditEvent } from "../../../../../../lib/schema";
 import { authorizeWorkspace } from "../../../../../../lib/workspace-authorization";
 
@@ -101,6 +102,12 @@ export async function PATCH(request: Request, context: RouteContext) {
   });
   if (!existing) return jsonError("Member not found", 404);
   if (existing.role === "owner") return jsonError("Owner role cannot be changed here", 403);
+  const revocation = existing.role === body.role
+    ? { revoked: 0, deferred: 0 }
+    : await revokeActiveLeases({
+        organizationId: workspaceId,
+        userId: existing.userId,
+      });
   const updated = await auth.api.updateMemberRole({
     headers: request.headers,
     body: { memberId, role: body.role, organizationId: workspaceId },
@@ -111,7 +118,12 @@ export async function PATCH(request: Request, context: RouteContext) {
     action: "member.role.update",
     resourceType: "member",
     resourceId: memberId,
-    redactedSummary: { from: existing.role, to: body.role },
+    redactedSummary: {
+      from: existing.role,
+      to: body.role,
+      revokedLeases: revocation.revoked,
+      deferredRevocations: revocation.deferred,
+    },
     requestId: crypto.randomUUID(),
   });
   return privateJson({ member: updated });
@@ -159,6 +171,10 @@ export async function DELETE(request: Request, context: RouteContext) {
     });
     if (!existing) return jsonError("Member not found", 404);
     if (existing.role === "owner") return jsonError("Owner cannot be removed", 403);
+    const revocation = await revokeActiveLeases({
+      organizationId: workspaceId,
+      userId: existing.userId,
+    });
     await auth.api.removeMember({
       headers: request.headers,
       body: { memberIdOrEmail: existing.id, organizationId: workspaceId },
@@ -169,7 +185,11 @@ export async function DELETE(request: Request, context: RouteContext) {
       action: "member.remove",
       resourceType: "member",
       resourceId: existing.id,
-      redactedSummary: { previousRole: existing.role },
+      redactedSummary: {
+        previousRole: existing.role,
+        revokedLeases: revocation.revoked,
+        deferredRevocations: revocation.deferred,
+      },
       requestId: crypto.randomUUID(),
     });
     return privateJson({ status: true });

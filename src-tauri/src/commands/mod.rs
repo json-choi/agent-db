@@ -23,8 +23,8 @@ use crate::model::{
     Classification, ConnectionProfile, Dashboard, DashboardDraft, DocumentPage, DocumentQuery,
     Engine, ExecOutcome, HistoryEntry, MonitoringStatus, PreviewMode, PreviewReport, QueryKind,
     QueryResult, SafetySettings, Workspace, WorkspaceAuthState, WorkspaceAuthUser,
-    WorkspaceConnectionAccess, WorkspaceDeviceAuthorization, WorkspaceFeatureState, WorkspaceKind,
-    WorkspaceLoginPoll,
+    WorkspaceConnectionAccess, WorkspaceCredentialMode, WorkspaceDeviceAuthorization,
+    WorkspaceFeatureState, WorkspaceKind, WorkspaceLoginPoll,
 };
 use crate::monitoring;
 use crate::safety::{classify, decide, preview, GateDecision, PoolRef};
@@ -56,16 +56,12 @@ async fn get_live(state: &AppState, id: Uuid) -> AppResult<Live> {
                 .into(),
         });
     }
-    authorize_shared_connection(state, &profile, false).await?;
+    let authorization = connection::authorize_profile(&state.store, &profile, false).await?;
     if let Some(existing) = state.connections.lock().unwrap().get(&id) {
         return Ok(existing.clone());
     }
-    // SQLite has no password; PG/MySQL may authenticate via socket/trust with none.
-    let secret = Zeroizing::new(connection::fetch_profile_secret(&profile)?);
-    let live = connection::connect(&profile, secret.as_str()).await?;
-    let handle = live.clone();
-    state.connections.lock().unwrap().insert(id, live);
-    Ok(handle)
+    let opened = connection::connect_authorized(&profile, &authorization).await?;
+    Ok(connection::cache_opened(&state.connections, id, opened))
 }
 
 async fn authorize_shared_connection(
@@ -73,25 +69,9 @@ async fn authorize_shared_connection(
     profile: &ConnectionProfile,
     write: bool,
 ) -> AppResult<()> {
-    if profile.workspace_access != WorkspaceConnectionAccess::Local {
-        let account_user_id = state
-            .store
-            .active_workspace_account_id()
-            .await?
-            .ok_or_else(|| {
-                AppError::Config(
-                    "shared connection access requires an active workspace account".into(),
-                )
-            })?;
-        crate::workspace_auth::authorize_connection(
-            &account_user_id,
-            state.store.active_workspace_id().await?,
-            profile.id,
-            write,
-        )
-        .await?;
-    }
-    Ok(())
+    connection::authorize_profile(&state.store, profile, write)
+        .await
+        .map(|_| ())
 }
 
 /// Snapshot an existing credential only when a rollback may need to restore it.
@@ -711,6 +691,11 @@ pub async fn bind_workspace_connection_credentials(
             "connection is not a shared workspace template".into(),
         ));
     }
+    if profile.credential_mode != WorkspaceCredentialMode::MemberLocal {
+        return Err(AppError::Blocked {
+            reason: "this shared connection uses automatically managed credentials".into(),
+        });
+    }
     if !profile.workspace_access.can_read() {
         return Err(AppError::Blocked {
             reason: "your workspace role cannot execute this connection".into(),
@@ -945,10 +930,12 @@ pub async fn test_connection(state: State<'_, AppState>, id: Uuid) -> AppResult<
             reason: "your workspace role cannot test this shared connection".into(),
         });
     }
-    authorize_shared_connection(&state, &profile, false).await?;
-    let secret = Zeroizing::new(connection::fetch_profile_secret(&profile)?);
-    let live = connection::connect(&profile, secret.as_str()).await?;
-    live.test().await
+    let authorization = connection::authorize_profile(&state.store, &profile, false).await?;
+    connection::connect_authorized(&profile, &authorization)
+        .await?
+        .live
+        .test()
+        .await
 }
 
 /// Dial an ad-hoc (possibly unsaved) profile purely to check that it connects.
@@ -959,6 +946,13 @@ pub async fn test_connection_profile(
     profile: ConnectionProfile,
     password: Option<String>,
 ) -> AppResult<()> {
+    if profile.workspace_access != WorkspaceConnectionAccess::Local
+        || profile.credential_mode != WorkspaceCredentialMode::Local
+    {
+        return Err(AppError::Blocked {
+            reason: "shared connections must be tested through workspace authorization".into(),
+        });
+    }
     let secret = Zeroizing::new(password.unwrap_or_default());
     if secret.len() > MAX_CONNECTION_CREDENTIAL_BYTES {
         return Err(AppError::Config(
@@ -2390,6 +2384,7 @@ mod schema_group_tests {
             env: None,
             schema_group: group.map(str::to_string),
             workspace_access: crate::model::WorkspaceConnectionAccess::Local,
+            credential_mode: crate::model::WorkspaceCredentialMode::Local,
         }
     }
 

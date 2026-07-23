@@ -8,6 +8,7 @@ type WorkspaceKind = "personal" | "team";
 type WorkspaceLifecycleState = "active" | "archived" | "deleted";
 export type WorkspaceRole = "viewer" | "analyst" | "editor" | "admin" | "owner";
 type WorkspaceConnectionAccess = "view" | "read" | "write" | "manage" | "local";
+export type WorkspaceCredentialMode = "local" | "memberLocal" | "managed";
 
 export interface Workspace {
   id: string;
@@ -82,6 +83,7 @@ export interface ConnectionProfile {
   env: string | null; // "dev" | "staging" | "prod" | null
   schemaGroup: string | null; // shared group for dev/staging/prod schema comparison
   workspaceAccess: WorkspaceConnectionAccess;
+  credentialMode: WorkspaceCredentialMode;
 }
 
 // Mirrors src-tauri/src/driver/mod.rs.

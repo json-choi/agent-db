@@ -87,7 +87,7 @@ export function publicConnection(
     id: string; name: string; engine: string; provider: string; driverId: string | null;
     host: string; port: number; databaseName: string; sslmode: string;
     readonlyDefault: boolean; allowWrites: boolean; environment: string | null;
-    schemaGroup: string | null; revision: number; updatedAt: Date;
+    schemaGroup: string | null; credentialMode: string; revision: number; updatedAt: Date;
   },
   role: WorkspaceRoleName,
   accessMode: "view" | "read" | "write" | "manage",
@@ -110,6 +110,7 @@ export function publicConnection(
     updatedAt: row.updatedAt.toISOString(),
     role,
     accessMode,
-    credentialsRequired: true,
+    credentialMode: row.credentialMode === "managed" ? "managed" : "member_local",
+    credentialsRequired: row.credentialMode !== "managed",
   };
 }

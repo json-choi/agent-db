@@ -180,6 +180,66 @@ export const workspaceAuditEvent = workspaceControl.table(
   (table) => [index("workspace_audit_org_created_idx").on(table.organizationId, table.createdAt)],
 );
 
+// Long-lived provider authorization is isolated from connection templates. The
+// credential payload is application-encrypted before it reaches this column; public
+// serializers never select it.
+export const workspaceProviderIntegration = workspaceControl.table(
+  "workspace_provider_integration",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: text("organization_id").notNull().references(() => organization.id, {
+      onDelete: "cascade",
+    }),
+    provider: text("provider").notNull(),
+    status: text("status").notNull().default("active"),
+    externalAccountId: text("external_account_id").notNull(),
+    displayName: text("display_name").notNull(),
+    encryptedCredential: text("encrypted_credential").notNull(),
+    credentialExpiresAt: timestamp("credential_expires_at", { withTimezone: true }),
+    grantedScope: text("granted_scope"),
+    createdByUserId: text("created_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex("provider_integration_org_provider_account_idx").on(
+      table.organizationId,
+      table.provider,
+      table.externalAccountId,
+    ),
+    index("provider_integration_org_status_idx").on(
+      table.organizationId,
+      table.status,
+    ),
+  ],
+);
+
+// OAuth state is single-use server data rather than a browser-readable cookie. Only
+// a SHA-256 digest is retained, limiting the value of a database disclosure.
+export const providerOauthState = workspaceControl.table(
+  "provider_oauth_state",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: text("organization_id").notNull().references(() => organization.id, {
+      onDelete: "cascade",
+    }),
+    userId: text("user_id").notNull().references(() => user.id, {
+      onDelete: "cascade",
+    }),
+    provider: text("provider").notNull(),
+    stateHash: text("state_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("provider_oauth_state_hash_idx").on(table.stateHash),
+    index("provider_oauth_state_expiry_idx").on(table.expiresAt),
+  ],
+);
+
 // Shared connection rows are deliberately templates, not credentials. There is no
 // username, password, token, certificate, connection URL, or local secret reference
 // column in this table, so those values cannot be uploaded accidentally by the API.
@@ -200,6 +260,12 @@ export const workspaceConnection = workspaceControl.table(
     sslmode: text("sslmode").notNull(),
     readonlyDefault: boolean("readonly_default").notNull().default(true),
     allowWrites: boolean("allow_writes").notNull().default(false),
+    credentialMode: text("credential_mode").notNull().default("member_local"),
+    providerIntegrationId: uuid("provider_integration_id").references(
+      () => workspaceProviderIntegration.id,
+      { onDelete: "set null" },
+    ),
+    providerResource: jsonb("provider_resource"),
     environment: text("environment"),
     schemaGroup: text("schema_group"),
     revision: bigint("revision", { mode: "number" }).notNull().default(1),
@@ -214,6 +280,46 @@ export const workspaceConnection = workspaceControl.table(
     index("workspace_connection_org_updated_idx").on(
       table.organizationId,
       table.updatedAt,
+    ),
+  ],
+);
+
+// Lease rows are a secret-free revocation and audit index. One-time passwords and
+// tokens are returned directly to the native client and are never inserted here.
+export const workspaceCredentialLease = workspaceControl.table(
+  "workspace_credential_lease",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: text("organization_id").notNull().references(() => organization.id, {
+      onDelete: "cascade",
+    }),
+    connectionId: uuid("connection_id").notNull().references(() => workspaceConnection.id, {
+      onDelete: "cascade",
+    }),
+    integrationId: uuid("integration_id").notNull().references(
+      () => workspaceProviderIntegration.id,
+      { onDelete: "cascade" },
+    ),
+    userId: text("user_id").notNull().references(() => user.id, {
+      onDelete: "cascade",
+    }),
+    provider: text("provider").notNull(),
+    accessMode: text("access_mode").notNull(),
+    externalCredentialId: text("external_credential_id").notNull(),
+    externalCredentialKind: text("external_credential_kind").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("credential_lease_member_active_idx").on(
+      table.organizationId,
+      table.userId,
+      table.expiresAt,
+    ),
+    index("credential_lease_connection_active_idx").on(
+      table.connectionId,
+      table.expiresAt,
     ),
   ],
 );

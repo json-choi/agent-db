@@ -175,8 +175,19 @@ impl WorkspaceConnectionAccess {
     }
 }
 
-/// A saved connection. Secrets never live here — only a `secretRef` pointing at the
-/// OS credential-store item that holds the password/connection string.
+/// Credential source for a connection. Managed secrets are leased into process memory
+/// only; member-local and personal secrets may reference the OS credential store.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkspaceCredentialMode {
+    #[default]
+    Local,
+    MemberLocal,
+    Managed,
+}
+
+/// A saved connection. Plaintext secrets never live here. `secretRef` points at an OS
+/// credential item; managed profiles instead obtain a short-lived in-memory lease.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionProfile {
@@ -212,6 +223,9 @@ pub struct ConnectionProfile {
     /// Local cache of the authenticated workspace member's effective permission.
     #[serde(default)]
     pub workspace_access: WorkspaceConnectionAccess,
+    /// Personal, member-local OS credential, or server-brokered in-memory lease.
+    #[serde(default)]
+    pub credential_mode: WorkspaceCredentialMode,
 }
 
 /// Per-connection safety configuration (mirrors `connection_safety` in app.db).

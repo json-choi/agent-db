@@ -1,28 +1,35 @@
 //! Connection management: live sqlx pools (a separate read-only pool per
 //! connection), OS credential-store secret storage, and per-provider connection-string
-//! tuning. Credentials live only in the credential store; the MCP tool surface operates
-//! on connection ids and never exposes stored secrets.
+//! tuning. Long-lived local credentials live only in the OS credential store; managed
+//! credentials are short-lived process-memory leases. MCP sees connection ids only.
 
 pub mod keychain;
 pub mod pool;
 pub mod providers;
+mod runtime;
 
 pub use crate::driver::connect;
 pub use keychain::{delete_secret, fetch_secret, store_secret};
 pub use pool::{DbPool, LiveConnection};
+pub(crate) use runtime::{authorize_profile, cache_opened, connect_authorized};
 
 /// The executor module refers to the engine-tagged pool enum as `Pool`; keep a
 /// single definition (`DbPool`) and expose this alias so both names resolve.
 pub use pool::DbPool as Pool;
 
 use crate::error::{AppError, AppResult};
-use crate::model::{ConnectionProfile, WorkspaceConnectionAccess};
+use crate::model::{ConnectionProfile, WorkspaceConnectionAccess, WorkspaceCredentialMode};
 use uuid::Uuid;
 
 /// Resolve the credential item referenced by a profile. Shared templates must carry
 /// an account-specific binding; they never fall back to the connection UUID where a
 /// different signed-in account's legacy credential could exist.
 pub fn fetch_profile_secret(profile: &ConnectionProfile) -> AppResult<String> {
+    if profile.credential_mode == WorkspaceCredentialMode::Managed {
+        return Err(AppError::Config(
+            "managed credentials must be obtained from a short-lived lease".into(),
+        ));
+    }
     let secret_id = match profile.secret_ref.as_deref() {
         Some(secret_ref) => Uuid::parse_str(secret_ref)
             .map_err(|_| AppError::Config("connection secret reference is invalid".into()))?,
@@ -64,6 +71,11 @@ mod tests {
             env: None,
             schema_group: None,
             workspace_access: access,
+            credential_mode: if access == WorkspaceConnectionAccess::Local {
+                crate::model::WorkspaceCredentialMode::Local
+            } else {
+                crate::model::WorkspaceCredentialMode::MemberLocal
+            },
         }
     }
 
@@ -76,6 +88,12 @@ mod tests {
         assert!(matches!(
             fetch_profile_secret(&profile(WorkspaceConnectionAccess::Read)),
             Err(AppError::NotFound(_))
+        ));
+        let mut managed = profile(WorkspaceConnectionAccess::Read);
+        managed.credential_mode = WorkspaceCredentialMode::Managed;
+        assert!(matches!(
+            fetch_profile_secret(&managed),
+            Err(AppError::Config(_))
         ));
     }
 }

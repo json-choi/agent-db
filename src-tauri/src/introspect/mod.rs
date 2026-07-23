@@ -95,37 +95,16 @@ async fn live_for(state: &AppState, id: Uuid) -> AppResult<Live> {
     // Validate the active workspace and current server authority before consulting
     // the process-wide pool cache. A cached handle must never outlive its scope.
     let profile = state.store.get_connection(id).await?;
-    if !profile.workspace_access.can_read() {
-        return Err(crate::error::AppError::Blocked {
-            reason: "workspace role cannot introspect this shared connection".into(),
-        });
-    }
-    if profile.workspace_access != crate::model::WorkspaceConnectionAccess::Local {
-        let account_user_id = state
-            .store
-            .active_workspace_account_id()
-            .await?
-            .ok_or_else(|| {
-                crate::error::AppError::Config(
-                    "shared connection access requires an active workspace account".into(),
-                )
-            })?;
-        crate::workspace_auth::authorize_connection(
-            &account_user_id,
-            state.store.active_workspace_id().await?,
-            profile.id,
-            false,
-        )
-        .await?;
-    }
+    let authorization = crate::connection::authorize_profile(&state.store, &profile, false).await?;
     if let Some(existing) = state.connections.lock().unwrap().get(&id) {
         return Ok(existing.clone());
     }
-    let secret = zeroize::Zeroizing::new(crate::connection::fetch_profile_secret(&profile)?);
-    let live = crate::connection::connect(&profile, secret.as_str()).await?;
-    let handle = live.clone();
-    state.connections.lock().unwrap().insert(id, live);
-    Ok(handle)
+    let opened = crate::connection::connect_authorized(&profile, &authorization).await?;
+    Ok(crate::connection::cache_opened(
+        &state.connections,
+        id,
+        opened,
+    ))
 }
 
 /// The CREATE-TABLE DDL for one table, read through the read-only pool.

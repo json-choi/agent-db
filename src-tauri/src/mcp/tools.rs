@@ -170,43 +170,16 @@ impl DbTools {
         // Revalidate active workspace scope before using a cached pool. Workspace
         // switches clear the cache too, but this keeps the boundary race-free.
         let profile = self.store.get_connection(id).await.map_err(err)?;
-        if !profile.workspace_access.can_read() {
-            return Err(McpError::invalid_params(
-                "workspace role cannot query this shared connection",
-                None,
-            ));
-        }
-        if profile.workspace_access != crate::model::WorkspaceConnectionAccess::Local {
-            let account_user_id = self
-                .store
-                .active_workspace_account_id()
-                .await
-                .map_err(err)?
-                .ok_or_else(|| {
-                    McpError::invalid_params(
-                        "shared connection access requires an active workspace account",
-                        None,
-                    )
-                })?;
-            crate::workspace_auth::authorize_connection(
-                &account_user_id,
-                self.store.active_workspace_id().await.map_err(err)?,
-                profile.id,
-                false,
-            )
+        let authorization = connection::authorize_profile(&self.store, &profile, false)
             .await
             .map_err(err)?;
-        }
         if let Some(c) = self.conns.lock().unwrap().get(&id) {
             return Ok(c.clone());
         }
-        let secret =
-            zeroize::Zeroizing::new(connection::fetch_profile_secret(&profile).map_err(err)?);
-        let live = connection::connect(&profile, secret.as_str())
+        let opened = connection::connect_authorized(&profile, &authorization)
             .await
             .map_err(err)?;
-        self.conns.lock().unwrap().insert(id, live.clone());
-        Ok(live)
+        Ok(connection::cache_opened(&self.conns, id, opened))
     }
 
     /// Load the schema catalog: cached JSON if present (kept fresh by connection edits
@@ -1231,6 +1204,7 @@ mod tests {
             env: env.map(str::to_string),
             schema_group: None,
             workspace_access: crate::model::WorkspaceConnectionAccess::Local,
+            credential_mode: crate::model::WorkspaceCredentialMode::Local,
         }
     }
 

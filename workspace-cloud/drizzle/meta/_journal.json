@@ -22,6 +22,13 @@
       "when": 1784717181351,
       "tag": "0002_wise_sway",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1784796212241,
+      "tag": "0003_curious_expediter",
+      "breakpoints": true
     }
   ]
 }

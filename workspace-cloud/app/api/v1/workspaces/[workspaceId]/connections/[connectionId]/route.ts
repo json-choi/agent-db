@@ -4,6 +4,7 @@ import { and, eq, isNull, sql } from "drizzle-orm";
 import { db } from "../../../../../../../lib/db";
 import { env } from "../../../../../../../lib/env";
 import { isUuid, jsonError, mutationAllowed, privateJson } from "../../../../../../../lib/http";
+import { revokeActiveLeases } from "../../../../../../../lib/provider-integrations";
 import { workspaceAuditEvent, workspaceConnection } from "../../../../../../../lib/schema";
 import { authorizeWorkspace } from "../../../../../../../lib/workspace-authorization";
 import { parseSharedConnection, publicConnection } from "../../../../../../../lib/workspace-connections";
@@ -48,11 +49,33 @@ export async function PATCH(request: Request, context: RouteContext) {
   }
   const authorization = await authorizeWorkspace(request, workspaceId, "manage");
   if (!authorization.ok) return jsonError(authorization.error, authorization.status);
+  const existing = await db.query.workspaceConnection.findFirst({
+    where: and(
+      eq(workspaceConnection.id, connectionId),
+      eq(workspaceConnection.organizationId, workspaceId),
+      isNull(workspaceConnection.deletedAt),
+    ),
+    columns: { id: true, engine: true, credentialMode: true },
+  });
+  if (!existing) return jsonError("Connection not found", 404);
   let input;
   try {
     input = parseSharedConnection(await request.json());
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Invalid connection template", 400);
+  }
+  if (existing.credentialMode === "managed" && input.engine !== existing.engine) {
+    return jsonError(
+      "Switch to member-local credentials before changing a managed database engine",
+      409,
+    );
+  }
+  const revocation = await revokeActiveLeases({
+    organizationId: workspaceId,
+    connectionId,
+  });
+  if (revocation.deferred > 0) {
+    return jsonError("Active database access could not be revoked. Retry the update.", 409);
   }
   const updatedAt = new Date();
   const requestId = crypto.randomUUID();
@@ -61,7 +84,7 @@ export async function PATCH(request: Request, context: RouteContext) {
       .set({
         name: input.name,
         engine: input.engine,
-        provider: input.provider,
+        provider: existing.credentialMode === "managed" ? "planetScale" : input.provider,
         driverId: input.driverId,
         host: input.host,
         port: input.port,
@@ -110,6 +133,13 @@ export async function DELETE(request: Request, context: RouteContext) {
   }
   const authorization = await authorizeWorkspace(request, workspaceId, "manage");
   if (!authorization.ok) return jsonError(authorization.error, authorization.status);
+  const revocation = await revokeActiveLeases({
+    organizationId: workspaceId,
+    connectionId,
+  });
+  if (revocation.deferred > 0) {
+    return jsonError("Active database access could not be revoked. Retry deletion.", 409);
+  }
   const deletedAt = new Date();
   const requestId = crypto.randomUUID();
   const [deletedRows] = await db.batch([

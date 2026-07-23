@@ -34,10 +34,17 @@ function authSecret(): string {
   return value;
 }
 
+function optional(name: string): string | null {
+  return process.env[name]?.trim() || null;
+}
+
 export const env = {
   appOrigin,
   authSecret,
+  credentialKey: () => required("WORKSPACE_CREDENTIAL_KEY"),
   databaseUrl: () => required("DATABASE_URL"),
   googleClientId: () => required("GOOGLE_CLIENT_ID"),
   googleClientSecret: () => required("GOOGLE_CLIENT_SECRET"),
+  planetScaleClientId: () => optional("PLANETSCALE_CLIENT_ID"),
+  planetScaleClientSecret: () => optional("PLANETSCALE_CLIENT_SECRET"),
 };

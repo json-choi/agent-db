@@ -32,6 +32,7 @@ function connection(
     env: null,
     schemaGroup: null,
     workspaceAccess: "local",
+    credentialMode: "local",
     ...options,
   };
 }

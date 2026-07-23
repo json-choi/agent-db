@@ -24,7 +24,8 @@ use crate::error::{AppError, AppResult};
 use crate::model::{
     ConnectionProfile, Dashboard, DashboardDraft, Engine, HistoryEntry, Provider, QueryKind,
     SafetySettings, Workspace, WorkspaceAccountMembership, WorkspaceAuthAccount, WorkspaceAuthUser,
-    WorkspaceConnectionAccess, WorkspaceKind, WorkspaceLifecycleState, WorkspaceRole,
+    WorkspaceConnectionAccess, WorkspaceCredentialMode, WorkspaceKind, WorkspaceLifecycleState,
+    WorkspaceRole,
 };
 
 /// Handle to the local app.db. Cheap to clone (the pool is an `Arc` internally).
@@ -73,6 +74,11 @@ impl Store {
             .await;
         let _ = sqlx::query(
             "ALTER TABLE connections ADD COLUMN workspace_access TEXT NOT NULL DEFAULT 'local'",
+        )
+        .execute(&pool)
+        .await;
+        let _ = sqlx::query(
+            "ALTER TABLE connections ADD COLUMN credential_mode TEXT NOT NULL DEFAULT 'local'",
         )
         .execute(&pool)
         .await;
@@ -647,6 +653,11 @@ impl Store {
                 "shared connection templates cannot be edited as local connections".into(),
             ));
         }
+        if p.credential_mode != WorkspaceCredentialMode::Local {
+            return Err(AppError::Config(
+                "local connections must use local credential mode".into(),
+            ));
+        }
         let now = Utc::now();
         let extra = serde_json::to_string(&p.extra_params)?;
         let workspace = self.active_workspace().await?;
@@ -671,15 +682,15 @@ impl Store {
                 (id, name, engine, provider, driver_id, host, port, db_name, username, sslmode,
                  extra_params, secret_ref, readonly_default, allow_writes,
                  created_at, updated_at, env, schema_group, workspace_id, account_user_id,
-                 revision, sync_status, workspace_access, deleted_at)
+                 revision, sync_status, workspace_access, credential_mode, deleted_at)
                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?15,?16,?17,
-                       ?18,?19,?20,'dirty',?21,NULL)
+                       ?18,?19,?20,'dirty',?21,?22,NULL)
                ON CONFLICT(id) DO UPDATE SET
                  name=?2, engine=?3, provider=?4, driver_id=?5, host=?6, port=?7,
                  db_name=?8, username=?9, sslmode=?10, extra_params=?11, secret_ref=?12,
                  readonly_default=?13, allow_writes=?14, updated_at=?15,
                  env=?16, schema_group=?17, revision=?20, sync_status='dirty',
-                 workspace_access=?21, deleted_at=NULL"#,
+                 workspace_access=?21, credential_mode=?22, deleted_at=NULL"#,
         )
         .bind(p.id.to_string())
         .bind(&p.name)
@@ -702,6 +713,7 @@ impl Store {
         .bind(account_user_id)
         .bind(revision)
         .bind(workspace_access_str(p.workspace_access))
+        .bind(credential_mode_str(p.credential_mode))
         .execute(&mut *tx)
         .await?;
 
@@ -750,6 +762,13 @@ impl Store {
             )));
         }
         for (profile, _) in connections {
+            if profile.workspace_access == WorkspaceConnectionAccess::Local
+                || profile.credential_mode == WorkspaceCredentialMode::Local
+            {
+                return Err(AppError::Config(
+                    "remote connections require team access and credential mode".into(),
+                ));
+            }
             let owner: Option<String> =
                 sqlx::query_scalar("SELECT workspace_id FROM connections WHERE id = ?1")
                     .bind(profile.id.to_string())
@@ -817,14 +836,16 @@ impl Store {
                     (id, name, engine, provider, driver_id, host, port, db_name, username,
                      sslmode, extra_params, secret_ref, readonly_default, allow_writes,
                      created_at, updated_at, env, schema_group, workspace_id, remote_id,
-                     account_user_id, revision, sync_status, workspace_access, deleted_at)
+                     account_user_id, revision, sync_status, workspace_access,
+                     credential_mode, deleted_at)
                    VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?15,
-                           ?16,?17,?18,?1,NULL,?19,'synced',?20,NULL)
+                           ?16,?17,?18,?1,NULL,?19,'synced',?20,?21,NULL)
                    ON CONFLICT(id) DO UPDATE SET
                      name=?2, engine=?3, provider=?4, driver_id=?5, host=?6, port=?7,
                      db_name=?8, sslmode=?10, readonly_default=?13, allow_writes=?14,
                      updated_at=?15, env=?16, schema_group=?17, remote_id=?1, revision=?19,
-                     sync_status='synced', workspace_access=?20, deleted_at=NULL
+                     sync_status='synced', workspace_access=?20, credential_mode=?21,
+                     deleted_at=NULL
                    WHERE connections.workspace_id=?18"#,
             )
             .bind(profile.id.to_string())
@@ -847,6 +868,7 @@ impl Store {
             .bind(workspace_id.to_string())
             .bind(*revision)
             .bind(workspace_access_str(profile.workspace_access))
+            .bind(credential_mode_str(profile.credential_mode))
             .execute(&mut *tx)
             .await?;
             sqlx::query("INSERT OR IGNORE INTO connection_safety (connection_id) VALUES (?1)")
@@ -932,6 +954,11 @@ impl Store {
         if !profile.workspace_access.can_read() {
             return Err(AppError::Blocked {
                 reason: "workspace role cannot execute this connection".into(),
+            });
+        }
+        if profile.credential_mode != WorkspaceCredentialMode::MemberLocal {
+            return Err(AppError::Blocked {
+                reason: "this shared connection uses automatically managed credentials".into(),
             });
         }
         let extra_params_json = serde_json::to_string(extra_params)?;
@@ -1816,20 +1843,30 @@ fn row_to_connection(r: &sqlx::sqlite::SqliteRow) -> AppResult<ConnectionProfile
             r.try_get("workspace_access")
                 .unwrap_or_else(|_| "local".to_string()),
         )?,
+        credential_mode: parse_credential_mode(
+            r.try_get("credential_mode")
+                .unwrap_or_else(|_| "local".to_string()),
+        )?,
     })
 }
 
 fn row_to_connection_with_binding(r: &sqlx::sqlite::SqliteRow) -> AppResult<ConnectionProfile> {
     let mut profile = row_to_connection(r)?;
     if profile.workspace_access != WorkspaceConnectionAccess::Local {
-        profile.username = r
-            .try_get::<Option<String>, _>("binding_username")?
-            .unwrap_or_default();
-        profile.extra_params = r
-            .try_get::<Option<String>, _>("binding_extra_params")?
-            .and_then(|value| serde_json::from_str(&value).ok())
-            .unwrap_or_default();
-        profile.secret_ref = r.try_get("binding_secret_ref")?;
+        if profile.credential_mode == WorkspaceCredentialMode::MemberLocal {
+            profile.username = r
+                .try_get::<Option<String>, _>("binding_username")?
+                .unwrap_or_default();
+            profile.extra_params = r
+                .try_get::<Option<String>, _>("binding_extra_params")?
+                .and_then(|value| serde_json::from_str(&value).ok())
+                .unwrap_or_default();
+            profile.secret_ref = r.try_get("binding_secret_ref")?;
+        } else {
+            profile.username.clear();
+            profile.extra_params.clear();
+            profile.secret_ref = None;
+        }
         profile.workspace_access = r
             .try_get::<Option<String>, _>("binding_workspace_access")?
             .map(parse_workspace_access)
@@ -1962,6 +1999,25 @@ pub(crate) fn parse_workspace_access(s: String) -> AppResult<WorkspaceConnection
     }
 }
 
+pub(crate) fn credential_mode_str(mode: WorkspaceCredentialMode) -> &'static str {
+    match mode {
+        WorkspaceCredentialMode::Local => "local",
+        WorkspaceCredentialMode::MemberLocal => "member_local",
+        WorkspaceCredentialMode::Managed => "managed",
+    }
+}
+
+pub(crate) fn parse_credential_mode(s: String) -> AppResult<WorkspaceCredentialMode> {
+    match s.as_str() {
+        "local" => Ok(WorkspaceCredentialMode::Local),
+        "member_local" => Ok(WorkspaceCredentialMode::MemberLocal),
+        "managed" => Ok(WorkspaceCredentialMode::Managed),
+        other => Err(AppError::Config(format!(
+            "unknown workspace credential mode '{other}'"
+        ))),
+    }
+}
+
 fn workspace_kind_str(kind: WorkspaceKind) -> &'static str {
     match kind {
         WorkspaceKind::Personal => "personal",
@@ -2086,6 +2142,7 @@ mod tests {
             env: None,
             schema_group: None,
             workspace_access: crate::model::WorkspaceConnectionAccess::Local,
+            credential_mode: crate::model::WorkspaceCredentialMode::Local,
         }
     }
 
@@ -2451,6 +2508,7 @@ mod tests {
         let id = Uuid::new_v4();
         let mut local_binding = sqlite_profile(id, "shared");
         local_binding.workspace_access = crate::model::WorkspaceConnectionAccess::Write;
+        local_binding.credential_mode = crate::model::WorkspaceCredentialMode::MemberLocal;
         store
             .sync_remote_connections(workspace_id, &user.id, &[(local_binding, 1)])
             .await
@@ -2475,6 +2533,7 @@ mod tests {
         remote_update.secret_ref = None;
         remote_update.allow_writes = false;
         remote_update.workspace_access = crate::model::WorkspaceConnectionAccess::Read;
+        remote_update.credential_mode = crate::model::WorkspaceCredentialMode::MemberLocal;
         store
             .sync_remote_connections(workspace_id, &user.id, &[(remote_update, 2)])
             .await
@@ -2522,6 +2581,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn managed_remote_template_never_reads_or_accepts_a_local_binding() {
+        let pool = memory_pool().await;
+        sqlx::raw_sql(migrations::SCHEMA)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let store = Store::from_pool_for_test(pool);
+        let workspace_id = Uuid::new_v4();
+        let user = workspace_user("10000000-0000-0000-0000-000000000001", "Owner");
+        store
+            .sync_account_workspaces(
+                &user,
+                &[(workspace_id, "Team".into(), WorkspaceRole::Owner)],
+            )
+            .await
+            .unwrap();
+        let id = Uuid::new_v4();
+        let mut template = sqlite_profile(id, "managed");
+        template.workspace_access = crate::model::WorkspaceConnectionAccess::Manage;
+        template.credential_mode = crate::model::WorkspaceCredentialMode::Managed;
+        store
+            .sync_remote_connections(workspace_id, &user.id, &[(template, 1)])
+            .await
+            .unwrap();
+        store
+            .activate_workspace(workspace_id, Some(&user.id))
+            .await
+            .unwrap();
+
+        let loaded = store.get_connection(id).await.unwrap();
+        assert_eq!(
+            loaded.credential_mode,
+            crate::model::WorkspaceCredentialMode::Managed
+        );
+        assert!(loaded.username.is_empty());
+        assert!(loaded.secret_ref.is_none());
+        assert!(matches!(
+            store
+                .bind_connection_credentials(
+                    id,
+                    &user.id,
+                    "should-not-persist",
+                    &HashMap::new(),
+                    Some(&Uuid::new_v4().to_string()),
+                )
+                .await,
+            Err(AppError::Blocked { .. })
+        ));
+    }
+
+    #[tokio::test]
     async fn shared_connection_bindings_are_isolated_per_signed_in_account() {
         let pool = memory_pool().await;
         sqlx::raw_sql(migrations::SCHEMA)
@@ -2544,6 +2654,7 @@ mod tests {
         }
         let mut template = sqlite_profile(connection_id, "shared");
         template.workspace_access = crate::model::WorkspaceConnectionAccess::Write;
+        template.credential_mode = crate::model::WorkspaceCredentialMode::MemberLocal;
         template.allow_writes = true;
         let mut read_only_template = template.clone();
         read_only_template.workspace_access = crate::model::WorkspaceConnectionAccess::Read;
@@ -2804,6 +2915,7 @@ mod tests {
             env: Some("dev".into()),
             schema_group: Some("core".into()),
             workspace_access: crate::model::WorkspaceConnectionAccess::Local,
+            credential_mode: crate::model::WorkspaceCredentialMode::Local,
         };
         store.upsert_connection(&profile).await.unwrap();
         sqlx::query("UPDATE connections SET project_dir = '/old/project' WHERE id = ?1")
@@ -2854,6 +2966,7 @@ mod tests {
                 env: Some("dev".into()),
                 schema_group: None,
                 workspace_access: crate::model::WorkspaceConnectionAccess::Local,
+                credential_mode: crate::model::WorkspaceCredentialMode::Local,
             })
             .await
             .unwrap();
@@ -2909,6 +3022,7 @@ mod tests {
                 env: None,
                 schema_group: None,
                 workspace_access: crate::model::WorkspaceConnectionAccess::Local,
+                credential_mode: crate::model::WorkspaceCredentialMode::Local,
             })
             .await
             .unwrap();

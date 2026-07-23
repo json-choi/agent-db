@@ -12,13 +12,18 @@ import { CreateWorkspaceForm } from "./CreateWorkspaceForm";
 import { AccountSwitcher } from "./AccountSwitcher";
 import { ActiveSessions } from "./ActiveSessions";
 import { WorkspaceAccessPanel } from "./WorkspaceAccessPanel";
+import { ProviderAccessPanel } from "./ProviderAccessPanel";
 
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ workspace?: string | string[] }>;
+  searchParams: Promise<{
+    workspace?: string | string[];
+    provider?: string | string[];
+    status?: string | string[];
+  }>;
 }) {
   const params = await searchParams;
   const requestedWorkspaceId =
@@ -81,6 +86,12 @@ export default async function SettingsPage({
       </aside>
       <div className="console-main">
         <header className="console-header"><div><p className="eyebrow">BETTER AUTH / DRIZZLE</p><h1>워크스페이스 설정</h1></div><div className="user-chip"><span>{session.user.name.slice(0, 1).toUpperCase()}</span><div><strong>{session.user.name}</strong><small>{session.user.email}</small></div></div></header>
+        {params.provider === "planetScale" && params.status === "connected" ? (
+          <p className="console-notice success">PlanetScale 계정이 연결되었습니다. 아래에서 DB와 브랜치를 선택하세요.</p>
+        ) : null}
+        {params.provider === "planetScale" && params.status === "failed" ? (
+          <p className="console-notice error" role="alert">PlanetScale 연결을 완료하지 못했습니다. 권한과 서버 설정을 확인한 뒤 다시 시도하세요.</p>
+        ) : null}
         <section id="workspaces" className="console-section">
           <div className="section-heading"><div><span>01</span><h2>Workspaces</h2></div><p>Better Auth Organization 멤버십이 권한 경계를 관리합니다.</p></div>
           <div className="workspace-grid">
@@ -100,7 +111,10 @@ export default async function SettingsPage({
                   <span className="status-dot">{workspaceRoles.get(workspace.id)}</span>
                 </div>
                 {["admin", "owner"].includes(workspaceRoles.get(workspace.id) ?? "") ? (
-                  <WorkspaceAccessPanel workspaceId={workspace.id} />
+                  <>
+                    <WorkspaceAccessPanel workspaceId={workspace.id} />
+                    <ProviderAccessPanel workspaceId={workspace.id} />
+                  </>
                 ) : null}
               </article>
             ))}

@@ -18,8 +18,8 @@ use crate::connection::keychain::{
 };
 use crate::error::{AppError, AppResult};
 use crate::model::{
-    ConnectionProfile, WorkspaceAuthUser, WorkspaceConnectionAccess, WorkspaceDeviceAuthorization,
-    WorkspaceLoginPoll, WorkspaceLoginPollStatus, WorkspaceRole,
+    ConnectionProfile, WorkspaceAuthUser, WorkspaceConnectionAccess, WorkspaceCredentialMode,
+    WorkspaceDeviceAuthorization, WorkspaceLoginPoll, WorkspaceLoginPollStatus, WorkspaceRole,
 };
 
 const DEFAULT_CONTROL_PLANE_ORIGIN: &str = "https://app.dopedb.dev";
@@ -65,6 +65,10 @@ struct RemoteWorkspaceResponse {
     role: Option<String>,
 }
 
+fn default_remote_credential_mode() -> String {
+    "member_local".into()
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RemoteConnectionResponse {
@@ -83,6 +87,8 @@ struct RemoteConnectionResponse {
     schema_group: Option<String>,
     revision: i64,
     access_mode: String,
+    #[serde(default = "default_remote_credential_mode")]
+    credential_mode: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -94,6 +100,32 @@ struct RemoteConnectionsResponse {
 #[derive(Debug, Deserialize)]
 struct CreatedConnectionResponse {
     connection: RemoteConnectionResponse,
+}
+
+#[derive(Debug, Deserialize)]
+struct ManagedLeaseResponse {
+    lease: RemoteManagedLease,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoteManagedLease {
+    id: String,
+    engine: String,
+    host: String,
+    port: u16,
+    database: String,
+    username: String,
+    password: String,
+    sslmode: String,
+    access_mode: String,
+    expires_at: String,
+}
+
+pub(crate) struct ManagedConnectionLease {
+    pub profile: ConnectionProfile,
+    pub secret: Zeroizing<String>,
+    pub valid_for: Duration,
 }
 
 #[derive(Debug, Serialize)]
@@ -402,6 +434,12 @@ fn remote_connection(value: RemoteConnectionResponse) -> AppResult<(ConnectionPr
             "shared connection returned invalid access".into(),
         ));
     }
+    let credential_mode = crate::store::parse_credential_mode(value.credential_mode)?;
+    if credential_mode == WorkspaceCredentialMode::Local {
+        return Err(AppError::Network(
+            "shared connection returned invalid credential mode".into(),
+        ));
+    }
     let revision = value.revision;
     if revision < 1 {
         return Err(AppError::Network(
@@ -418,7 +456,7 @@ fn remote_connection(value: RemoteConnectionResponse) -> AppResult<(ConnectionPr
             host: value.host,
             port: value.port,
             database: value.database,
-            // Usernames and all secrets are member-local by design.
+            // Managed usernames and passwords are supplied only by the lease route.
             username: String::new(),
             sslmode: value.sslmode,
             extra_params: Default::default(),
@@ -428,6 +466,7 @@ fn remote_connection(value: RemoteConnectionResponse) -> AppResult<(ConnectionPr
             env: value.env,
             schema_group: value.schema_group,
             workspace_access: access,
+            credential_mode,
         },
         revision,
     ))
@@ -587,6 +626,102 @@ pub(crate) async fn authorize_connection(
         return Err(oauth_error(response).await);
     }
     Ok(())
+}
+
+/// Obtain one provider-issued database credential for a managed shared connection.
+/// The response password is moved into a zeroizing buffer immediately and never
+/// touches the local store; the driver may retain it only inside the lease-bound pool.
+pub(crate) async fn issue_managed_connection_lease(
+    user_id: &str,
+    workspace_id: Uuid,
+    profile: &ConnectionProfile,
+) -> AppResult<ManagedConnectionLease> {
+    if profile.credential_mode != WorkspaceCredentialMode::Managed {
+        return Err(AppError::Config(
+            "managed credentials were requested for a local binding".into(),
+        ));
+    }
+    let token = fetch_workspace_session(user_id)?
+        .map(Zeroizing::new)
+        .ok_or_else(|| {
+            AppError::Config("managed database access requires an authenticated session".into())
+        })?;
+    let origin = origin()?;
+    let response = client()?
+        .post(format!(
+            "{origin}/api/v1/workspaces/{workspace_id}/connections/{}/lease",
+            profile.id
+        ))
+        .bearer_auth(token.as_str())
+        .send()
+        .await
+        .map_err(|error| request_error("requesting managed database access", error))?;
+    if response.status() == StatusCode::UNAUTHORIZED {
+        delete_workspace_session(user_id)?;
+    }
+    if !response.status().is_success() {
+        return Err(oauth_error(response).await);
+    }
+    let mut lease = response
+        .json::<ManagedLeaseResponse>()
+        .await
+        .map_err(|error| request_error("reading managed database access", error))?
+        .lease;
+    let secret = Zeroizing::new(std::mem::take(&mut lease.password));
+    let lease_id = Uuid::parse_str(&lease.id)
+        .map_err(|_| AppError::Network("managed database access returned an invalid id".into()))?;
+    let engine = crate::store::parse_engine(lease.engine)?;
+    if engine != profile.engine
+        || lease.host.is_empty()
+        || lease.host.len() > 512
+        || lease.host.contains("://")
+        || lease.host.chars().any(char::is_whitespace)
+        || lease.port == 0
+        || lease.database.is_empty()
+        || lease.database.len() > 512
+        || lease.username.is_empty()
+        || lease.username.len() > 512
+        || secret.is_empty()
+        || secret.len() > (1 << 16)
+        || lease.sslmode != "verify-full"
+        || !matches!(lease.access_mode.as_str(), "read" | "write")
+        || (lease.access_mode == "write" && !profile.workspace_access.can_write())
+    {
+        return Err(AppError::Network(
+            "managed database access returned invalid connection material".into(),
+        ));
+    }
+    let expires_at = chrono::DateTime::parse_from_rfc3339(&lease.expires_at)
+        .map_err(|_| AppError::Network("managed database access returned invalid expiry".into()))?
+        .with_timezone(&chrono::Utc);
+    let valid_seconds = expires_at
+        .signed_duration_since(chrono::Utc::now())
+        .num_seconds();
+    if !(30..=20 * 60).contains(&valid_seconds) {
+        return Err(AppError::Network(
+            "managed database access returned an unsafe expiry".into(),
+        ));
+    }
+    let mut leased_profile = profile.clone();
+    leased_profile.provider = crate::model::Provider::PlanetScale;
+    leased_profile.host = lease.host;
+    leased_profile.port = lease.port;
+    leased_profile.database = lease.database;
+    leased_profile.username = lease.username;
+    leased_profile.sslmode = lease.sslmode;
+    leased_profile.extra_params.clear();
+    leased_profile.secret_ref = None;
+    tracing::debug!(
+        connection_id = %profile.id,
+        lease_id = %lease_id,
+        valid_seconds,
+        "opened short-lived managed database access"
+    );
+    Ok(ManagedConnectionLease {
+        profile: leased_profile,
+        secret,
+        valid_for: Duration::from_secs(valid_seconds as u64),
+    })
 }
 
 /// Poll once at the server-provided interval. A successful token is validated and
