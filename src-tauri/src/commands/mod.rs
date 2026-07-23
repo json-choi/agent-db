@@ -941,9 +941,7 @@ pub async fn list_dashboards(
     state: State<'_, AppState>,
     connection_id: Uuid,
 ) -> AppResult<Vec<Dashboard>> {
-    // Distinguish an unknown connection from a valid connection with no dashboards.
-    state.store.get_connection(connection_id).await?;
-    state.store.list_dashboards(connection_id).await
+    state.services.dashboard.list(connection_id).await
 }
 
 #[tauri::command]
@@ -954,9 +952,7 @@ pub async fn save_dashboard(
 ) -> AppResult<Dashboard> {
     use tauri::Emitter;
 
-    let profile = state.store.get_connection(draft.connection_id).await?;
-    crate::dashboard::validate_draft(&draft, profile.engine)?;
-    let saved = state.store.save_dashboard(&draft).await?;
+    let saved = state.services.dashboard.save(draft).await?;
     if let Err(e) = app.emit("dashboard:created", &saved) {
         tracing::warn!("failed to emit dashboard:created: {e}");
     }
@@ -965,7 +961,7 @@ pub async fn save_dashboard(
 
 #[tauri::command]
 pub async fn delete_dashboard(state: State<'_, AppState>, id: Uuid) -> AppResult<()> {
-    state.store.delete_dashboard(id).await
+    state.services.dashboard.delete(id).await
 }
 
 /// Rerun one saved dashboard through the authoritative L2 read-only session.

@@ -21,13 +21,14 @@ use crate::audit::{self, RecordArgs};
 use crate::connection::{ConnectionAccess, ConnectionContext, ConnectionManager, DbPool};
 use crate::error::AppError;
 use crate::model::{
-    ConnectionProfile, DashboardDraft, DashboardKind, DashboardVisualization, DocumentPage,
-    DocumentQuery, Engine, HistoryEntry, QueryKind,
+    ConnectionProfile, DashboardKind, DocumentPage, DocumentQuery, Engine, HistoryEntry, QueryKind,
 };
 use crate::monitoring::{self, HealthSnapshot};
 use crate::safety::{self, PoolRef};
 use crate::services::{
-    AgentConnectionSummary, ApplicationServices, CatalogReadPolicy, LegacyConnectionResolutionError,
+    AgentConnectionSummary, AgentDashboardCommitError, AgentDashboardPrepareError,
+    AgentDashboardPresentation, ApplicationServices, CatalogReadPolicy,
+    LegacyConnectionResolutionError,
 };
 use crate::store::{AccountScope, PinnedConnection, Store};
 
@@ -1182,85 +1183,78 @@ impl DbTools {
     ) -> Result<CallToolResult, McpError> {
         let query_run_id = Uuid::parse_str(&args.query_run_id)
             .map_err(|e| McpError::invalid_params(format!("invalid query_run_id: {e}"), None))?;
-        let source = match self.store.get_history(query_run_id).await {
-            Ok(source) => source,
-            Err(AppError::NotFound(_)) => {
+        let prepared = match self
+            .services
+            .dashboard
+            .prepare_agent_create(
+                query_run_id,
+                AgentDashboardPresentation {
+                    title: args.title,
+                    description: args.description,
+                    kind: args.kind,
+                    x_column: args.x_column,
+                    y_columns: args.y_columns,
+                },
+            )
+            .await
+        {
+            Ok(prepared) => prepared,
+            Err(AgentDashboardPrepareError::QueryRunNotFound) => {
                 return Err(McpError::invalid_params(
                     "query_run_id does not identify a stored DopeDB query run",
                     None,
                 ))
             }
-            Err(e) => return Err(err(e)),
+            Err(AgentDashboardPrepareError::QueryRunIneligible) => {
+                return Err(McpError::invalid_params(
+                    "query_run_id must identify a successful agent read query",
+                    None,
+                ))
+            }
+            Err(AgentDashboardPrepareError::Application(error)) => return Err(err(error)),
         };
-        if source.origin != "agent"
-            || source.status != "ok"
-            || !matches!(source.kind, QueryKind::Read)
-        {
-            return Err(McpError::invalid_params(
-                "query_run_id must identify a successful agent read query",
-                None,
-            ));
-        }
-        let profile = self
-            .store
-            .get_connection(source.connection_id)
-            .await
-            .map_err(err)?;
+        let context = prepared.event_context().clone();
         self.emit(
             "agent:tool_call",
             json!({
                 "tool": "create_dashboard",
-                "connection": profile.name,
-                "connectionId": profile.id,
-                "queryRunId": query_run_id,
-                "title": args.title,
-                "sql": source.sql,
+                "connection": context.connection_name,
+                "connectionId": context.connection_id,
+                "queryRunId": context.query_run_id,
+                "title": context.title,
+                "sql": context.sql,
             }),
         );
 
-        let draft = DashboardDraft {
-            connection_id: source.connection_id,
-            title: args.title,
-            description: args.description,
-            sql: source.sql,
-            visualization: DashboardVisualization {
-                version: crate::dashboard::VISUALIZATION_VERSION,
-                kind: args.kind,
-                x_column: args.x_column,
-                y_columns: args.y_columns,
-            },
-        };
-
-        if let Err(e) = crate::dashboard::validate_draft(&draft, profile.engine) {
-            let message = e.to_string();
-            self.emit(
-                "agent:result",
-                json!({
-                    "tool": "create_dashboard",
-                    "connection": profile.name,
-                    "connectionId": profile.id,
-                    "queryRunId": query_run_id,
-                    "error": message,
-                }),
-            );
-            return Err(McpError::invalid_params(message, None));
-        }
-
-        let saved = match self.store.save_dashboard(&draft).await {
+        let saved = match prepared.commit().await {
             Ok(saved) => saved,
-            Err(e) => {
-                let message = e.to_string();
+            Err(AgentDashboardCommitError::InvalidDraft(error)) => {
+                let message = error.to_string();
                 self.emit(
                     "agent:result",
                     json!({
                         "tool": "create_dashboard",
-                        "connection": profile.name,
-                        "connectionId": profile.id,
-                        "queryRunId": query_run_id,
+                        "connection": context.connection_name,
+                        "connectionId": context.connection_id,
+                        "queryRunId": context.query_run_id,
                         "error": message,
                     }),
                 );
-                return Err(err(e));
+                return Err(McpError::invalid_params(message, None));
+            }
+            Err(AgentDashboardCommitError::Persistence(error)) => {
+                let message = error.to_string();
+                self.emit(
+                    "agent:result",
+                    json!({
+                        "tool": "create_dashboard",
+                        "connection": context.connection_name,
+                        "connectionId": context.connection_id,
+                        "queryRunId": context.query_run_id,
+                        "error": message,
+                    }),
+                );
+                return Err(err(error));
             }
         };
 
@@ -1272,9 +1266,9 @@ impl DbTools {
             "agent:result",
             json!({
                 "tool": "create_dashboard",
-                "connection": profile.name,
-                "connectionId": profile.id,
-                "queryRunId": query_run_id,
+                "connection": context.connection_name,
+                "connectionId": context.connection_id,
+                "queryRunId": context.query_run_id,
                 "dashboardId": saved.id,
                 "title": saved.title,
             }),
@@ -1282,7 +1276,7 @@ impl DbTools {
 
         let out = json!({
             "dashboard": saved,
-            "queryRunId": query_run_id,
+            "queryRunId": context.query_run_id,
             "uiMessage": "The dashboard was saved and is available in the DopeDB app.",
         });
         Ok(CallToolResult::success(vec![ContentBlock::text(
@@ -1304,8 +1298,13 @@ mod golden_tests;
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::str::FromStr;
+
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
     use super::*;
+    use crate::model::{WorkspaceConnectionAccess, WorkspaceCredentialMode};
+    use crate::store::TEST_SCHEMA;
 
     fn profile(env: Option<&str>) -> ConnectionProfile {
         ConnectionProfile {
@@ -1344,6 +1343,168 @@ mod tests {
             reasons: vec!["No aggregate database-pressure warning was detected.".into()],
             captured_at: Utc::now(),
         }
+    }
+
+    async fn dashboard_harness() -> (DbTools, RecordedToolEvents, Store, Uuid, Uuid) {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap();
+        sqlx::raw_sql(TEST_SCHEMA).execute(&pool).await.unwrap();
+        let store = Store::from_pool_for_test(pool);
+
+        let connection_id = Uuid::new_v4();
+        let mut connection = profile(Some("test"));
+        connection.id = connection_id;
+        connection.engine = Engine::Sqlite;
+        connection.provider = crate::model::Provider::Generic;
+        connection.driver_id = Some("sqlx-sqlite".into());
+        connection.host.clear();
+        connection.port = 0;
+        connection.database = ":memory:".into();
+        connection.sslmode = "disable".into();
+        connection.workspace_access = WorkspaceConnectionAccess::Local;
+        connection.credential_mode = WorkspaceCredentialMode::Local;
+        store.upsert_connection(&connection).await.unwrap();
+
+        let query_run_id = Uuid::new_v4();
+        let pin = store.pin_connection_for_read(connection_id).await.unwrap();
+        store
+            .insert_history_if_current(
+                &pin,
+                &HistoryEntry {
+                    id: query_run_id,
+                    connection_id,
+                    sql: "SELECT id, name FROM users ORDER BY id".into(),
+                    kind: QueryKind::Read,
+                    status: "ok".into(),
+                    row_count: Some(1),
+                    duration_ms: Some(1),
+                    error: None,
+                    executed_at: Utc::now(),
+                    origin: "agent".into(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let connections = ConnectionManager::new(store.clone());
+        let services = ApplicationServices::new(store.clone(), connections.clone());
+        let (tools, events) =
+            DbTools::new_for_test(store.clone(), connections, services, query_plan_store());
+        (tools, events, store, connection_id, query_run_id)
+    }
+
+    fn assert_dashboard_failure_events(
+        events: &RecordedToolEvents,
+        connection_id: Uuid,
+        query_run_id: Uuid,
+        title: &str,
+        error: &str,
+    ) {
+        let events = events.lock().unwrap();
+        assert_eq!(
+            events.as_slice(),
+            [
+                json!({
+                    "event": "agent:tool_call",
+                    "payload": {
+                        "tool": "create_dashboard",
+                        "connection": "analytics",
+                        "connectionId": connection_id,
+                        "queryRunId": query_run_id,
+                        "title": title,
+                        "sql": "SELECT id, name FROM users ORDER BY id",
+                    },
+                }),
+                json!({
+                    "event": "agent:result",
+                    "payload": {
+                        "tool": "create_dashboard",
+                        "connection": "analytics",
+                        "connectionId": connection_id,
+                        "queryRunId": query_run_id,
+                        "error": error,
+                    },
+                }),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn create_dashboard_invalid_draft_preserves_error_event_contract() {
+        let (tools, events, store, connection_id, query_run_id) = dashboard_harness().await;
+        let error = tools
+            .create_dashboard(Parameters(CreateDashboardArgs {
+                query_run_id: query_run_id.to_string(),
+                title: " ".into(),
+                description: String::new(),
+                kind: DashboardKind::Table,
+                x_column: None,
+                y_columns: Vec::new(),
+            }))
+            .await
+            .unwrap_err();
+        let wire = serde_json::to_value(error).unwrap();
+        assert_eq!(wire["code"], -32602);
+        assert_eq!(
+            wire["message"],
+            "config error: dashboard title cannot be empty"
+        );
+        assert_dashboard_failure_events(
+            &events,
+            connection_id,
+            query_run_id,
+            " ",
+            wire["message"].as_str().unwrap(),
+        );
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dashboards")
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn create_dashboard_persistence_failure_preserves_internal_error_context() {
+        let (tools, events, store, connection_id, query_run_id) = dashboard_harness().await;
+        sqlx::raw_sql(
+            "CREATE TRIGGER reject_dashboard_insert
+             BEFORE INSERT ON dashboards
+             BEGIN
+               SELECT RAISE(ABORT, 'forced dashboard persistence failure');
+             END;",
+        )
+        .execute(store.pool())
+        .await
+        .unwrap();
+
+        let error = tools
+            .create_dashboard(Parameters(CreateDashboardArgs {
+                query_run_id: query_run_id.to_string(),
+                title: "Persistence failure".into(),
+                description: String::new(),
+                kind: DashboardKind::Table,
+                x_column: None,
+                y_columns: Vec::new(),
+            }))
+            .await
+            .unwrap_err();
+        let wire = serde_json::to_value(error).unwrap();
+        assert_eq!(wire["code"], -32603);
+        let message = wire["message"].as_str().unwrap();
+        assert!(message.contains("forced dashboard persistence failure"));
+        assert_dashboard_failure_events(
+            &events,
+            connection_id,
+            query_run_id,
+            "Persistence failure",
+            message,
+        );
     }
 
     #[test]

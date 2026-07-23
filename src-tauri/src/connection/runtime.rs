@@ -22,7 +22,7 @@ use crate::error::{AppError, AppResult};
 use crate::model::{
     ConnectionProfile, Workspace, WorkspaceAuthUser, WorkspaceCredentialMode, WorkspaceRole,
 };
-use crate::store::{AccountScope, PinnedConnection, Store};
+use crate::store::{AccountScope, PinnedConnection, PinnedDashboard, Store};
 
 use super::Live;
 
@@ -216,6 +216,18 @@ impl ConnectionLease {
 impl ConnectionOperationScope {
     pub(crate) async fn pin_connection(&self, id: Uuid) -> AppResult<PinnedConnection> {
         self.manager.inner.store.pin_connection_for_read(id).await
+    }
+
+    pub(crate) async fn pin_dashboard_connection(&self, id: Uuid) -> AppResult<PinnedConnection> {
+        self.manager
+            .inner
+            .store
+            .pin_connection_for_dashboard(id)
+            .await
+    }
+
+    pub(crate) async fn pin_dashboard(&self, id: Uuid) -> AppResult<PinnedDashboard> {
+        self.manager.inner.store.pin_dashboard_for_view(id).await
     }
 
     /// Upgrade this operation boundary into a live connection without reacquiring

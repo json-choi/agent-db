@@ -11,7 +11,10 @@ mod runtime;
 pub use crate::driver::connect;
 pub use keychain::{delete_secret, fetch_secret, store_secret};
 pub use pool::{DbPool, LiveConnection};
-pub(crate) use runtime::{ConnectionAccess, ConnectionContext, ConnectionLease, ConnectionManager};
+pub(crate) use runtime::{
+    ConnectionAccess, ConnectionContext, ConnectionLease, ConnectionManager,
+    ConnectionOperationScope,
+};
 
 /// The executor module refers to the engine-tagged pool enum as `Pool`; keep a
 /// single definition (`DbPool`) and expose this alias so both names resolve.

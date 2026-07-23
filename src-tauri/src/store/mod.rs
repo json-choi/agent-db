@@ -19,7 +19,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use dopedb_protocol::catalog::{CatalogSnapshot, DatabaseEngine, CATALOG_SCHEMA_VERSION};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx::{AssertSqlSafe, Row, Sqlite, SqlitePool, Transaction};
+use sqlx::{AssertSqlSafe, Executor, Row, Sqlite, SqlitePool, Transaction};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
@@ -92,6 +92,25 @@ pub(crate) struct PinnedConnection {
     pub profile: ConnectionProfile,
     pub requires_remote_rbac: bool,
     pub catalog_cache_policy: CatalogCachePolicy,
+}
+
+/// Minimal immutable identity required to tombstone a saved dashboard. Keeping
+/// presentation JSON out of this pin lets users delete malformed legacy rows.
+#[derive(Clone)]
+pub(crate) struct PinnedDashboard {
+    pub dashboard_id: Uuid,
+    pub connection_id: Uuid,
+    pub dashboard_revision: i64,
+    pub connection: PinnedConnection,
+}
+
+/// History row plus the exact active scope in which its provenance was first
+/// resolved. Agent dashboard preparation validates eligibility before pinning, then
+/// passes this token back for an ABA-safe same-scope re-read.
+#[derive(Clone)]
+pub(crate) struct ResolvedDashboardHistory {
+    pub history: HistoryEntry,
+    scope: ActiveResourceScope,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1166,6 +1185,23 @@ impl Store {
     /// so a result completed after a workspace, account, template, or credential
     /// change is discarded instead of being published into the new scope.
     pub(crate) async fn pin_connection_for_read(&self, id: Uuid) -> AppResult<PinnedConnection> {
+        self.pin_connection_with_access(id, true).await
+    }
+
+    /// Resolve a connection for saved-dashboard metadata. A Viewer may inspect and
+    /// manage dashboard definitions without receiving database execution authority.
+    pub(crate) async fn pin_connection_for_dashboard(
+        &self,
+        id: Uuid,
+    ) -> AppResult<PinnedConnection> {
+        self.pin_connection_with_access(id, false).await
+    }
+
+    async fn pin_connection_with_access(
+        &self,
+        id: Uuid,
+        require_read: bool,
+    ) -> AppResult<PinnedConnection> {
         let row = sqlx::query(
             "SELECT c.*,
                     b.username AS binding_username,
@@ -1229,23 +1265,12 @@ impl Store {
         .ok_or_else(|| AppError::NotFound(format!("connection {id}")))?;
 
         let profile = row_to_connection_with_binding(&row)?;
-        if !profile.workspace_access.can_read() {
+        if require_read && !profile.workspace_access.can_read() {
             return Err(AppError::Blocked {
                 reason: "workspace role cannot execute this connection".into(),
             });
         }
-        let scope_generation = parse_scope_generation(
-            row.try_get::<String, _>("pinned_scope_generation")?
-                .as_str(),
-        )?;
-        let workspace_kind = parse_workspace_kind(row.try_get("pinned_workspace_kind")?)?;
-        let selected_account_id: Option<String> = row.try_get("pinned_selected_account_id")?;
-        let account_scope_key: String = row.try_get("pinned_account_scope")?;
-        let account_scope = account_scope_from_parts(
-            workspace_kind,
-            selected_account_id.as_deref(),
-            &account_scope_key,
-        )?;
+        let scope = row_to_active_resource_scope(&row)?;
         let connection_revision: i64 = row.try_get("pinned_connection_revision")?;
         let binding_revision: i64 = row.try_get("pinned_binding_revision")?;
         let binding_updated_at: String = row.try_get("pinned_binding_updated_at")?;
@@ -1268,13 +1293,7 @@ impl Store {
             CatalogCachePolicy::Persistent
         };
         Ok(PinnedConnection {
-            scope: ActiveResourceScope {
-                workspace_id: parse_uuid(row.try_get("pinned_workspace_id")?)?,
-                workspace_kind,
-                selected_account_id,
-                account_scope,
-                generation: scope_generation,
-            },
+            scope,
             connection_id: id,
             connection_revision,
             binding_revision,
@@ -1289,6 +1308,17 @@ impl Store {
     /// local material. Shared-resource callers still need a fresh control-plane RBAC
     /// authorization; this method intentionally verifies only the local half.
     pub(crate) async fn is_pin_current(&self, pin: &PinnedConnection) -> AppResult<bool> {
+        Self::is_pin_current_with_access(&self.pool, pin, false).await
+    }
+
+    async fn is_pin_current_with_access<'executor, E>(
+        executor: E,
+        pin: &PinnedConnection,
+        allow_view: bool,
+    ) -> AppResult<bool>
+    where
+        E: Executor<'executor, Database = Sqlite>,
+    {
         let current: bool = sqlx::query_scalar(
             "SELECT EXISTS(
                  SELECT 1
@@ -1331,7 +1361,8 @@ impl Store {
                         OR c.account_user_id = account.value)
                    AND (c.remote_id IS NULL
                         OR COALESCE(b.workspace_access, 'view')
-                           IN ('read', 'write', 'manage'))
+                           IN ('read', 'write', 'manage')
+                        OR (?10 AND COALESCE(b.workspace_access, 'view') = 'view'))
              )",
         )
         .bind(pin.scope.workspace_id.to_string())
@@ -1343,7 +1374,8 @@ impl Store {
         .bind(pin.binding_revision)
         .bind(&pin.binding_updated_at)
         .bind(pin.scope.account_scope.storage_key())
-        .fetch_one(&self.pool)
+        .bind(allow_view)
+        .fetch_one(executor)
         .await?;
         Ok(current)
     }
@@ -1804,6 +1836,7 @@ impl Store {
         rows.iter().map(row_to_history).collect()
     }
 
+    #[allow(dead_code)] // Compatibility surface retained while adapters move to services.
     pub async fn get_history(&self, id: Uuid) -> AppResult<HistoryEntry> {
         let workspace_id = self.active_workspace_id().await?;
         let account_scope = self.active_local_scope().await?;
@@ -1822,25 +1855,138 @@ impl Store {
         row_to_history(&row)
     }
 
+    /// Resolve the initial query provenance and active generation in one SQLite
+    /// snapshot. Callers inspect eligibility before doing any connection pin work.
+    pub(crate) async fn resolve_history_for_dashboard_prepare(
+        &self,
+        id: Uuid,
+    ) -> AppResult<ResolvedDashboardHistory> {
+        let row = sqlx::query(
+            "SELECT h.*,
+                    active.workspace_id AS pinned_workspace_id,
+                    active.workspace_kind AS pinned_workspace_kind,
+                    active.selected_account_id AS pinned_selected_account_id,
+                    active.account_scope AS pinned_account_scope,
+                    active.scope_generation AS pinned_scope_generation
+             FROM (
+                 SELECT w.id AS workspace_id,
+                        w.kind AS workspace_kind,
+                        account.value AS selected_account_id,
+                        CASE WHEN w.kind = 'personal'
+                             THEN 'personal' ELSE account.value END AS account_scope,
+                        generation.value AS scope_generation
+                 FROM app_settings workspace
+                 JOIN workspaces w
+                   ON workspace.key = 'active_workspace_id'
+                  AND workspace.value = w.id
+                  AND w.lifecycle_state = 'active'
+                 LEFT JOIN app_settings account
+                   ON account.key = 'active_workspace_account_id'
+                 JOIN app_settings generation
+                   ON generation.key = 'active_scope_generation'
+             ) active
+             JOIN connections c
+               ON c.workspace_id = active.workspace_id
+              AND c.deleted_at IS NULL
+             JOIN query_history h
+               ON h.connection_id = c.id
+              AND h.account_scope = active.account_scope
+             WHERE h.id = ?1
+               AND (active.workspace_kind = 'personal'
+                    OR active.selected_account_id IS NOT NULL)
+               AND (active.workspace_kind = 'personal'
+                    OR EXISTS(
+                        SELECT 1 FROM workspace_members m
+                        WHERE m.workspace_id = active.workspace_id
+                          AND m.user_id = active.selected_account_id
+                          AND m.status = 'active'
+                    ))
+               AND (active.workspace_kind = 'personal'
+                    OR c.remote_id IS NOT NULL
+                    OR c.account_user_id = active.selected_account_id)",
+        )
+        .bind(id.to_string())
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("query history {id}")))?;
+        Ok(ResolvedDashboardHistory {
+            history: row_to_history(&row)?,
+            scope: row_to_active_resource_scope(&row)?,
+        })
+    }
+
+    /// Re-read query provenance from the same SQLite snapshot that proves the
+    /// retained connection authority is current. The captured initial scope defeats
+    /// cross-process A → B → A changes before pinning.
+    pub(crate) async fn get_history_if_current(
+        &self,
+        pin: &PinnedConnection,
+        resolved: &ResolvedDashboardHistory,
+    ) -> AppResult<HistoryEntry> {
+        if resolved.scope != pin.scope || resolved.history.connection_id != pin.connection_id {
+            return Err(dashboard_scope_changed());
+        }
+        let mut tx = self.pool.begin().await?;
+        if !Self::is_pin_current_with_access(&mut *tx, pin, true).await? {
+            return Err(dashboard_scope_changed());
+        }
+        let row = sqlx::query(
+            "SELECT h.* FROM query_history h
+             JOIN connections c ON c.id = h.connection_id
+             WHERE h.id = ?1 AND h.connection_id = ?2 AND h.account_scope = ?3
+               AND c.workspace_id = ?4 AND c.deleted_at IS NULL",
+        )
+        .bind(resolved.history.id.to_string())
+        .bind(pin.connection_id.to_string())
+        .bind(pin.scope.account_scope.storage_key())
+        .bind(pin.scope.workspace_id.to_string())
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("query history {}", resolved.history.id)))?;
+        let history = row_to_history(&row)?;
+        tx.commit().await?;
+        Ok(history)
+    }
+
     // ── saved dashboards ────────────────────────────────────────────────────
 
     /// Persist a new saved dashboard. IDs and timestamps are assigned here so
     /// Tauri and MCP callers share exactly the same creation semantics.
+    #[allow(dead_code)] // Compatibility surface retained while adapters move to DashboardService.
     pub async fn save_dashboard(&self, draft: &DashboardDraft) -> AppResult<Dashboard> {
+        let pin = self
+            .pin_connection_for_dashboard(draft.connection_id)
+            .await?;
+        self.save_dashboard_if_current(&pin, draft).await
+    }
+
+    /// Persist a dashboard only while the supplied connection authority is still
+    /// current. Taking SQLite's writer lock before rechecking the pin prevents a
+    /// second process from switching scope or changing connection material between
+    /// the check, insert, and outbox append.
+    pub(crate) async fn save_dashboard_if_current(
+        &self,
+        pin: &PinnedConnection,
+        draft: &DashboardDraft,
+    ) -> AppResult<Dashboard> {
+        if draft.connection_id != pin.connection_id {
+            return Err(AppError::Blocked {
+                reason: "dashboard connection does not match the authorized connection".into(),
+            });
+        }
         let id = Uuid::new_v4();
         let now = Utc::now();
-        let workspace_id = self.active_workspace_id().await?;
         let visualization_json = serde_json::to_string(&draft.visualization)?;
         let mut tx = self.pool.begin().await?;
-        sqlx::query(
+        Self::acquire_dashboard_writer(&mut tx).await?;
+        if !Self::is_pin_current_with_access(&mut *tx, pin, true).await? {
+            return Err(dashboard_scope_changed());
+        }
+        let inserted = sqlx::query(
             r#"INSERT INTO dashboards
-                (id, connection_id, title, description, sql, visualization_json,
-                 workspace_id, revision, sync_status, created_at, updated_at)
-               SELECT ?1,?2,?3,?4,?5,?6,?7,1,'dirty',?8,?8
-               WHERE EXISTS (
-                 SELECT 1 FROM connections
-                 WHERE id = ?2 AND workspace_id = ?7 AND deleted_at IS NULL
-               )"#,
+                  (id, connection_id, title, description, sql, visualization_json,
+                   workspace_id, revision, sync_status, created_at, updated_at)
+               VALUES (?1,?2,?3,?4,?5,?6,?7,1,'dirty',?8,?8)"#,
         )
         .bind(id.to_string())
         .bind(draft.connection_id.to_string())
@@ -1848,11 +1994,22 @@ impl Store {
         .bind(&draft.description)
         .bind(&draft.sql)
         .bind(visualization_json)
-        .bind(workspace_id.to_string())
+        .bind(pin.scope.workspace_id.to_string())
         .bind(now)
         .execute(&mut *tx)
         .await?;
-        enqueue_outbox(&mut tx, workspace_id, "dashboard", id, "upsert", 1).await?;
+        if inserted.rows_affected() != 1 {
+            return Err(dashboard_scope_changed());
+        }
+        enqueue_outbox(
+            &mut tx,
+            pin.scope.workspace_id,
+            "dashboard",
+            id,
+            "upsert",
+            1,
+        )
+        .await?;
         tx.commit().await?;
 
         Ok(Dashboard {
@@ -1867,6 +2024,38 @@ impl Store {
         })
     }
 
+    /// List one connection's saved dashboards from the same read snapshot that
+    /// proves the retained scope and connection revision are still current.
+    pub(crate) async fn list_dashboards_if_current(
+        &self,
+        pin: &PinnedConnection,
+    ) -> AppResult<Vec<Dashboard>> {
+        let mut tx = self.pool.begin().await?;
+        if !Self::is_pin_current_with_access(&mut *tx, pin, true).await? {
+            return Err(dashboard_scope_changed());
+        }
+        let rows = sqlx::query(
+            "SELECT d.* FROM dashboards d
+             JOIN connections c ON c.id = d.connection_id
+             WHERE d.connection_id = ?1 AND d.workspace_id = ?2 AND d.deleted_at IS NULL
+               AND c.workspace_id = ?2 AND c.deleted_at IS NULL
+             ORDER BY d.updated_at DESC, d.rowid DESC",
+        )
+        .bind(pin.connection_id.to_string())
+        .bind(pin.scope.workspace_id.to_string())
+        .fetch_all(&mut *tx)
+        .await?;
+        let dashboards = rows
+            .iter()
+            .map(row_to_dashboard)
+            .collect::<AppResult<_>>()?;
+        tx.commit().await?;
+        Ok(dashboards)
+    }
+
+    /// Legacy transition entry point. New service callers retain a pin and call
+    /// `list_dashboards_if_current` so their operation guard spans the whole read.
+    #[allow(dead_code)] // Compatibility surface retained for existing callers and tests.
     pub async fn list_dashboards(&self, connection_id: Uuid) -> AppResult<Vec<Dashboard>> {
         let workspace_id = self.active_workspace_id().await?;
         let rows = sqlx::query(
@@ -1899,28 +2088,172 @@ impl Store {
         row_to_dashboard(&row)
     }
 
-    pub async fn delete_dashboard(&self, id: Uuid) -> AppResult<()> {
-        let workspace_id = self.active_workspace_id().await?;
-        let mut tx = self.pool.begin().await?;
-        let result = sqlx::query(
-            "UPDATE dashboards SET deleted_at = ?2, updated_at = ?2,
-                    revision = revision + 1, sync_status = 'dirty'
-             WHERE id = ?1 AND workspace_id = ?3 AND deleted_at IS NULL",
+    /// Pin a dashboard identity for metadata deletion without parsing its
+    /// visualization. The connection pin applies membership and account-local
+    /// visibility; the final read transaction closes cross-process races.
+    pub(crate) async fn pin_dashboard_for_view(&self, id: Uuid) -> AppResult<PinnedDashboard> {
+        let row = sqlx::query(
+            "SELECT d.connection_id, d.revision,
+                    active.workspace_id AS pinned_workspace_id,
+                    active.workspace_kind AS pinned_workspace_kind,
+                    active.selected_account_id AS pinned_selected_account_id,
+                    active.account_scope AS pinned_account_scope,
+                    active.scope_generation AS pinned_scope_generation
+             FROM (
+                 SELECT w.id AS workspace_id,
+                        w.kind AS workspace_kind,
+                        account.value AS selected_account_id,
+                        CASE WHEN w.kind = 'personal'
+                             THEN 'personal' ELSE account.value END AS account_scope,
+                        generation.value AS scope_generation
+                 FROM app_settings workspace
+                 JOIN workspaces w
+                   ON workspace.key = 'active_workspace_id'
+                  AND workspace.value = w.id
+                  AND w.lifecycle_state = 'active'
+                 LEFT JOIN app_settings account
+                   ON account.key = 'active_workspace_account_id'
+                 JOIN app_settings generation
+                   ON generation.key = 'active_scope_generation'
+             ) active
+             JOIN dashboards d
+               ON d.workspace_id = active.workspace_id
+              AND d.deleted_at IS NULL
+             JOIN connections c
+               ON c.id = d.connection_id
+              AND c.workspace_id = active.workspace_id
+              AND c.deleted_at IS NULL
+             WHERE d.id = ?1
+               AND (active.workspace_kind = 'personal'
+                    OR active.selected_account_id IS NOT NULL)
+               AND (active.workspace_kind = 'personal'
+                    OR EXISTS(
+                        SELECT 1 FROM workspace_members m
+                        WHERE m.workspace_id = active.workspace_id
+                          AND m.user_id = active.selected_account_id
+                          AND m.status = 'active'
+                    ))
+               AND (active.workspace_kind = 'personal'
+                    OR c.remote_id IS NOT NULL
+                    OR c.account_user_id = active.selected_account_id)",
         )
         .bind(id.to_string())
-        .bind(Utc::now())
-        .bind(workspace_id.to_string())
-        .execute(&mut *tx)
-        .await?;
-        if result.rows_affected() == 0 {
-            return Err(AppError::NotFound(format!("dashboard {id}")));
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("dashboard {id}")))?;
+        let connection_id = parse_uuid(row.try_get("connection_id")?)?;
+        let dashboard_revision = row.try_get("revision")?;
+        let initial_scope = row_to_active_resource_scope(&row)?;
+        let connection = match self.pin_connection_for_dashboard(connection_id).await {
+            Ok(connection) => connection,
+            Err(AppError::NotFound(_)) => {
+                return Err(AppError::NotFound(format!("dashboard {id}")))
+            }
+            Err(error) => return Err(error),
+        };
+        if connection.scope != initial_scope {
+            return Err(dashboard_scope_changed());
         }
-        let revision: i64 = sqlx::query_scalar("SELECT revision FROM dashboards WHERE id = ?1")
-            .bind(id.to_string())
-            .fetch_one(&mut *tx)
-            .await?;
-        enqueue_outbox(&mut tx, workspace_id, "dashboard", id, "delete", revision).await?;
+        let mut tx = self.pool.begin().await?;
+        if !Self::is_pin_current_with_access(&mut *tx, &connection, true).await? {
+            return Err(dashboard_scope_changed());
+        }
+        let current: bool = sqlx::query_scalar(
+            "SELECT EXISTS(
+                 SELECT 1 FROM dashboards d
+                 WHERE d.id = ?1 AND d.workspace_id = ?2 AND d.connection_id = ?3
+                   AND d.revision = ?4 AND d.deleted_at IS NULL
+             )",
+        )
+        .bind(id.to_string())
+        .bind(connection.scope.workspace_id.to_string())
+        .bind(connection.connection_id.to_string())
+        .bind(dashboard_revision)
+        .fetch_one(&mut *tx)
+        .await?;
+        if !current {
+            return Err(dashboard_scope_changed());
+        }
         tx.commit().await?;
+        Ok(PinnedDashboard {
+            dashboard_id: id,
+            connection_id,
+            dashboard_revision,
+            connection,
+        })
+    }
+
+    #[allow(dead_code)] // Compatibility surface retained while adapters move to DashboardService.
+    pub async fn delete_dashboard(&self, id: Uuid) -> AppResult<()> {
+        let pin = self.pin_dashboard_for_view(id).await?;
+        self.delete_dashboard_if_current(&pin).await
+    }
+
+    /// Tombstone exactly the dashboard revision that was pinned for this operation.
+    /// The returned revision feeds exactly one outbox event; a stale or concurrent
+    /// delete cannot publish a phantom event.
+    pub(crate) async fn delete_dashboard_if_current(&self, pin: &PinnedDashboard) -> AppResult<()> {
+        if pin.connection_id != pin.connection.connection_id {
+            return Err(dashboard_scope_changed());
+        }
+        self.delete_dashboard_revision_if_current(
+            &pin.connection,
+            pin.dashboard_id,
+            pin.dashboard_revision,
+        )
+        .await
+    }
+
+    async fn delete_dashboard_revision_if_current(
+        &self,
+        connection: &PinnedConnection,
+        dashboard_id: Uuid,
+        dashboard_revision: i64,
+    ) -> AppResult<()> {
+        let mut tx = self.pool.begin().await?;
+        Self::acquire_dashboard_writer(&mut tx).await?;
+        if !Self::is_pin_current_with_access(&mut *tx, connection, true).await? {
+            return Err(dashboard_scope_changed());
+        }
+        let revision: Option<i64> = sqlx::query_scalar(
+            "UPDATE dashboards SET deleted_at = ?2, updated_at = ?2,
+                    revision = revision + 1, sync_status = 'dirty'
+             WHERE id = ?1 AND workspace_id = ?3 AND connection_id = ?4
+               AND revision = ?5 AND deleted_at IS NULL
+             RETURNING revision",
+        )
+        .bind(dashboard_id.to_string())
+        .bind(Utc::now())
+        .bind(connection.scope.workspace_id.to_string())
+        .bind(connection.connection_id.to_string())
+        .bind(dashboard_revision)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let revision = revision.ok_or_else(dashboard_scope_changed)?;
+        enqueue_outbox(
+            &mut tx,
+            connection.scope.workspace_id,
+            "dashboard",
+            dashboard_id,
+            "delete",
+            revision,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn acquire_dashboard_writer(tx: &mut Transaction<'_, Sqlite>) -> AppResult<()> {
+        let locked = sqlx::query(
+            "UPDATE app_settings SET value = value WHERE key = 'active_scope_generation'",
+        )
+        .execute(&mut **tx)
+        .await?;
+        if locked.rows_affected() != 1 {
+            return Err(AppError::Config(
+                "active workspace generation is missing".into(),
+            ));
+        }
         Ok(())
     }
 
@@ -2738,6 +3071,34 @@ async fn migrate_audit_no_cascade(pool: &SqlitePool) -> AppResult<()> {
     Ok(())
 }
 
+fn dashboard_scope_changed() -> AppError {
+    AppError::Blocked {
+        reason: "workspace, connection, or dashboard changed; retry the operation".into(),
+    }
+}
+
+fn row_to_active_resource_scope(row: &sqlx::sqlite::SqliteRow) -> AppResult<ActiveResourceScope> {
+    let generation = parse_scope_generation(
+        row.try_get::<String, _>("pinned_scope_generation")?
+            .as_str(),
+    )?;
+    let workspace_kind = parse_workspace_kind(row.try_get("pinned_workspace_kind")?)?;
+    let selected_account_id: Option<String> = row.try_get("pinned_selected_account_id")?;
+    let account_scope_key: String = row.try_get("pinned_account_scope")?;
+    let account_scope = account_scope_from_parts(
+        workspace_kind,
+        selected_account_id.as_deref(),
+        &account_scope_key,
+    )?;
+    Ok(ActiveResourceScope {
+        workspace_id: parse_uuid(row.try_get("pinned_workspace_id")?)?,
+        workspace_kind,
+        selected_account_id,
+        account_scope,
+        generation,
+    })
+}
+
 // ── row → model mappers ─────────────────────────────────────────────────────
 
 fn row_to_workspace(r: &sqlx::sqlite::SqliteRow) -> AppResult<Workspace> {
@@ -3126,6 +3487,21 @@ mod tests {
             },
         )
         .unwrap()
+    }
+
+    fn dashboard_draft(connection_id: Uuid, title: &str) -> DashboardDraft {
+        DashboardDraft {
+            connection_id,
+            title: title.into(),
+            description: String::new(),
+            sql: "SELECT 1".into(),
+            visualization: DashboardVisualization {
+                version: 1,
+                kind: DashboardKind::Table,
+                x_column: None,
+                y_columns: Vec::new(),
+            },
+        }
     }
 
     #[tokio::test]
@@ -4799,6 +5175,452 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn dashboard_save_never_creates_a_phantom_row_or_outbox() {
+        let pool = memory_pool().await;
+        sqlx::raw_sql(migrations::SCHEMA)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let store = Store::from_pool_for_test(pool);
+
+        let missing_id = Uuid::new_v4();
+        assert!(matches!(
+            store
+                .save_dashboard(&dashboard_draft(missing_id, "missing"))
+                .await,
+            Err(AppError::NotFound(_))
+        ));
+
+        let deleted_id = Uuid::new_v4();
+        store
+            .upsert_connection(&sqlite_profile(deleted_id, "deleted"))
+            .await
+            .unwrap();
+        store.delete_connection(deleted_id).await.unwrap();
+        assert!(matches!(
+            store
+                .save_dashboard(&dashboard_draft(deleted_id, "deleted"))
+                .await,
+            Err(AppError::NotFound(_))
+        ));
+
+        let dashboard_rows: i64 = sqlx::query_scalar("SELECT count(*) FROM dashboards")
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+        let dashboard_outbox: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM sync_outbox WHERE resource_type = 'dashboard'",
+        )
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+        assert_eq!(dashboard_rows, 0);
+        assert_eq!(dashboard_outbox, 0);
+    }
+
+    #[tokio::test]
+    async fn dashboard_cas_rejects_a_stale_scope_without_side_effects() {
+        let pool = memory_pool().await;
+        sqlx::raw_sql(migrations::SCHEMA)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let store = Store::from_pool_for_test(pool);
+        let connection_id = Uuid::new_v4();
+        store
+            .upsert_connection(&sqlite_profile(connection_id, "stale"))
+            .await
+            .unwrap();
+        let saved = store
+            .save_dashboard(&dashboard_draft(connection_id, "existing"))
+            .await
+            .unwrap();
+        let connection_pin = store
+            .pin_connection_for_dashboard(connection_id)
+            .await
+            .unwrap();
+        let dashboard_pin = store.pin_dashboard_for_view(saved.id).await.unwrap();
+        let before_outbox: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM sync_outbox WHERE resource_type = 'dashboard'",
+        )
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+
+        let user = workspace_user("10000000-0000-0000-0000-000000000001", "Scope");
+        store.remember_workspace_account(&user).await.unwrap();
+        store.activate_workspace_account(&user.id).await.unwrap();
+
+        assert!(matches!(
+            store.list_dashboards_if_current(&connection_pin).await,
+            Err(AppError::Blocked { .. })
+        ));
+        assert!(matches!(
+            store
+                .save_dashboard_if_current(
+                    &connection_pin,
+                    &dashboard_draft(connection_id, "stale insert"),
+                )
+                .await,
+            Err(AppError::Blocked { .. })
+        ));
+        assert!(matches!(
+            store.delete_dashboard_if_current(&dashboard_pin).await,
+            Err(AppError::Blocked { .. })
+        ));
+
+        let dashboard_rows: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM dashboards WHERE deleted_at IS NULL")
+                .fetch_one(store.pool())
+                .await
+                .unwrap();
+        let after_outbox: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM sync_outbox WHERE resource_type = 'dashboard'",
+        )
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+        assert_eq!(dashboard_rows, 1);
+        assert_eq!(after_outbox, before_outbox);
+    }
+
+    #[tokio::test]
+    async fn hidden_account_local_dashboard_delete_does_not_leak_connection_identity() {
+        let pool = memory_pool().await;
+        sqlx::raw_sql(migrations::SCHEMA)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let store = Store::from_pool_for_test(pool);
+        let workspace_id = Uuid::new_v4();
+        let user_a = workspace_user("10000000-0000-0000-0000-000000000001", "Alpha");
+        let user_b = workspace_user("20000000-0000-0000-0000-000000000002", "Beta");
+        for user in [&user_a, &user_b] {
+            store
+                .sync_account_workspaces(
+                    user,
+                    &[(workspace_id, "Shared".into(), WorkspaceRole::Editor)],
+                )
+                .await
+                .unwrap();
+        }
+        store
+            .activate_workspace(workspace_id, Some(&user_a.id))
+            .await
+            .unwrap();
+        let connection_id = Uuid::new_v4();
+        store
+            .upsert_connection(&sqlite_profile(connection_id, "alpha local"))
+            .await
+            .unwrap();
+        let dashboard = store
+            .save_dashboard(&dashboard_draft(connection_id, "alpha only"))
+            .await
+            .unwrap();
+
+        store
+            .activate_workspace(workspace_id, Some(&user_b.id))
+            .await
+            .unwrap();
+        let error = store.delete_dashboard(dashboard.id).await.unwrap_err();
+        assert!(matches!(error, AppError::NotFound(_)));
+        assert!(!error.to_string().contains(&connection_id.to_string()));
+        let deleted_at: Option<String> =
+            sqlx::query_scalar("SELECT deleted_at FROM dashboards WHERE id = ?1")
+                .bind(dashboard.id.to_string())
+                .fetch_one(store.pool())
+                .await
+                .unwrap();
+        assert!(deleted_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn concurrent_dashboard_delete_has_exactly_one_winner_and_outbox_event() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("dashboard-delete-race.db");
+        let options = SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(true)
+            .foreign_keys(true)
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+            .busy_timeout(Duration::from_secs(5));
+        let pool = SqlitePoolOptions::new()
+            .max_connections(4)
+            .connect_with(options)
+            .await
+            .unwrap();
+        sqlx::raw_sql(migrations::SCHEMA)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let store = Store::from_pool_for_test(pool);
+        let connection_id = Uuid::new_v4();
+        store
+            .upsert_connection(&sqlite_profile(connection_id, "concurrent"))
+            .await
+            .unwrap();
+        let dashboard = store
+            .save_dashboard(&dashboard_draft(connection_id, "one winner"))
+            .await
+            .unwrap();
+        let pin = store.pin_dashboard_for_view(dashboard.id).await.unwrap();
+        let other_pin = pin.clone();
+        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(3));
+        let first_store = store.clone();
+        let first_barrier = barrier.clone();
+        let first = tokio::spawn(async move {
+            first_barrier.wait().await;
+            first_store.delete_dashboard_if_current(&pin).await
+        });
+        let other_store = store.clone();
+        let second_barrier = barrier.clone();
+        let second = tokio::spawn(async move {
+            second_barrier.wait().await;
+            other_store.delete_dashboard_if_current(&other_pin).await
+        });
+        barrier.wait().await;
+        let (first, second) = (first.await.unwrap(), second.await.unwrap());
+        assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
+        let loser = if let Err(error) = first {
+            error
+        } else {
+            second.unwrap_err()
+        };
+        assert!(matches!(loser, AppError::Blocked { .. }));
+        let delete_outbox: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM sync_outbox
+             WHERE resource_type = 'dashboard' AND resource_id = ?1 AND operation = 'delete'",
+        )
+        .bind(dashboard.id.to_string())
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+        assert_eq!(delete_outbox, 1);
+    }
+
+    #[tokio::test]
+    async fn viewer_dashboard_metadata_is_allowed_but_execution_pin_is_blocked() {
+        let pool = memory_pool().await;
+        sqlx::raw_sql(migrations::SCHEMA)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let store = Store::from_pool_for_test(pool);
+        let workspace_id = Uuid::new_v4();
+        let user = workspace_user("10000000-0000-0000-0000-000000000001", "Viewer");
+        store
+            .sync_account_workspaces(
+                &user,
+                &[(workspace_id, "Shared".into(), WorkspaceRole::Viewer)],
+            )
+            .await
+            .unwrap();
+        let connection_id = Uuid::new_v4();
+        let mut template = sqlite_profile(connection_id, "viewer");
+        template.workspace_access = crate::model::WorkspaceConnectionAccess::View;
+        template.credential_mode = crate::model::WorkspaceCredentialMode::MemberLocal;
+        store
+            .sync_remote_connections(workspace_id, &user.id, &[(template, 1)])
+            .await
+            .unwrap();
+        store
+            .activate_workspace(workspace_id, Some(&user.id))
+            .await
+            .unwrap();
+
+        let pin = store
+            .pin_connection_for_dashboard(connection_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            pin.profile.workspace_access,
+            crate::model::WorkspaceConnectionAccess::View
+        );
+        assert!(matches!(
+            store.pin_connection_for_read(connection_id).await,
+            Err(AppError::Blocked { .. })
+        ));
+        let saved = store
+            .save_dashboard_if_current(&pin, &dashboard_draft(connection_id, "viewer metadata"))
+            .await
+            .unwrap();
+        assert_eq!(
+            store.list_dashboards_if_current(&pin).await.unwrap().len(),
+            1
+        );
+        let dashboard_pin = store.pin_dashboard_for_view(saved.id).await.unwrap();
+        store
+            .delete_dashboard_if_current(&dashboard_pin)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn malformed_dashboard_can_be_pinned_and_deleted_without_deserializing_it() {
+        let pool = memory_pool().await;
+        sqlx::raw_sql(migrations::SCHEMA)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let store = Store::from_pool_for_test(pool);
+        let connection_id = Uuid::new_v4();
+        store
+            .upsert_connection(&sqlite_profile(connection_id, "legacy"))
+            .await
+            .unwrap();
+        let dashboard = store
+            .save_dashboard(&dashboard_draft(connection_id, "malformed"))
+            .await
+            .unwrap();
+        sqlx::query("UPDATE dashboards SET visualization_json = 'not-json' WHERE id = ?1")
+            .bind(dashboard.id.to_string())
+            .execute(store.pool())
+            .await
+            .unwrap();
+
+        let pin = store.pin_dashboard_for_view(dashboard.id).await.unwrap();
+        store.delete_dashboard_if_current(&pin).await.unwrap();
+        assert!(matches!(
+            store.get_dashboard(dashboard.id).await,
+            Err(AppError::NotFound(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn history_dashboard_prepare_rejects_scope_aba() {
+        let pool = memory_pool().await;
+        sqlx::raw_sql(migrations::SCHEMA)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let store = Store::from_pool_for_test(pool);
+        let user_a = workspace_user("10000000-0000-0000-0000-000000000001", "Alpha");
+        let user_b = workspace_user("20000000-0000-0000-0000-000000000002", "Beta");
+        for user in [&user_a, &user_b] {
+            store.remember_workspace_account(user).await.unwrap();
+        }
+        store.activate_workspace_account(&user_a.id).await.unwrap();
+        let connection_id = Uuid::new_v4();
+        store
+            .upsert_connection(&sqlite_profile(connection_id, "history"))
+            .await
+            .unwrap();
+        let history = HistoryEntry {
+            id: Uuid::new_v4(),
+            connection_id,
+            sql: "SELECT 1".into(),
+            kind: QueryKind::Read,
+            status: "ok".into(),
+            row_count: Some(1),
+            duration_ms: Some(1),
+            error: None,
+            executed_at: Utc::now(),
+            origin: "agent".into(),
+        };
+        let execution_pin = store.pin_connection_for_read(connection_id).await.unwrap();
+        store
+            .insert_history_if_current(&execution_pin, &history)
+            .await
+            .unwrap();
+        let resolved = store
+            .resolve_history_for_dashboard_prepare(history.id)
+            .await
+            .unwrap();
+
+        store.activate_workspace_account(&user_b.id).await.unwrap();
+        store.activate_workspace_account(&user_a.id).await.unwrap();
+        let repinned = store
+            .pin_connection_for_dashboard(connection_id)
+            .await
+            .unwrap();
+        assert!(matches!(
+            store.get_history_if_current(&repinned, &resolved).await,
+            Err(AppError::Blocked { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn viewer_can_revalidate_existing_agent_history_for_dashboard_metadata() {
+        let pool = memory_pool().await;
+        sqlx::raw_sql(migrations::SCHEMA)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let store = Store::from_pool_for_test(pool);
+        let workspace_id = Uuid::new_v4();
+        let user = workspace_user("10000000-0000-0000-0000-000000000001", "Member");
+        store
+            .sync_account_workspaces(
+                &user,
+                &[(workspace_id, "Shared".into(), WorkspaceRole::Analyst)],
+            )
+            .await
+            .unwrap();
+        let connection_id = Uuid::new_v4();
+        let mut template = sqlite_profile(connection_id, "shared");
+        template.workspace_access = crate::model::WorkspaceConnectionAccess::Read;
+        template.credential_mode = crate::model::WorkspaceCredentialMode::MemberLocal;
+        store
+            .sync_remote_connections(workspace_id, &user.id, &[(template.clone(), 1)])
+            .await
+            .unwrap();
+        store
+            .activate_workspace(workspace_id, Some(&user.id))
+            .await
+            .unwrap();
+        let history = HistoryEntry {
+            id: Uuid::new_v4(),
+            connection_id,
+            sql: "SELECT 1".into(),
+            kind: QueryKind::Read,
+            status: "ok".into(),
+            row_count: Some(1),
+            duration_ms: Some(1),
+            error: None,
+            executed_at: Utc::now(),
+            origin: "agent".into(),
+        };
+        let read_pin = store.pin_connection_for_read(connection_id).await.unwrap();
+        store
+            .insert_history_if_current(&read_pin, &history)
+            .await
+            .unwrap();
+
+        template.workspace_access = crate::model::WorkspaceConnectionAccess::View;
+        store
+            .sync_remote_connections(workspace_id, &user.id, &[(template, 2)])
+            .await
+            .unwrap();
+        store
+            .sync_account_workspaces(
+                &user,
+                &[(workspace_id, "Shared".into(), WorkspaceRole::Viewer)],
+            )
+            .await
+            .unwrap();
+        let resolved = store
+            .resolve_history_for_dashboard_prepare(history.id)
+            .await
+            .unwrap();
+        let dashboard_pin = store
+            .pin_connection_for_dashboard(connection_id)
+            .await
+            .unwrap();
+        assert!(matches!(
+            store.pin_connection_for_read(connection_id).await,
+            Err(AppError::Blocked { .. })
+        ));
+        assert_eq!(
+            store
+                .get_history_if_current(&dashboard_pin, &resolved)
+                .await
+                .unwrap()
+                .id,
+            history.id
+        );
     }
 
     #[test]
