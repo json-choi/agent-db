@@ -102,7 +102,9 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            workspace-cloud/pnpm-lock.yaml
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -116,6 +118,9 @@ jobs:
 
       - name: Install app dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Install workspace cloud dependencies
+        run: pnpm --dir workspace-cloud install --frozen-lockfile
 
       - name: Build desktop frontend
         run: pnpm build
