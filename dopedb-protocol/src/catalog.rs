@@ -51,14 +51,17 @@ pub enum CatalogValidationError {
     SchemaVersion { actual: u32, expected: u32 },
     #[error("catalog fingerprint must be exactly 64 lowercase hexadecimal characters")]
     Fingerprint,
+    #[error("catalog fingerprint does not match the canonical catalog contents")]
+    FingerprintMismatch,
     #[error("catalog database name cannot be empty")]
     EmptyDatabase,
 }
 
 impl CatalogSnapshot {
     /// Build a canonical snapshot and derive its SHA-256 fingerprint from schema
-    /// metadata only. Capture time and connection id are excluded so collecting the
-    /// same database metadata again produces the same fingerprint.
+    /// metadata only. Connection id, database name, capture time, and row estimates
+    /// are excluded so the same schema keeps one fingerprint across environments and
+    /// routine statistics refreshes.
     pub fn capture(
         connection_id: Uuid,
         engine: DatabaseEngine,
@@ -68,15 +71,17 @@ impl CatalogSnapshot {
     ) -> Result<Self, CatalogValidationError> {
         canonicalize_contents(&mut contents);
         let database = database.into();
-        let fingerprint = catalog_fingerprint(engine, &database, &contents);
-        Self::new(
+        let fingerprint = catalog_fingerprint(engine, &contents);
+        let snapshot = Self::from_canonical_parts(
             connection_id,
             engine,
             database,
             captured_at,
             fingerprint,
             contents,
-        )
+        );
+        snapshot.validate_shape()?;
+        Ok(snapshot)
     }
 
     pub fn new(
@@ -85,25 +90,52 @@ impl CatalogSnapshot {
         database: impl Into<String>,
         captured_at: DateTime<Utc>,
         fingerprint: impl Into<String>,
-        contents: CatalogContents,
+        mut contents: CatalogContents,
     ) -> Result<Self, CatalogValidationError> {
-        let snapshot = Self {
-            schema_version: CATALOG_SCHEMA_VERSION,
+        canonicalize_contents(&mut contents);
+        let snapshot = Self::from_canonical_parts(
             connection_id,
             engine,
-            database: database.into(),
+            database.into(),
             captured_at,
-            fingerprint: fingerprint.into(),
-            namespaces: contents.namespaces,
-            relations: contents.relations,
-            routines: contents.routines,
-            other_objects: contents.other_objects,
-        };
+            fingerprint.into(),
+            contents,
+        );
         snapshot.validate()?;
         Ok(snapshot)
     }
 
+    fn from_canonical_parts(
+        connection_id: Uuid,
+        engine: DatabaseEngine,
+        database: String,
+        captured_at: DateTime<Utc>,
+        fingerprint: String,
+        contents: CatalogContents,
+    ) -> Self {
+        Self {
+            schema_version: CATALOG_SCHEMA_VERSION,
+            connection_id,
+            engine,
+            database,
+            captured_at,
+            fingerprint,
+            namespaces: contents.namespaces,
+            relations: contents.relations,
+            routines: contents.routines,
+            other_objects: contents.other_objects,
+        }
+    }
+
     pub fn validate(&self) -> Result<(), CatalogValidationError> {
+        self.validate_shape()?;
+        if !self.has_canonical_fingerprint() {
+            return Err(CatalogValidationError::FingerprintMismatch);
+        }
+        Ok(())
+    }
+
+    fn validate_shape(&self) -> Result<(), CatalogValidationError> {
         if self.schema_version != CATALOG_SCHEMA_VERSION {
             return Err(CatalogValidationError::SchemaVersion {
                 actual: self.schema_version,
@@ -153,7 +185,7 @@ impl CatalogSnapshot {
             other_objects: self.other_objects.clone(),
         };
         canonicalize_contents(&mut contents);
-        catalog_fingerprint(self.engine, &self.database, &contents)
+        catalog_fingerprint(self.engine, &contents)
     }
 
     pub fn has_canonical_fingerprint(&self) -> bool {
@@ -189,24 +221,48 @@ fn valid_fingerprint(fingerprint: &str) -> bool {
 struct CatalogFingerprintPayload<'a> {
     schema_version: u32,
     engine: DatabaseEngine,
-    database: &'a str,
     namespaces: &'a [Namespace],
-    relations: &'a [Relation],
+    relations: Vec<RelationFingerprintPayload<'a>>,
     routines: &'a [Routine],
     other_objects: &'a [DatabaseObject],
 }
 
-fn catalog_fingerprint(
-    engine: DatabaseEngine,
-    database: &str,
-    contents: &CatalogContents,
-) -> String {
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RelationFingerprintPayload<'a> {
+    object: &'a ObjectRef,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    comment: Option<&'a String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    partition_parent: Option<&'a ObjectRef>,
+    partition_children: &'a [ObjectRef],
+    columns: &'a [Column],
+    constraints: &'a [Constraint],
+    indexes: &'a [Index],
+}
+
+fn relation_fingerprint_payload(relation: &Relation) -> RelationFingerprintPayload<'_> {
+    RelationFingerprintPayload {
+        object: &relation.object,
+        comment: relation.comment.as_ref(),
+        partition_parent: relation.partition_parent.as_ref(),
+        partition_children: &relation.partition_children,
+        columns: &relation.columns,
+        constraints: &relation.constraints,
+        indexes: &relation.indexes,
+    }
+}
+
+fn catalog_fingerprint(engine: DatabaseEngine, contents: &CatalogContents) -> String {
     let payload = CatalogFingerprintPayload {
         schema_version: CATALOG_SCHEMA_VERSION,
         engine,
-        database,
         namespaces: &contents.namespaces,
-        relations: &contents.relations,
+        relations: contents
+            .relations
+            .iter()
+            .map(relation_fingerprint_payload)
+            .collect(),
         routines: &contents.routines,
         other_objects: &contents.other_objects,
     };
@@ -251,8 +307,12 @@ fn canonicalize_contents(contents: &mut CatalogContents) {
         relation.partition_children.sort_by(compare_object_ref);
     }
     contents.relations.sort_by(|left, right| {
-        compare_object_ref(&left.object, &right.object)
-            .then_with(|| compare_serialized(left, right))
+        compare_object_ref(&left.object, &right.object).then_with(|| {
+            compare_serialized(
+                &relation_fingerprint_payload(left),
+                &relation_fingerprint_payload(right),
+            )
+        })
     });
     contents.routines.sort_by(|left, right| {
         compare_object_ref(&left.object, &right.object)
@@ -336,20 +396,26 @@ impl<'de> Deserialize<'de> for CatalogSnapshot {
         D: Deserializer<'de>,
     {
         let wire = WireCatalogSnapshot::deserialize(deserializer)?;
-        let snapshot = Self {
-            schema_version: wire.schema_version,
-            connection_id: wire.connection_id,
-            engine: wire.engine,
-            database: wire.database,
-            captured_at: wire.captured_at,
-            fingerprint: wire.fingerprint,
-            namespaces: wire.namespaces,
-            relations: wire.relations,
-            routines: wire.routines,
-            other_objects: wire.other_objects,
-        };
-        snapshot.validate().map_err(D::Error::custom)?;
-        Ok(snapshot)
+        if wire.schema_version != CATALOG_SCHEMA_VERSION {
+            return Err(D::Error::custom(CatalogValidationError::SchemaVersion {
+                actual: wire.schema_version,
+                expected: CATALOG_SCHEMA_VERSION,
+            }));
+        }
+        Self::new(
+            wire.connection_id,
+            wire.engine,
+            wire.database,
+            wire.captured_at,
+            wire.fingerprint,
+            CatalogContents {
+                namespaces: wire.namespaces,
+                relations: wire.relations,
+                routines: wire.routines,
+                other_objects: wire.other_objects,
+            },
+        )
+        .map_err(D::Error::custom)
     }
 }
 
@@ -658,9 +724,124 @@ mod tests {
     }
 
     #[test]
+    fn identity_and_row_estimates_do_not_change_the_schema_fingerprint() {
+        let relation = Relation {
+            object: ObjectRef {
+                catalog: None,
+                namespace: Some("public".into()),
+                name: "users".into(),
+                kind: ObjectKind::Table,
+                native_id: None,
+            },
+            comment: None,
+            row_estimate: Some(10),
+            partition_parent: None,
+            partition_children: Vec::new(),
+            columns: Vec::new(),
+            constraints: Vec::new(),
+            indexes: Vec::new(),
+        };
+        let first = CatalogSnapshot::capture(
+            Uuid::from_u128(1),
+            DatabaseEngine::Postgres,
+            "development",
+            Utc::now(),
+            CatalogContents {
+                relations: vec![relation.clone()],
+                ..CatalogContents::default()
+            },
+        )
+        .unwrap();
+        let second = CatalogSnapshot::capture(
+            Uuid::from_u128(2),
+            DatabaseEngine::Postgres,
+            "production",
+            Utc::now() + chrono::Duration::hours(1),
+            CatalogContents {
+                relations: vec![Relation {
+                    row_estimate: Some(9_999),
+                    ..relation
+                }],
+                ..CatalogContents::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(first.fingerprint(), second.fingerprint());
+    }
+
+    #[test]
+    fn row_estimates_cannot_reorder_duplicate_relation_identities_in_the_hash() {
+        let relation = |column_name: &str, row_estimate| Relation {
+            object: ObjectRef {
+                catalog: None,
+                namespace: Some("public".into()),
+                name: "duplicate".into(),
+                kind: ObjectKind::Table,
+                native_id: None,
+            },
+            comment: None,
+            row_estimate: Some(row_estimate),
+            partition_parent: None,
+            partition_children: Vec::new(),
+            columns: vec![Column {
+                name: column_name.into(),
+                ordinal: 1,
+                native_type: "text".into(),
+                type_family: NormalizedTypeFamily::Text,
+                length: None,
+                precision: None,
+                scale: None,
+                nullable: false,
+                default_expression: None,
+                generated_expression: None,
+                identity: false,
+                auto_increment: false,
+                collation: None,
+                comment: None,
+                sensitivity: None,
+            }],
+            constraints: Vec::new(),
+            indexes: Vec::new(),
+        };
+        let first = CatalogSnapshot::capture(
+            Uuid::from_u128(1),
+            DatabaseEngine::Postgres,
+            "app",
+            Utc::now(),
+            CatalogContents {
+                relations: vec![relation("alpha", 1), relation("beta", 2)],
+                ..CatalogContents::default()
+            },
+        )
+        .unwrap();
+        let second = CatalogSnapshot::capture(
+            Uuid::from_u128(2),
+            DatabaseEngine::Postgres,
+            "app",
+            Utc::now(),
+            CatalogContents {
+                relations: vec![relation("beta", 1), relation("alpha", 2)],
+                ..CatalogContents::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(first.fingerprint(), second.fingerprint());
+    }
+
+    #[test]
     fn deserialization_rejects_old_or_future_schema_versions() {
         let mut value = serde_json::to_value(valid_snapshot()).unwrap();
         value["schemaVersion"] = json!(1);
         assert!(serde_json::from_value::<CatalogSnapshot>(value).is_err());
+    }
+
+    #[test]
+    fn deserialization_rejects_a_well_formed_but_stale_fingerprint() {
+        let mut value = serde_json::to_value(valid_snapshot()).unwrap();
+        value["engine"] = json!("mysql");
+        let error = serde_json::from_value::<CatalogSnapshot>(value).unwrap_err();
+        assert!(error.to_string().contains("canonical catalog contents"));
     }
 }

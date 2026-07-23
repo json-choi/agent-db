@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 2,
+  "connectionId": "00000000-0000-0000-0000-000000000001",
+  "engine": "postgres",
+  "database": "app",
+  "capturedAt": "2026-07-24T00:00:00Z",
+  "fingerprint": "7ad1fb4c229b2bf00cc02ee7fe33d3ee878dfb2adff296bab20f71ee151f8836",
+  "namespaces": [
+    {
+      "name": "public"
+    }
+  ],
+  "relations": [
+    {
+      "object": {
+        "namespace": "public",
+        "name": "users",
+        "kind": "table"
+      },
+      "rowEstimate": 42,
+      "partitionChildren": [],
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 1,
+          "nativeType": "uuid",
+          "typeFamily": "uuid",
+          "nullable": false,
+          "identity": false,
+          "autoIncrement": false
+        },
+        {
+          "name": "email",
+          "ordinal": 2,
+          "nativeType": "text",
+          "typeFamily": "text",
+          "nullable": false,
+          "identity": false,
+          "autoIncrement": false
+        }
+      ],
+      "constraints": [
+        {
+          "name": "users_pkey",
+          "kind": "primary",
+          "columns": [
+            "id"
+          ],
+          "referencedColumns": [],
+          "deferrable": false,
+          "validated": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "users_email_key",
+          "method": "btree",
+          "keys": [
+            {
+              "column": "email"
+            }
+          ],
+          "includedColumns": [],
+          "unique": true,
+          "valid": true
+        }
+      ]
+    }
+  ],
+  "routines": [],
+  "otherObjects": []
+}

@@ -12,8 +12,13 @@
 
 ## 불변 조건
 
-- object ordering을 canonicalize한 뒤 SHA-256 fingerprint를 만든다.
+- object ordering을 canonicalize한 뒤 구조 metadata의 SHA-256 fingerprint를 만든다.
 - 동일 metadata는 수집 순서와 관계없이 동일 fingerprint를 가져야 한다.
+- wire/cache 역직렬화 시 fingerprint 형식뿐 아니라 canonical metadata의 실제
+  SHA-256과 일치하는지도 검증하고, 불일치하면 fail closed한다.
+- connection id, database name, capture time, row estimate는 identity/display
+  metadata이므로 schema fingerprint에서 제외한다. engine과 object/column/constraint/
+  index metadata는 포함한다.
 - engine-native id는 안전하고 안정적인 경우에만 `nativeId`로 노출한다.
 - cache schema version이 다르면 best-effort deserialize하지 않고 lazy refresh한다.
 - connection/driver/provider lease revision이 바뀌면 snapshot을 stale로 본다.
@@ -29,5 +34,5 @@
 - partition parent/children
 - comment와 row estimate
 
-Fingerprint와 engine introspection 구현은 `CAT-02/03`에서 이 계약의 fixture를 기준으로
-추가한다.
+정본 DTO, canonical fingerprint, scoped cache는 이 계약의 V2 fixture를 기준으로
+검증한다. 엔진별 metadata 확장과 완전한 fixture는 `CAT-02/03`에서 계속 추가한다.

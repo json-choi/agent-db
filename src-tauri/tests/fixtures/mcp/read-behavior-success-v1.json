@@ -1,0 +1,405 @@
+{
+  "schemaVersion": 1,
+  "providerCoverage": {
+    "sqlite": "live_local_roundtrip",
+    "mongodb": "classifier_and_payload_only",
+    "externalLiveRoundTrips": "excluded"
+  },
+  "sqlite": {
+    "listConnections": {
+      "connections": [
+        {
+          "id": "018f9999-8888-7777-8666-555544443333",
+          "name": "phase0-sqlite",
+          "engine": "sqlite",
+          "database": "<sqlite-path>",
+          "environment": null,
+          "readonly": true,
+          "allowWrites": false
+        }
+      ]
+    },
+    "listTables": {
+      "connection": "phase0-sqlite",
+      "tables": [
+        {
+          "name": "teams",
+          "schema": null,
+          "columns": 2,
+          "rowEstimate": 1
+        },
+        {
+          "name": "user_names",
+          "schema": null,
+          "columns": 2,
+          "rowEstimate": null
+        },
+        {
+          "name": "users",
+          "schema": null,
+          "columns": 3,
+          "rowEstimate": 2
+        }
+      ]
+    },
+    "describeTable": {
+      "connection": "phase0-sqlite",
+      "schema": null,
+      "table": "users",
+      "note": null,
+      "rowEstimate": 2,
+      "columns": [
+        {
+          "name": "id",
+          "dataType": "INTEGER",
+          "nullable": true,
+          "pk": true
+        },
+        {
+          "name": "team_id",
+          "dataType": "INTEGER",
+          "nullable": false,
+          "pk": false
+        },
+        {
+          "name": "name",
+          "dataType": "TEXT",
+          "nullable": false,
+          "pk": false
+        }
+      ],
+      "foreignKeys": [
+        {
+          "column": "team_id",
+          "referencesTable": "teams",
+          "referencesColumn": "id"
+        }
+      ]
+    },
+    "planQuery": {
+      "connection": "phase0-sqlite",
+      "connectionId": "018f9999-8888-7777-8666-555544443333",
+      "environment": null,
+      "sql": "SELECT id, name FROM users ORDER BY id",
+      "planId": "<plan-id>",
+      "singleUse": true,
+      "expiresInSeconds": 30,
+      "decision": "ready",
+      "notices": [
+        "SQLite is local; server saturation metrics do not apply. Query-plan and timeout guards remain active."
+      ],
+      "suggestions": [],
+      "estimatedRows": null,
+      "health": {
+        "level": "normal",
+        "coverage": "basic",
+        "totalConnections": null,
+        "maxConnections": null,
+        "connectionUsagePercent": null,
+        "activeQueries": null,
+        "longRunningQueries": null,
+        "lockWaits": null,
+        "replicationLagSeconds": null,
+        "reasons": [
+          "SQLite is local; server saturation metrics do not apply. Query-plan and timeout guards remain active."
+        ],
+        "capturedAt": "<timestamp>"
+      },
+      "nextAction": "Review these notices, then call run_query with this exact planId. If you change the SQL, call plan_query again."
+    },
+    "runQuery": {
+      "connection": "phase0-sqlite",
+      "connectionId": "018f9999-8888-7777-8666-555544443333",
+      "planId": "<plan-id>",
+      "planningDecision": "ready",
+      "queryRunId": "<query-run-id>",
+      "sql": "SELECT id, name FROM users ORDER BY id",
+      "columns": [
+        "id",
+        "name"
+      ],
+      "rows": [
+        [
+          1,
+          "Ada"
+        ]
+      ],
+      "rowCount": 1,
+      "truncated": true,
+      "uiMessage": "The full result is visible in the DopeDB app.",
+      "dashboardSuggestion": "Ask whether the user wants to save this query as a dashboard. After explicit agreement, call create_dashboard with this exact queryRunId."
+    },
+    "history": [
+      {
+        "sql": "SELECT id, name FROM users ORDER BY id",
+        "kind": "read",
+        "status": "ok",
+        "rowCount": 1,
+        "error": null,
+        "origin": "agent"
+      }
+    ],
+    "audit": [
+      {
+        "sql": "(list_tables)",
+        "kind": "read",
+        "action": "mcp:list_tables",
+        "error": null
+      },
+      {
+        "sql": "(describe_table)",
+        "kind": "read",
+        "action": "mcp:describe_table",
+        "error": null
+      },
+      {
+        "sql": "SELECT id, name FROM users ORDER BY id",
+        "kind": "read",
+        "action": "mcp:plan_query",
+        "error": null
+      },
+      {
+        "sql": "SELECT id, name FROM users ORDER BY id",
+        "kind": "read",
+        "action": "mcp:run_query",
+        "error": null
+      }
+    ],
+    "createDashboard": {
+      "dashboard": {
+        "id": "<dashboard-id>",
+        "connectionId": "018f9999-8888-7777-8666-555544443333",
+        "title": "User directory",
+        "description": "Phase 0 provenance fixture",
+        "sql": "SELECT id, name FROM users ORDER BY id",
+        "visualization": {
+          "version": 1,
+          "kind": "table",
+          "xColumn": null,
+          "yColumns": []
+        },
+        "createdAt": "<timestamp>",
+        "updatedAt": "<timestamp>"
+      },
+      "queryRunId": "<query-run-id>",
+      "uiMessage": "The dashboard was saved and is available in the DopeDB app."
+    },
+    "events": [
+      {
+        "event": "agent:tool_call",
+        "payload": {
+          "tool": "list_connections"
+        }
+      },
+      {
+        "event": "agent:result",
+        "payload": {
+          "tool": "list_connections",
+          "count": 1
+        }
+      },
+      {
+        "event": "agent:tool_call",
+        "payload": {
+          "tool": "list_tables",
+          "connection": "phase0-sqlite"
+        }
+      },
+      {
+        "event": "agent:result",
+        "payload": {
+          "tool": "list_tables",
+          "connection": "phase0-sqlite",
+          "connectionId": "018f9999-8888-7777-8666-555544443333",
+          "tables": [
+            "teams",
+            "user_names",
+            "users"
+          ],
+          "count": 3
+        }
+      },
+      {
+        "event": "agent:tool_call",
+        "payload": {
+          "tool": "describe_table",
+          "connection": "phase0-sqlite",
+          "table": "users"
+        }
+      },
+      {
+        "event": "agent:result",
+        "payload": {
+          "tool": "describe_table",
+          "connection": "phase0-sqlite",
+          "connectionId": "018f9999-8888-7777-8666-555544443333",
+          "table": "users",
+          "columns": 3
+        }
+      },
+      {
+        "event": "agent:tool_call",
+        "payload": {
+          "tool": "plan_query",
+          "connection": "phase0-sqlite",
+          "connectionId": "018f9999-8888-7777-8666-555544443333",
+          "sql": "SELECT id, name FROM users ORDER BY id"
+        }
+      },
+      {
+        "event": "agent:result",
+        "payload": {
+          "tool": "plan_query",
+          "connection": "phase0-sqlite",
+          "connectionId": "018f9999-8888-7777-8666-555544443333",
+          "sql": "SELECT id, name FROM users ORDER BY id",
+          "planId": "<plan-id>",
+          "decision": "ready",
+          "estimatedRows": null,
+          "healthLevel": "normal",
+          "monitoringCoverage": "basic",
+          "noticeCount": 1,
+          "notices": [
+            "SQLite is local; server saturation metrics do not apply. Query-plan and timeout guards remain active."
+          ],
+          "suggestions": []
+        }
+      },
+      {
+        "event": "agent:tool_call",
+        "payload": {
+          "tool": "run_query",
+          "connection": "phase0-sqlite",
+          "connectionId": "018f9999-8888-7777-8666-555544443333",
+          "planId": "<plan-id>",
+          "sql": "SELECT id, name FROM users ORDER BY id"
+        }
+      },
+      {
+        "event": "agent:result",
+        "payload": {
+          "tool": "run_query",
+          "connection": "phase0-sqlite",
+          "connectionId": "018f9999-8888-7777-8666-555544443333",
+          "planId": "<plan-id>",
+          "queryRunId": "<query-run-id>",
+          "sql": "SELECT id, name FROM users ORDER BY id",
+          "columns": [
+            "id",
+            "name"
+          ],
+          "rows": [
+            [
+              1,
+              "Ada"
+            ]
+          ],
+          "rowCount": 1,
+          "truncated": true,
+          "durationMs": "<duration-ms>"
+        }
+      },
+      {
+        "event": "agent:tool_call",
+        "payload": {
+          "tool": "create_dashboard",
+          "connection": "phase0-sqlite",
+          "connectionId": "018f9999-8888-7777-8666-555544443333",
+          "queryRunId": "<query-run-id>",
+          "title": "User directory",
+          "sql": "SELECT id, name FROM users ORDER BY id"
+        }
+      },
+      {
+        "event": "dashboard:created",
+        "payload": {
+          "id": "<dashboard-id>",
+          "connectionId": "018f9999-8888-7777-8666-555544443333",
+          "title": "User directory",
+          "description": "Phase 0 provenance fixture",
+          "sql": "SELECT id, name FROM users ORDER BY id",
+          "visualization": {
+            "version": 1,
+            "kind": "table",
+            "xColumn": null,
+            "yColumns": []
+          },
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        }
+      },
+      {
+        "event": "agent:result",
+        "payload": {
+          "tool": "create_dashboard",
+          "connection": "phase0-sqlite",
+          "connectionId": "018f9999-8888-7777-8666-555544443333",
+          "queryRunId": "<query-run-id>",
+          "dashboardId": "<dashboard-id>",
+          "title": "User directory"
+        }
+      }
+    ]
+  },
+  "monitoringGuidance": {
+    "decision": "caution",
+    "notices": [
+      "This connection is labeled production.",
+      "Database pressure is elevated.",
+      "EXPLAIN estimates 60001 result/plan rows, above the configured 50000 review threshold."
+    ],
+    "suggestions": [
+      "Add a selective time/filter condition or aggregate before joining large log tables.",
+      "Enable PostgreSQL pg_monitor in DopeDB settings for fuller aggregate load checks.",
+      "Prefer a read replica or a bounded time range for production analysis.",
+      "Wait for database pressure to fall before running this query."
+    ]
+  },
+  "mongo": {
+    "classification": {
+      "kind": "read",
+      "risk": "low",
+      "tables": [
+        "events"
+      ]
+    },
+    "payload": {
+      "connection": "phase0-mongo",
+      "connectionId": "018f9999-8888-7777-8666-555544443334",
+      "query": {
+        "op": "find",
+        "collection": "events",
+        "filter": {
+          "active": true
+        },
+        "projection": {
+          "_id": 1,
+          "active": 1
+        },
+        "sort": {
+          "_id": 1
+        },
+        "skip": 0,
+        "limit": 2
+      },
+      "documents": [
+        {
+          "_id": {
+            "$oid": "018f11112222733384445555"
+          },
+          "active": true
+        },
+        {
+          "_id": {
+            "$oid": "018f11112222733384445556"
+          },
+          "active": true,
+          "large": "9007199254740993"
+        }
+      ],
+      "docCount": 2,
+      "truncated": false,
+      "uiMessage": "The full result is visible in the DopeDB app."
+    }
+  }
+}

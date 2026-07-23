@@ -22,8 +22,8 @@ use crate::connection::{ConnectionAccess, ConnectionContext, ConnectionManager, 
 use crate::error::AppError;
 use crate::introspect;
 use crate::model::{
-    ConnectionProfile, DashboardDraft, DashboardKind, DashboardVisualization, DocumentQuery,
-    Engine, HistoryEntry, QueryKind,
+    ConnectionProfile, DashboardDraft, DashboardKind, DashboardVisualization, DocumentPage,
+    DocumentQuery, Engine, HistoryEntry, QueryKind,
 };
 use crate::monitoring::{self, HealthSnapshot};
 use crate::safety::{self, PoolRef};
@@ -81,10 +81,49 @@ pub(crate) fn query_plan_store() -> QueryPlanStore {
 #[derive(Clone)]
 pub(crate) struct DbTools {
     store: Store,
-    app: AppHandle,
+    events: ToolEventSink,
     /// Scope-aware connection manager shared with the UI and other agent transports.
     conns: ConnectionManager,
     plans: QueryPlanStore,
+}
+
+/// Keeps MCP behavior independent from Tauri's concrete runtime so headless contract
+/// tests can exercise the real tools without starting a desktop window.
+type ToolEventCallback = dyn Fn(&str, serde_json::Value) + Send + Sync;
+
+#[derive(Clone)]
+struct ToolEventSink(Arc<ToolEventCallback>);
+
+#[cfg(test)]
+type RecordedToolEvents = Arc<Mutex<Vec<serde_json::Value>>>;
+
+impl ToolEventSink {
+    fn tauri(app: AppHandle) -> Self {
+        Self(Arc::new(move |event, payload| {
+            // Don't swallow: an emit failure (e.g. an illegal event name) means the
+            // live UI silently goes dark. Surface it in the log.
+            if let Err(error) = app.emit(event, payload) {
+                tracing::warn!("failed to emit {event}: {error}");
+            }
+        }))
+    }
+
+    #[cfg(test)]
+    fn recording() -> (Self, RecordedToolEvents) {
+        let recorded = Arc::new(Mutex::new(Vec::new()));
+        let target = Arc::clone(&recorded);
+        let sink = Self(Arc::new(move |event, payload| {
+            target.lock().unwrap().push(json!({
+                "event": event,
+                "payload": payload,
+            }));
+        }));
+        (sink, recorded)
+    }
+
+    fn emit(&self, event: &str, payload: serde_json::Value) {
+        (self.0)(event, payload);
+    }
 }
 
 // ── tool argument shapes (JSON Schema is derived for the MCP tool manifest) ──────
@@ -178,18 +217,32 @@ impl DbTools {
     ) -> Self {
         Self {
             store,
-            app,
+            events: ToolEventSink::tauri(app),
             conns,
             plans,
         }
     }
 
+    #[cfg(test)]
+    fn new_for_test(
+        store: Store,
+        conns: ConnectionManager,
+        plans: QueryPlanStore,
+    ) -> (Self, RecordedToolEvents) {
+        let (events, recorded) = ToolEventSink::recording();
+        (
+            Self {
+                store,
+                events,
+                conns,
+                plans,
+            },
+            recorded,
+        )
+    }
+
     fn emit(&self, event: &str, payload: serde_json::Value) {
-        // Don't swallow: an emit failure (e.g. an illegal event name) means the live UI
-        // silently goes dark — exactly the bug this once hid. Surface it in the log.
-        if let Err(e) = self.app.emit(event, payload) {
-            tracing::warn!("failed to emit {event}: {e}");
-        }
+        self.events.emit(event, payload);
     }
 
     /// Resolve the target connection: explicit name/id, else the first configured one.
@@ -368,6 +421,22 @@ fn planning_guidance(
         notices,
         suggestions,
     )
+}
+
+fn document_query_payload(
+    profile: &ConnectionProfile,
+    query: &DocumentQuery,
+    result: &DocumentPage,
+) -> serde_json::Value {
+    json!({
+        "connection": &profile.name,
+        "connectionId": profile.id,
+        "query": query,
+        "documents": &result.documents,
+        "docCount": result.doc_count,
+        "truncated": result.truncated,
+        "uiMessage": "The full result is visible in the DopeDB app.",
+    })
 }
 
 // ── the read-only tool catalog ───────────────────────────────────────────────────
@@ -1082,15 +1151,7 @@ impl DbTools {
             }),
         );
 
-        let out = json!({
-            "connection": profile.name,
-            "connectionId": profile.id,
-            "query": args.query,
-            "documents": result.documents,
-            "docCount": result.doc_count,
-            "truncated": result.truncated,
-            "uiMessage": "The full result is visible in the DopeDB app.",
-        });
+        let out = document_query_payload(&profile, &args.query, &result);
         Ok(CallToolResult::success(vec![ContentBlock::text(
             out.to_string(),
         )]))
@@ -1228,6 +1289,9 @@ impl DbTools {
 impl ServerHandler for DbTools {}
 
 #[cfg(test)]
+mod golden_tests;
+
+#[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
@@ -1356,12 +1420,22 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(fixture["schemaVersion"], 1);
-        assert_eq!(fixture["coverage"], "phase0_metadata_only");
+        assert_eq!(fixture["coverage"], "phase0_partial_behavioral");
         assert_eq!(
-            fixture["pendingBeforeServiceExtraction"]
-                .as_array()
-                .map(Vec::len),
-            Some(6)
+            fixture["behaviorFixtures"].as_array().map(Vec::len),
+            Some(2)
+        );
+        assert_eq!(
+            fixture["providerCoverage"]["sqlite"],
+            "live_local_roundtrip"
+        );
+        assert_eq!(
+            fixture["providerCoverage"]["mongodb"],
+            "classifier_and_payload_only"
+        );
+        assert_eq!(
+            fixture["providerCoverage"]["externalLiveRoundTrips"],
+            "excluded"
         );
         assert_eq!(fixture["queryPlan"]["ttlSeconds"], QUERY_PLAN_TTL.as_secs());
         assert_eq!(fixture["queryPlan"]["maxRows"], MAX_AGENT_ROWS);

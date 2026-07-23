@@ -15,6 +15,8 @@ pub enum FeatureFlag {
     SkillManagerV1,
     TerminalDockV1,
     McpDeprecated,
+    /// Gates direct canonical CatalogSnapshot consumers. The scoped V2 persistence
+    /// adapter remains always-on because disabling it would weaken cache authority.
     CatalogV2,
     DdlIrV1,
     SqlDocumentsV1,

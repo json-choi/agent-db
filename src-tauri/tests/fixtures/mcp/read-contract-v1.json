@@ -1,14 +1,15 @@
 {
   "schemaVersion": 1,
-  "coverage": "phase0_metadata_only",
-  "pendingBeforeServiceExtraction": [
-    "catalog_and_table_success_error",
-    "query_plan_run_success_error",
-    "monitoring_guidance",
-    "history_and_audit",
-    "dashboard_provenance",
-    "mongo_typed_read"
+  "coverage": "phase0_partial_behavioral",
+  "behaviorFixtures": [
+    "read-behavior-success-v1.json",
+    "read-behavior-errors-v1.json"
   ],
+  "providerCoverage": {
+    "sqlite": "live_local_roundtrip",
+    "mongodb": "classifier_and_payload_only",
+    "externalLiveRoundTrips": "excluded"
+  },
   "connectionResolution": {
     "explicitNameOrId": true,
     "implicitFirstConnection": true

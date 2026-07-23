@@ -1,4 +1,7 @@
-use dopedb_protocol::{RequestEnvelope, ResponseEnvelope, COMMAND_SCHEMA_VERSION, PROTOCOL_MAX};
+use dopedb_protocol::{
+    catalog::CatalogSnapshot, RequestEnvelope, ResponseEnvelope, COMMAND_SCHEMA_VERSION,
+    PROTOCOL_MAX,
+};
 use serde_json::Value;
 
 fn value(source: &str) -> Value {
@@ -53,4 +56,26 @@ fn command_names_match_the_v1_catalog() {
     let expected: Vec<String> =
         serde_json::from_str(include_str!("fixtures/command-catalog-v1.json")).unwrap();
     assert_eq!(actual, expected);
+}
+
+#[test]
+fn catalog_snapshot_matches_the_v2_golden_contract() {
+    let source = include_str!("fixtures/catalog-snapshot-v2.json");
+    let snapshot: CatalogSnapshot =
+        serde_json::from_str(source).expect("Catalog V2 fixture must decode");
+
+    assert_eq!(snapshot.schema_version(), 2);
+    assert!(snapshot.has_canonical_fingerprint());
+    assert_eq!(serde_json::to_value(&snapshot).unwrap(), value(source));
+
+    let mut structural_tamper = value(source);
+    structural_tamper["relations"][0]["columns"][0]["nativeType"] = Value::from("text");
+    assert!(serde_json::from_value::<CatalogSnapshot>(structural_tamper).is_err());
+
+    let mut non_structural_change = value(source);
+    non_structural_change["database"] = Value::from("production");
+    non_structural_change["relations"][0]["rowEstimate"] = Value::from(43);
+    let changed: CatalogSnapshot =
+        serde_json::from_value(non_structural_change).expect("display metadata is not schema");
+    assert_eq!(changed.fingerprint(), snapshot.fingerprint());
 }

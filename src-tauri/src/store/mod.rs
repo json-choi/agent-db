@@ -9,6 +9,9 @@
 
 mod migrations;
 
+#[cfg(test)]
+pub(crate) use migrations::SCHEMA as TEST_SCHEMA;
+
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -1454,7 +1457,6 @@ impl Store {
             || snapshot.schema_version() != CATALOG_SCHEMA_VERSION
             || snapshot.fingerprint() != fingerprint
             || snapshot.captured_at() != captured_at
-            || !snapshot.has_canonical_fingerprint()
             || !catalog_matches_pin(&snapshot, pin)
         {
             return Ok(None);
@@ -1475,7 +1477,7 @@ impl Store {
         snapshot
             .validate()
             .map_err(|_| AppError::Config("invalid Catalog V2 snapshot".into()))?;
-        if !snapshot.has_canonical_fingerprint() || !catalog_matches_pin(snapshot, pin) {
+        if !catalog_matches_pin(snapshot, pin) {
             return Err(AppError::Config(
                 "Catalog V2 snapshot does not match its connection pin".into(),
             ));

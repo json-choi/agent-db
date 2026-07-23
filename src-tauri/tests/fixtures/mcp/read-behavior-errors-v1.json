@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "errors": [
+    {
+      "case": "missingConnection",
+      "error": {
+        "code": -32602,
+        "message": "no connection matching 'missing'"
+      }
+    },
+    {
+      "case": "missingTable",
+      "error": {
+        "code": -32602,
+        "message": "no table matching 'missing' in 'phase0-sqlite'"
+      }
+    },
+    {
+      "case": "writePlan",
+      "error": {
+        "code": -32602,
+        "message": "plan_query accepts exactly one read-only SELECT statement"
+      }
+    },
+    {
+      "case": "usedPlan",
+      "error": {
+        "code": -32602,
+        "message": "plan_id is unknown, expired, or already used; call plan_query again"
+      }
+    },
+    {
+      "case": "expiredPlan",
+      "error": {
+        "code": -32602,
+        "message": "plan_id expired; database health must be checked again with plan_query"
+      }
+    },
+    {
+      "case": "sqlOnMongo",
+      "error": {
+        "code": -32602,
+        "message": "this is a MongoDB connection — SQL planning does not apply; call run_document_query with a typed find/aggregate/countDocuments request"
+      }
+    },
+    {
+      "case": "documentOnSql",
+      "error": {
+        "code": -32602,
+        "message": "run_document_query only works on MongoDB connections — use plan_query/run_query for SQL engines"
+      }
+    },
+    {
+      "case": "mongoWriteStage",
+      "error": {
+        "code": -32602,
+        "message": "aggregate stage \"$out\" is not in the read-only allowlist"
+      }
+    },
+    {
+      "case": "missingQueryRun",
+      "error": {
+        "code": -32602,
+        "message": "query_run_id does not identify a stored DopeDB query run"
+      }
+    },
+    {
+      "case": "manualQueryRun",
+      "error": {
+        "code": -32602,
+        "message": "query_run_id must identify a successful agent read query"
+      }
+    }
+  ]
+}
