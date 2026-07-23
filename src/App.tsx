@@ -673,6 +673,7 @@ function Shell() {
             (selected ? (
               <AgentChat
                 onOpenLogs={() => setAgentLogOpen(true)}
+                onOpenMcpSettings={openMcpSettings}
                 selectedConnection={selected}
               />
             ) : (
@@ -845,42 +846,44 @@ function Shell() {
           localStorage.setItem("sidebarW", String(SIDEBAR_DEFAULT));
         }}
       />
-      <main className="main">{renderMain()}</main>
+      <main className="main">
+        {renderMain()}
+        {(showUpdateBadge || showMcpBadge) && (
+          <div className="ds-attention-stack">
+            {showUpdateBadge && (
+              <button
+                className="ds-attention-badge ds-tone-trust"
+                onClick={openUpdateSettings}
+                title={t("updates.badgeTitle")}
+                aria-label={t("updates.badgeTitle")}
+              >
+                <Icon name="download" />
+                <span>{t("updates.badge", { version: availableUpdate?.version ?? "" })}</span>
+              </button>
+            )}
+            {showMcpBadge && (
+              <button
+                className={
+                  "ds-attention-badge " +
+                  (mcpBadge === "server" ? "ds-tone-danger" : "ds-tone-risk")
+                }
+                onClick={openMcpSettings}
+                title={mcpBadgeTitle}
+                aria-label={mcpBadgeTitle}
+              >
+                <Icon name={mcpBadge === "server" ? "alert" : "database"} />
+                <span>{mcpBadgeLabel}</span>
+              </button>
+            )}
+          </div>
+        )}
+      </main>
       {agentLogOpen && selected && (
         <AgentLogDialog
           connection={selected}
           onDashboardSaved={openDashboard}
           onClose={() => setAgentLogOpen(false)}
         />
-      )}
-      {(showUpdateBadge || showMcpBadge) && (
-        <div className="ds-attention-stack">
-          {showUpdateBadge && (
-            <button
-              className="ds-attention-badge ds-tone-trust"
-              onClick={openUpdateSettings}
-              title={t("updates.badgeTitle")}
-              aria-label={t("updates.badgeTitle")}
-            >
-              <Icon name="download" />
-              <span>{t("updates.badge", { version: availableUpdate?.version ?? "" })}</span>
-            </button>
-          )}
-          {showMcpBadge && (
-            <button
-              className={
-                "ds-attention-badge " +
-                (mcpBadge === "server" ? "ds-tone-danger" : "ds-tone-risk")
-              }
-              onClick={openMcpSettings}
-              title={mcpBadgeTitle}
-              aria-label={mcpBadgeTitle}
-            >
-              <Icon name={mcpBadge === "server" ? "alert" : "database"} />
-              <span>{mcpBadgeLabel}</span>
-            </button>
-          )}
-        </div>
       )}
     </div>
   );

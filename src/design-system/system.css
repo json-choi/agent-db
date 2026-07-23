@@ -780,19 +780,20 @@ h3 {
 }
 
 .ds-attention-stack {
-  position: fixed;
-  right: var(--ds-space-4);
-  bottom: var(--ds-space-4);
-  z-index: var(--ds-z-popover);
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: var(--ds-space-2);
-  pointer-events: none;
+  min-height: calc(var(--ds-control-lg) + (var(--ds-space-2) * 2));
+  padding: var(--ds-space-2) var(--ds-space-3);
+  border-top: var(--ds-border-width) solid var(--ds-border-subtle);
+  background: var(--ds-surface-0);
 }
 
 .ds-attention-badge {
-  max-width: min(280px, calc(100vw - (var(--ds-space-4) * 2)));
+  max-width: min(280px, 100%);
   min-height: var(--ds-control-lg);
   display: inline-flex;
   align-items: center;
@@ -1017,11 +1018,10 @@ h3 {
 
 @media (max-width: 640px) {
   .ds-attention-stack {
-    right: var(--ds-space-3);
-    bottom: var(--ds-space-3);
+    padding-inline: var(--ds-space-2);
   }
 
   .ds-attention-badge {
-    max-width: calc(100vw - (var(--ds-space-3) * 2));
+    max-width: 100%;
   }
 }

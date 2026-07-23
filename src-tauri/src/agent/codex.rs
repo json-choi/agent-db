@@ -1,7 +1,8 @@
 //! Codex CLI adapter: builds the `codex exec` command for one turn and parses its
 //! `--json` JSONL stdout. No config file is needed — the MCP server is wired in with
-//! `-c mcp_servers.<name>.*` overrides, and tool access is capped by the read-only
-//! sandbox policy rather than an allow/deny list (Codex has none for MCP tools).
+//! `-c mcp_servers.<name>.*` overrides. User/project configuration is ignored and
+//! shell/apps/web/multi-agent features are disabled, leaving only DopeDB's annotated
+//! MCP catalog inside a read-only sandbox.
 //!
 //! Flag order verified against `codex exec --help` / `codex exec resume --help`
 //! (codex-cli 0.142.5): `-s/--sandbox` and `-c` are options of `codex exec` itself,
@@ -40,12 +41,13 @@ pub(super) fn command(
     message: &str,
     resume: Option<&str>,
     token: &str,
+    mcp_url: &str,
     model: Option<&str>,
     effort: Option<&str>,
 ) -> AppResult<Command> {
     let bin = which("codex").ok_or_else(|| AppError::Agent("Codex (`codex`) not found".into()))?;
     let mut cmd: Command = quiet_command(&bin).into();
-    cmd.args(build_args(message, resume, model, effort))
+    cmd.args(build_args(message, resume, mcp_url, model, effort))
         .env("DOPEDB_MCP_TOKEN", token);
     Ok(cmd)
 }
@@ -56,22 +58,48 @@ pub(super) fn command(
 fn build_args(
     message: &str,
     resume: Option<&str>,
+    mcp_url: &str,
     model: Option<&str>,
     effort: Option<&str>,
 ) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "exec".into(),
         "--json".into(),
+        "--color".into(),
+        "never".into(),
+        // A database chat must not inherit unrelated global MCP servers, hooks,
+        // plugins, project rules, or approval settings. Authentication still comes
+        // from CODEX_HOME (the CLI's documented --ignore-user-config behavior).
+        "--ignore-user-config".into(),
+        "--ignore-rules".into(),
         "--skip-git-repo-check".into(),
-        // Read-only sandbox: the model can't touch the filesystem/shell even if a
-        // prompt tries to talk it into something outside the MCP tools.
         "-s".into(),
         "read-only".into(),
         "-c".into(),
-        format!("mcp_servers.dopedb-chat.url={}", crate::mcp::mcp_url()),
+        "approval_policy=\"never\"".into(),
         "-c".into(),
-        "mcp_servers.dopedb-chat.bearer_token_env_var=DOPEDB_MCP_TOKEN".into(),
+        "web_search=\"disabled\"".into(),
+        "-c".into(),
+        format!("mcp_servers.dopedb-chat.url=\"{mcp_url}\""),
+        "-c".into(),
+        "mcp_servers.dopedb-chat.bearer_token_env_var=\"DOPEDB_MCP_TOKEN\"".into(),
+        "-c".into(),
+        "mcp_servers.dopedb-chat.required=true".into(),
     ];
+    // Stable Codex feature switches provide the allowlist shape its CLI does not expose
+    // directly: no filesystem shell, connectors, hooks, subagents, or plugin catalog.
+    for feature in [
+        "shell_tool",
+        "unified_exec",
+        "shell_snapshot",
+        "apps",
+        "goals",
+        "hooks",
+        "multi_agent",
+        "remote_plugin",
+    ] {
+        args.extend(["--disable".into(), feature.into()]);
+    }
     if let Some(m) = model {
         args.extend(["-m".into(), m.into()]);
     }
@@ -210,7 +238,13 @@ mod tests {
     /// its own test.
     #[test]
     fn model_and_effort_flags_come_before_the_resume_subcommand() {
-        let args = build_args("hi", Some("thr-1"), Some("o3"), Some("high"));
+        let args = build_args(
+            "hi",
+            Some("thr-1"),
+            "http://127.0.0.1:7686/mcp",
+            Some("o3"),
+            Some("high"),
+        );
         let resume_pos = args
             .iter()
             .position(|a| a == "resume")
@@ -232,10 +266,42 @@ mod tests {
     /// No model/effort selected: no flags added, existing behavior unchanged.
     #[test]
     fn no_model_or_effort_omits_both_flags() {
-        let args = build_args("hi", None, None, None);
+        let args = build_args("hi", None, "http://127.0.0.1:7686/mcp", None, None);
         assert!(!args.iter().any(|a| a == "-m"));
         assert!(!args
             .iter()
             .any(|a| a.starts_with("model_reasoning_effort=")));
+    }
+
+    #[test]
+    fn chat_run_isolated_to_the_dynamic_dopedb_mcp() {
+        let url = "http://127.0.0.1:49152/mcp";
+        let args = build_args("hi", None, url, None, None);
+
+        for required in [
+            "--ignore-user-config",
+            "--ignore-rules",
+            "approval_policy=\"never\"",
+            "web_search=\"disabled\"",
+            "mcp_servers.dopedb-chat.required=true",
+        ] {
+            assert!(args.iter().any(|arg| arg == required), "missing {required}");
+        }
+        assert!(args
+            .iter()
+            .any(|arg| arg == &format!("mcp_servers.dopedb-chat.url=\"{url}\"")));
+        for feature in [
+            "shell_tool",
+            "apps",
+            "hooks",
+            "multi_agent",
+            "remote_plugin",
+        ] {
+            let position = args
+                .iter()
+                .position(|arg| arg == feature)
+                .unwrap_or_else(|| panic!("missing disabled feature {feature}"));
+            assert_eq!(args[position - 1], "--disable");
+        }
     }
 }

@@ -9,6 +9,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -45,7 +46,7 @@ interface AgentChatValue {
     connectionId: string,
     model?: string,
     effort?: string,
-  ) => void;
+  ) => Promise<void>;
   cancelActive: () => void;
 }
 
@@ -87,11 +88,14 @@ export function AgentChatProvider({ children }: { children: ReactNode }) {
   const [threadId, setThreadId] = useState<string | null>(null);
   const [draftProvider, setDraftProvider] = useState<AgentProvider>("claude");
   const [pendingTurn, setPendingTurn] = useState<PendingTurn | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [flushing, setFlushing] = useState(false);
+  const startInFlight = useRef(false);
 
-  // Stays true through the post-done invalidate+clear flush (pendingTurn is only cleared to
-  // null once the persisted rows are confirmed in cache below) — not just while streaming —
-  // so a second send can't race the just-finished turn's rows into the messages cache.
-  const busy = pendingTurn !== null;
+  // Starting covers the first thread INSERT; flushing covers the post-done cache swap.
+  // A rejected invoke remains as a visible done/error bubble but no longer deadlocks the
+  // composer forever.
+  const busy = starting || flushing || (!!pendingTurn && !pendingTurn.done);
 
   useEffect(() => {
     const p1 = listen<{ turnId: string; threadId: string; textChunk: string }>(
@@ -119,10 +123,12 @@ export function AgentChatProvider({ children }: { children: ReactNode }) {
         // and reappears — invalidateQueries awaits the refetch of any currently-mounted query.
         // The threads-list refetch only affects the sidebar (title/updated_at), so it runs
         // independently instead of gating how long the duplicate-bubble window stays open.
+        setFlushing(true);
         void queryClient
           .invalidateQueries({ queryKey: qk.chatMessages(doneThreadId) })
-          .then(() => {
+          .finally(() => {
             setPendingTurn((p) => (p && p.turnId === turnId ? null : p));
+            setFlushing(false);
           });
         void queryClient.invalidateQueries({ queryKey: qk.chatThreads() });
       },
@@ -139,14 +145,16 @@ export function AgentChatProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const send = useCallback(
-    (
+    async (
       text: string,
       provider: AgentProvider,
       connectionId: string,
       model?: string,
       effort?: string,
     ) => {
-      if (busy || !text.trim()) return;
+      if (startInFlight.current || busy || !text.trim()) return;
+      startInFlight.current = true;
+      setStarting(true);
       const turnId = window.crypto.randomUUID();
       const turnStartIso = new Date().toISOString();
       // Captured once at call time: if the user navigates to a different thread while
@@ -154,7 +162,7 @@ export function AgentChatProvider({ children }: { children: ReactNode }) {
       // so the late setThreadId doesn't snap the view back to the new draft thread.
       const initialThreadId = threadId;
 
-      async function run() {
+      try {
         // A draft conversation gets its DB row only now, on its first message, so an
         // abandoned draft never leaves an empty thread in the sidebar.
         let tid = initialThreadId;
@@ -178,8 +186,10 @@ export function AgentChatProvider({ children }: { children: ReactNode }) {
             p && p.turnId === turnId ? { ...p, done: true, error: errMessage(e) } : p,
           );
         });
+      } finally {
+        startInFlight.current = false;
+        setStarting(false);
       }
-      void run();
     },
     [threadId, busy, queryClient],
   );

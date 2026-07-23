@@ -2214,11 +2214,28 @@ pub async fn send_chat_turn(
     model: Option<String>,
     effort: Option<String>,
 ) -> AppResult<()> {
+    // In-app chat must use this process's listener. Development can run beside an
+    // installed DopeDB, in which case the listener has an ephemeral fallback port.
+    // Fail before spawning a paid/slow model turn if no local MCP is available.
+    let mcp_url = {
+        let runtime = state.mcp_runtime.lock().unwrap();
+        if !runtime.http_running {
+            let detail = runtime
+                .last_error
+                .as_deref()
+                .unwrap_or("the local MCP listener has not started");
+            return Err(AppError::Agent(format!(
+                "DopeDB Agent is unavailable: {detail}"
+            )));
+        }
+        runtime.http_url.clone().unwrap_or_else(crate::mcp::mcp_url)
+    };
     crate::agent::send_turn(
         app,
         state.chat.clone(),
         state.store.clone(),
         state.mcp_token.clone(),
+        mcp_url,
         thread_id,
         message,
         turn_id,

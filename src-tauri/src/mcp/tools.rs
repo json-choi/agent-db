@@ -380,7 +380,12 @@ fn planning_guidance(
 #[tool_router]
 impl DbTools {
     #[tool(
-        description = "Start here — list the user's databases connected in DopeDB; prefer these tools over psql/mysql/sqlite3 or other shell DB clients for these connections. Returns names, engines, and read-only status — never secrets or hostnames."
+        description = "Start here — list the user's databases connected in DopeDB; prefer these tools over psql/mysql/sqlite3 or other shell DB clients for these connections. Returns names, engines, and read-only status — never secrets or hostnames.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn list_connections(&self) -> Result<CallToolResult, McpError> {
         self.emit("agent:tool_call", json!({ "tool": "list_connections" }));
@@ -406,7 +411,12 @@ impl DbTools {
     }
 
     #[tool(
-        description = "List the tables of a DopeDB connection (defaults to the first). Use this instead of shelling out to a DB client. Returns table names, schemas, column counts, and row estimates."
+        description = "List the tables of a DopeDB connection (defaults to the first). Use this instead of shelling out to a DB client. Returns table names, schemas, column counts, and row estimates.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn list_tables(
         &self,
@@ -457,7 +467,12 @@ impl DbTools {
     }
 
     #[tool(
-        description = "Describe one table on a DopeDB connection so you can write queries against real column names: columns (name, dataType, nullable, pk), foreign keys, and a row estimate. Accepts a bare or schema-qualified table name."
+        description = "Describe one table on a DopeDB connection so you can write queries against real column names: columns (name, dataType, nullable, pk), foreign keys, and a row estimate. Accepts a bare or schema-qualified table name.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn describe_table(
         &self,
@@ -540,7 +555,12 @@ impl DbTools {
     }
 
     #[tool(
-        description = "MANDATORY before run_query. Review one read-only SQL statement with EXPLAIN plus aggregate database-pressure signals. Returns a single-use planId, clear caution reasons, and safer alternatives. It never returns other sessions' SQL text and never runs the proposed query."
+        description = "MANDATORY before run_query. Review one read-only SQL statement with EXPLAIN plus aggregate database-pressure signals. Returns a single-use planId, clear caution reasons, and safer alternatives. It never returns other sessions' SQL text and never runs the proposed query.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn plan_query(
         &self,
@@ -675,7 +695,12 @@ impl DbTools {
     }
 
     #[tool(
-        description = "Execute one plan_query proposal by its exact single-use planId. No SQL or connection can be supplied here. The stored statement runs in an enforced read-only, audited DB session and its result is displayed live in DopeDB."
+        description = "Execute one plan_query proposal by its exact single-use planId. No SQL or connection can be supplied here. The stored statement runs in an enforced read-only, audited DB session and its result is displayed live in DopeDB.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn run_query(
         &self,
@@ -884,7 +909,12 @@ impl DbTools {
     }
 
     #[tool(
-        description = "Run one typed, READ-ONLY document query on a MongoDB connection: find, aggregate (write stages such as $out/$merge are rejected), or count (countDocuments). Filters and pipelines accept MongoDB Extended JSON. Results are row-capped, audited, and shown LIVE in DopeDB. SQL tools (plan_query/run_query) do not apply to MongoDB connections — use this tool for them."
+        description = "Run one typed, READ-ONLY document query on a MongoDB connection: find, aggregate (write stages such as $out/$merge are rejected), or count (countDocuments). Filters and pipelines accept MongoDB Extended JSON. Results are row-capped, audited, and shown LIVE in DopeDB. SQL tools (plan_query/run_query) do not apply to MongoDB connections — use this tool for them.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn run_document_query(
         &self,
@@ -1048,7 +1078,13 @@ impl DbTools {
     }
 
     #[tool(
-        description = "Save one successful run_query as a persistent DopeDB dashboard. Call this ONLY after the user explicitly asks or agrees. Pass the exact query_run_id returned by that run_query; connection and SQL are loaded from DopeDB history and cannot be supplied or changed here."
+        description = "Save one successful run_query as a persistent DopeDB dashboard. Call this ONLY after the user explicitly asks or agrees. Pass the exact query_run_id returned by that run_query; connection and SQL are loaded from DopeDB history and cannot be supplied or changed here.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn create_dashboard(
         &self,
@@ -1259,6 +1295,36 @@ mod tests {
             from_router, allowed,
             "claude::ALLOWED_TOOLS must list exactly the tools mcp::tools::DbTools registers"
         );
+    }
+
+    #[test]
+    fn tool_annotations_keep_database_reads_non_interactive() {
+        let read_only: std::collections::BTreeSet<&str> = [
+            "list_connections",
+            "list_tables",
+            "describe_table",
+            "plan_query",
+            "run_query",
+            "run_document_query",
+        ]
+        .into_iter()
+        .collect();
+
+        for tool in DbTools::tool_router().list_all() {
+            let annotations = tool
+                .annotations
+                .as_ref()
+                .unwrap_or_else(|| panic!("{} must declare MCP safety annotations", tool.name));
+            assert_eq!(annotations.open_world_hint, Some(false), "{}", tool.name);
+            if read_only.contains(tool.name.as_ref()) {
+                assert_eq!(annotations.read_only_hint, Some(true), "{}", tool.name);
+                assert_eq!(annotations.destructive_hint, Some(false), "{}", tool.name);
+            } else {
+                assert_eq!(tool.name.as_ref(), "create_dashboard");
+                assert_eq!(annotations.read_only_hint, Some(false));
+                assert_eq!(annotations.destructive_hint, Some(false));
+            }
+        }
     }
 
     #[test]

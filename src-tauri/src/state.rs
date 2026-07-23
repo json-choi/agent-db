@@ -15,6 +15,11 @@ use crate::store::Store;
 pub struct McpRuntime {
     pub http_running: bool,
     pub bridge_running: bool,
+    /// Actual HTTP listener chosen for this process. A second development instance
+    /// falls back to an ephemeral port instead of silently talking to another app.
+    pub http_port: Option<u16>,
+    pub http_url: Option<String>,
+    pub http_fallback: bool,
     pub last_error: Option<String>,
 }
 

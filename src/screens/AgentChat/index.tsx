@@ -28,6 +28,7 @@ import {
   agentChatThreadsQuery,
   agentCliDetectionQuery,
   agentModelsQuery,
+  mcpRuntimeStatusQuery,
   qk,
 } from "../../lib/queries";
 import { useI18n, type I18nKey } from "../../lib/i18n";
@@ -73,6 +74,14 @@ interface DisplayMessage {
 function toolsDuringTurn(feed: AgentActivity[], msg: DisplayMessage): AgentActivity[] {
   if (!msg.turnStartIso) return [];
   return feed.filter((item) => item.kind === "result" && item.iso >= msg.turnStartIso!);
+}
+
+function latestActivityDuringTurn(
+  feed: AgentActivity[],
+  msg: DisplayMessage,
+): AgentActivity | null {
+  if (!msg.turnStartIso) return null;
+  return feed.find((item) => item.iso >= msg.turnStartIso!) ?? null;
 }
 
 function ProviderOnboardCard({
@@ -179,9 +188,11 @@ function ThreadRow({
 
 export default function AgentChat({
   onOpenLogs,
+  onOpenMcpSettings,
   selectedConnection,
 }: {
   onOpenLogs: () => void;
+  onOpenMcpSettings: () => void;
   selectedConnection: ConnectionProfile;
 }) {
   const { t } = useI18n();
@@ -200,6 +211,7 @@ export default function AgentChat({
   } = useAgentChat();
 
   const detect = useQuery(agentCliDetectionQuery());
+  const mcpRuntime = useQuery(mcpRuntimeStatusQuery());
   const clis = detect.data ?? [];
   const threadsQuery = useQuery(agentChatThreadsQuery());
   const threads = threadsQuery.data ?? [];
@@ -236,6 +248,7 @@ export default function AgentChat({
     });
   }
   const [draft, setDraft] = useState("");
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
 
@@ -359,16 +372,31 @@ export default function AgentChat({
     }
   }
 
-  function submit() {
+  async function submit() {
     const text = draft.trim();
     if (!text || busy) return;
-    send(text, provider, selectedConnection.id, model || undefined, effort || undefined);
-    setDraft("");
+    setSubmitError(null);
+    try {
+      await send(
+        text,
+        provider,
+        selectedConnection.id,
+        model || undefined,
+        effort || undefined,
+      );
+      setDraft("");
+    } catch (error) {
+      const message = errMessage(error);
+      setSubmitError(message);
+      toast(message, "error");
+    }
   }
 
   const needsConsent = provider === "codex" && selectedReady && !codexConsent;
   const showsAuthWarning = provider === "claude" && selected?.authMethod === "claude.ai";
-  const chatReady = selectedReady && !needsConsent;
+  const providerReady = selectedReady && !needsConsent;
+  const mcpReady = !!mcpRuntime.data?.httpRunning;
+  const chatReady = providerReady && mcpReady;
   // Independent of `busy` (which also covers the post-done cache flush): Cancel is only
   // meaningful while a turn is actually still streaming.
   const showCancel = !!pendingTurn && !pendingTurn.done && pendingTurn.threadId === threadId;
@@ -441,31 +469,35 @@ export default function AgentChat({
               </button>
             )}
             {clis.length > 0 && (
-            <div className="agent-chat-provider-tabs ds-control-row" role="tablist">
-              {clis.map((info) => (
-                <button
-                  key={info.id}
-                  role="tab"
-                  aria-selected={info.id === provider}
-                  className={
-                    info.id === provider
-                      ? "agent-chat-provider-seg active"
-                      : "agent-chat-provider-seg"
-                  }
-                  onClick={() => {
-                    // A thread's provider is fixed (its CLI session can't move), so
-                    // clicking a tab mid-conversation starts a fresh draft instead — but
-                    // clicking the tab that already matches what's on screen (a real
-                    // thread's provider, or the draft's) is a no-op either way.
-                    if (info.id === provider) return;
-                    openThread(null);
-                    setDraftProvider(info.id);
-                  }}
-                >
-                  {info.name}
-                </button>
-              ))}
-            </div>
+              <label
+                className="agent-chat-provider-switcher"
+                title={t("agentChat.providerSwitchHint")}
+              >
+                <span className="agent-chat-provider-label">
+                  {t("agentChat.providerLabel")}
+                </span>
+                <span className="agent-chat-provider-select">
+                  <select
+                    aria-label={t("agentChat.providerSwitchHint")}
+                    value={provider}
+                    onChange={(event) => {
+                      const nextProvider = event.target.value as AgentProvider;
+                      // A thread's CLI session cannot change provider. Selecting another
+                      // agent therefore opens a fresh draft for that provider.
+                      if (nextProvider === provider) return;
+                      openThread(null);
+                      setDraftProvider(nextProvider);
+                    }}
+                  >
+                    {clis.map((info) => (
+                      <option key={info.id} value={info.id}>
+                        {info.name}
+                      </option>
+                    ))}
+                  </select>
+                  <Icon name="chevronDown" />
+                </span>
+              </label>
             )}
             <span
               className="agent-chat-connection-chip"
@@ -520,6 +552,33 @@ export default function AgentChat({
                   </button>
                 </div>
               )}
+
+              {providerReady && mcpRuntime.isPending && <Skeleton lines={2} />}
+
+              {providerReady && !mcpRuntime.isPending && !mcpReady && (
+                <div className="card ds-card-stack ds-tone-danger agent-chat-onboard-card">
+                  <div className="ds-card-title-row">
+                    <Icon name="alert" />
+                    <strong>{t("agentChat.mcpUnavailable")}</strong>
+                  </div>
+                  <p className="muted">
+                    {t("agentChat.mcpUnavailableBody")}
+                    {mcpRuntime.data?.error ? ` ${mcpRuntime.data.error}` : ""}
+                  </p>
+                  <div className="ds-toolbar ds-control-row">
+                    <button
+                      className="btn small"
+                      onClick={() => void mcpRuntime.refetch()}
+                      disabled={mcpRuntime.isFetching}
+                    >
+                      {t("common.refresh")}
+                    </button>
+                    <button className="btn small" onClick={onOpenMcpSettings}>
+                      {t("agentChat.openMcpSettings")}
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <div className="agent-chat-conversation">
@@ -562,15 +621,25 @@ export default function AgentChat({
                 ) : (
                   messages.map((msg) => {
                     const tools = toolsDuringTurn(feed, msg);
+                    const activity = latestActivityDuringTurn(feed, msg);
+                    const pendingLabel =
+                      activity?.kind === "call"
+                        ? t("agentChat.runningTool", { tool: activity.tool })
+                        : activity?.kind === "result"
+                          ? t("agentChat.summarizing")
+                          : t("agentChat.pending");
                     return (
                       <div key={msg.id} className={`agent-chat-msg ${msg.role}`}>
                         <div className="agent-chat-bubble">
                           {msg.pending && !msg.text ? (
-                            <span className="loading">{t("agentChat.pending")}</span>
+                            <span className="loading">{pendingLabel}</span>
                           ) : (
                             msg.text
                           )}
                         </div>
+                        {msg.pending && !!msg.text && (
+                          <span className="muted agent-chat-progress">{pendingLabel}</span>
+                        )}
                         {msg.error && <div className="error">{msg.error}</div>}
                         {tools.length > 0 && (
                           <button
@@ -588,6 +657,11 @@ export default function AgentChat({
               </div>
 
               <div className="card agent-chat-composer">
+                {submitError && (
+                  <div className="error agent-chat-model-error" role="alert">
+                    {submitError}
+                  </div>
+                )}
                 {modelsQuery.error && (
                   <div className="error agent-chat-model-error">
                     {t("agentChat.modelLoadFailed", { error: errMessage(modelsQuery.error) })}{" "}
@@ -598,11 +672,14 @@ export default function AgentChat({
                 )}
                 <textarea
                   value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
+                  onChange={(e) => {
+                    setDraft(e.target.value);
+                    setSubmitError(null);
+                  }}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.shiftKey) {
                       e.preventDefault();
-                      submit();
+                      void submit();
                     }
                   }}
                   placeholder={t("agentChat.composerPlaceholder", {
@@ -645,7 +722,11 @@ export default function AgentChat({
                       {t("common.cancel")}
                     </button>
                   )}
-                  <button className="btn primary" disabled={busy || !draft.trim()} onClick={submit}>
+                  <button
+                    className="btn primary"
+                    disabled={busy || !draft.trim()}
+                    onClick={() => void submit()}
+                  >
                     {t("agentChat.send")}
                   </button>
                 </div>
