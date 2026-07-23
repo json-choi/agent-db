@@ -46,7 +46,7 @@ interface AgentChatValue {
     connectionId: string,
     model?: string,
     effort?: string,
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   cancelActive: () => void;
 }
 
@@ -152,7 +152,7 @@ export function AgentChatProvider({ children }: { children: ReactNode }) {
       model?: string,
       effort?: string,
     ) => {
-      if (startInFlight.current || busy || !text.trim()) return;
+      if (startInFlight.current || busy || !text.trim()) return false;
       startInFlight.current = true;
       setStarting(true);
       const turnId = window.crypto.randomUUID();
@@ -186,6 +186,7 @@ export function AgentChatProvider({ children }: { children: ReactNode }) {
             p && p.turnId === turnId ? { ...p, done: true, error: errMessage(e) } : p,
           );
         });
+        return true;
       } finally {
         startInFlight.current = false;
         setStarting(false);
