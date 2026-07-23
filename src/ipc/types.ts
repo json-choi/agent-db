@@ -23,6 +23,27 @@ export interface WorkspaceFeatureState {
   enabled: boolean;
 }
 
+export type PlatformFeatureFlag =
+  | "operation_runtime_v1"
+  | "local_broker_v1"
+  | "cli_v1"
+  | "skill_manager_v1"
+  | "terminal_dock_v1"
+  | "mcp_deprecated"
+  | "catalog_v2"
+  | "ddl_ir_v1"
+  | "sql_documents_v1"
+  | "table_changes_v1"
+  | "erd_v1"
+  | "jobs_v1"
+  | "plugins_v1"
+  | "workspace_resources_v1"
+  | "realtime_collaboration_v1";
+
+export interface PlatformFeatureFlags {
+  enabled: PlatformFeatureFlag[];
+}
+
 interface WorkspaceAuthUser {
   id: string;
   email: string;

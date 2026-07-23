@@ -9,11 +9,13 @@ mod dashboard;
 mod driver;
 mod error;
 mod executor;
+pub mod features;
 mod introspect;
 mod mcp;
 pub mod model;
 mod mongo;
 mod monitoring;
+pub mod operations;
 mod safety;
 mod sql_script;
 mod state;
@@ -43,6 +45,10 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state)
         .setup(|app| {
+            let enabled_features = app.state::<state::AppState>().features.enabled_names();
+            if !enabled_features.is_empty() {
+                tracing::info!(?enabled_features, "experimental platform features enabled");
+            }
             // Start the local MCP server (Streamable HTTP on 127.0.0.1:7686). It shares
             // the app's Store + credential-store + safety pipeline via the tools in `mcp`.
             let st = app.state::<state::AppState>();
@@ -86,6 +92,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::workspace_feature_state,
+            commands::platform_feature_flags,
             commands::workspace_auth_state,
             commands::refresh_workspace_auth_state,
             commands::workspace_sign_out,

@@ -3,6 +3,7 @@ import {
   dashboardTileRunQueries,
   isTransientDbError,
   mcpPlatformsQuery,
+  platformFeatureFlagsQuery,
   qk,
 } from "./queries";
 
@@ -27,6 +28,16 @@ describe("MCP platform query lifecycle", () => {
 
     expect(query.queryKey).toEqual(qk.mcpPlatforms());
     expect(query.staleTime).toBe(5 * 60_000);
+  });
+});
+
+describe("platform feature flag lifecycle", () => {
+  it("uses one process-stable query and fails closed without retries", () => {
+    const query = platformFeatureFlagsQuery();
+
+    expect(query.queryKey).toEqual(qk.platformFeatureFlags());
+    expect(query.staleTime).toBe(Infinity);
+    expect(query.retry).toBe(false);
   });
 });
 

@@ -31,6 +31,7 @@ use crate::store::Store;
 
 const QUERY_PLAN_TTL: Duration = Duration::from_secs(30);
 const MAX_QUERY_PLANS: usize = 256;
+const MAX_AGENT_ROWS: u64 = 1000;
 
 /// One single-use query proposal. Execution accepts only its id, so an agent cannot
 /// replace the reviewed connection, SQL, or row cap between planning and execution.
@@ -126,6 +127,20 @@ struct CreateDashboardArgs {
 }
 
 // ── helpers (not tools) ──────────────────────────────────────────────────────────
+fn connection_list_payload(connections: &[ConnectionProfile]) -> serde_json::Value {
+    json!({
+        "connections": connections.iter().map(|connection| json!({
+            "id": connection.id,
+            "name": connection.name,
+            "engine": connection.engine,
+            "database": connection.database,
+            "environment": connection.env,
+            "readonly": connection.readonly_default,
+            "allowWrites": connection.allow_writes,
+        })).collect::<Vec<_>>()
+    })
+}
+
 impl DbTools {
     pub fn new(
         store: Store,
@@ -363,17 +378,7 @@ impl DbTools {
     async fn list_connections(&self) -> Result<CallToolResult, McpError> {
         self.emit("agent:tool_call", json!({ "tool": "list_connections" }));
         let list = self.store.list_connections().await.map_err(err)?;
-        let out = json!({
-            "connections": list.iter().map(|c| json!({
-                "id": c.id,
-                "name": c.name,
-                "engine": c.engine,
-                "database": c.database,
-                "environment": c.env,
-                "readonly": c.readonly_default,
-                "allowWrites": c.allow_writes,
-            })).collect::<Vec<_>>()
-        });
+        let out = connection_list_payload(&list);
         self.emit(
             "agent:result",
             json!({ "tool": "list_connections", "count": list.len() }),
@@ -584,7 +589,10 @@ impl DbTools {
         }
 
         let settings = self.store.get_safety(profile.id).await.map_err(err)?;
-        let cap = args.max_rows.unwrap_or(settings.max_rows).min(1000);
+        let cap = args
+            .max_rows
+            .unwrap_or(settings.max_rows)
+            .min(MAX_AGENT_ROWS);
         let live = self.live(profile.id).await?;
         let live = live.sql().map_err(err)?;
         let preview = safety::preview(pool_ref(live.ro()), &args.sql, &cls, &settings)
@@ -944,7 +952,10 @@ impl DbTools {
         }
 
         let settings = self.store.get_safety(profile.id).await.map_err(err)?;
-        let cap = args.max_rows.unwrap_or(settings.max_rows).min(1000);
+        let cap = args
+            .max_rows
+            .unwrap_or(settings.max_rows)
+            .min(MAX_AGENT_ROWS);
         let live = self.live(profile.id).await?;
         let result = match crate::mongo::query::run(
             live.mongo().map_err(err)?,
@@ -1183,6 +1194,8 @@ impl ServerHandler for DbTools {}
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
 
     fn profile(env: Option<&str>) -> ConnectionProfile {
@@ -1298,6 +1311,102 @@ mod tests {
                 assert_eq!(annotations.read_only_hint, Some(false));
                 assert_eq!(annotations.destructive_hint, Some(false));
             }
+        }
+    }
+
+    #[test]
+    fn current_mcp_read_contract_matches_the_phase_zero_golden_fixture() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/mcp/read-contract-v1.json"
+        ))
+        .unwrap();
+        assert_eq!(fixture["schemaVersion"], 1);
+        assert_eq!(fixture["coverage"], "phase0_metadata_only");
+        assert_eq!(
+            fixture["pendingBeforeServiceExtraction"]
+                .as_array()
+                .map(Vec::len),
+            Some(6)
+        );
+        assert_eq!(fixture["queryPlan"]["ttlSeconds"], QUERY_PLAN_TTL.as_secs());
+        assert_eq!(fixture["queryPlan"]["maxRows"], MAX_AGENT_ROWS);
+        assert_eq!(fixture["queryPlan"]["singleUse"], true);
+
+        let implicit: ConnArg = serde_json::from_value(json!({})).unwrap();
+        assert!(implicit.connection.is_none());
+        assert_eq!(
+            fixture["connectionResolution"]["implicitFirstConnection"],
+            true
+        );
+
+        let actual: BTreeMap<String, (bool, bool, bool)> = DbTools::tool_router()
+            .list_all()
+            .into_iter()
+            .filter_map(|tool| {
+                let annotations = tool.annotations?;
+                (annotations.read_only_hint == Some(true)).then(|| {
+                    (
+                        tool.name.to_string(),
+                        (
+                            annotations.read_only_hint.unwrap_or(false),
+                            annotations.destructive_hint.unwrap_or(true),
+                            annotations.open_world_hint.unwrap_or(true),
+                        ),
+                    )
+                })
+            })
+            .collect();
+        let expected: BTreeMap<String, (bool, bool, bool)> = fixture["readTools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| {
+                (
+                    tool["name"].as_str().unwrap().to_string(),
+                    (
+                        tool["readOnly"].as_bool().unwrap(),
+                        tool["destructive"].as_bool().unwrap(),
+                        tool["openWorld"].as_bool().unwrap(),
+                    ),
+                )
+            })
+            .collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn connection_list_payload_matches_the_redacted_golden_fixture() {
+        let mut connection = profile(Some("prod"));
+        connection.id = Uuid::parse_str("018f9999-8888-7777-8666-555544443333").unwrap();
+        connection.host = "ep-secret.example".into();
+        connection.username = "workspace_user".into();
+        connection.secret_ref = Some("credential-item-id".into());
+        connection
+            .extra_params
+            .insert("channel_binding".into(), "require".into());
+
+        let output = connection_list_payload(&[connection]);
+        let expected: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/mcp/list-connections-success.json"
+        ))
+        .unwrap();
+        assert_eq!(output, expected);
+
+        let serialized = output.to_string();
+        for forbidden in [
+            "ep-secret.example",
+            "workspace_user",
+            "credential-item-id",
+            "channel_binding",
+            "provider",
+            "host",
+            "port",
+            "username",
+        ] {
+            assert!(
+                !serialized.contains(forbidden),
+                "redacted response leaked {forbidden}"
+            );
         }
     }
 

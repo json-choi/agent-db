@@ -38,6 +38,8 @@ pub struct AppState {
     pub mcp_runtime: Arc<Mutex<McpRuntime>>,
     /// In-app agent chat memory (resumable CLI session id + active-turn tracking).
     pub chat: crate::agent::ChatState,
+    /// Safety-sensitive rollout gates captured once for this app runtime.
+    pub features: crate::features::FeatureFlags,
 }
 
 impl AppState {
@@ -48,6 +50,7 @@ impl AppState {
             mcp_token: crate::mcp::load_or_create_token(),
             mcp_runtime: Arc::new(Mutex::new(McpRuntime::default())),
             chat: crate::agent::chat_state(),
+            features: crate::features::FeatureFlags::default(),
         })
     }
 }

@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "coverage": "phase0_metadata_only",
+  "pendingBeforeServiceExtraction": [
+    "catalog_and_table_success_error",
+    "query_plan_run_success_error",
+    "monitoring_guidance",
+    "history_and_audit",
+    "dashboard_provenance",
+    "mongo_typed_read"
+  ],
+  "connectionResolution": {
+    "explicitNameOrId": true,
+    "implicitFirstConnection": true
+  },
+  "queryPlan": {
+    "ttlSeconds": 30,
+    "singleUse": true,
+    "maxRows": 1000
+  },
+  "readTools": [
+    {
+      "name": "describe_table",
+      "readOnly": true,
+      "destructive": false,
+      "openWorld": false
+    },
+    {
+      "name": "list_connections",
+      "readOnly": true,
+      "destructive": false,
+      "openWorld": false
+    },
+    {
+      "name": "list_tables",
+      "readOnly": true,
+      "destructive": false,
+      "openWorld": false
+    },
+    {
+      "name": "plan_query",
+      "readOnly": true,
+      "destructive": false,
+      "openWorld": false
+    },
+    {
+      "name": "run_document_query",
+      "readOnly": true,
+      "destructive": false,
+      "openWorld": false
+    },
+    {
+      "name": "run_query",
+      "readOnly": true,
+      "destructive": false,
+      "openWorld": false
+    }
+  ]
+}

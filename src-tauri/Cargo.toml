@@ -19,6 +19,7 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+dopedb-protocol = { path = "../dopedb-protocol" }
 tauri = { version = "2", features = ["macos-private-api"] }
 tokio = { version = "1", features = ["full"] }
 sqlx = { version = "0.9", features = [

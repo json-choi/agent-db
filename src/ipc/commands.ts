@@ -21,6 +21,7 @@ import type {
   ExecOutcome,
   HistoryEntry,
   MonitoringStatus,
+  PlatformFeatureFlags,
   PreviewReport,
   ScriptOutcome,
   SafetySettings,
@@ -35,6 +36,10 @@ import type {
 
 export function workspaceFeatureState(): Promise<WorkspaceFeatureState> {
   return invoke("workspace_feature_state");
+}
+
+export function platformFeatureFlags(): Promise<PlatformFeatureFlags> {
+  return invoke("platform_feature_flags");
 }
 
 export function workspaceAuthState(): Promise<WorkspaceAuthState> {

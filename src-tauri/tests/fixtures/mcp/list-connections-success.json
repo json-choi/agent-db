@@ -1,0 +1,13 @@
+{
+  "connections": [
+    {
+      "id": "018f9999-8888-7777-8666-555544443333",
+      "name": "analytics",
+      "engine": "postgres",
+      "database": "app",
+      "environment": "prod",
+      "readonly": true,
+      "allowWrites": false
+    }
+  ]
+}

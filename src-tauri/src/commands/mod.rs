@@ -21,10 +21,10 @@ use crate::executor;
 use crate::introspect;
 use crate::model::{
     Classification, ConnectionProfile, Dashboard, DashboardDraft, DocumentPage, DocumentQuery,
-    Engine, ExecOutcome, HistoryEntry, MonitoringStatus, PreviewMode, PreviewReport, QueryKind,
-    QueryResult, SafetySettings, Workspace, WorkspaceAuthState, WorkspaceAuthUser,
-    WorkspaceConnectionAccess, WorkspaceCredentialMode, WorkspaceDeviceAuthorization,
-    WorkspaceFeatureState, WorkspaceKind, WorkspaceLoginPoll,
+    Engine, ExecOutcome, HistoryEntry, MonitoringStatus, PlatformFeatureFlags, PreviewMode,
+    PreviewReport, QueryKind, QueryResult, SafetySettings, Workspace, WorkspaceAuthState,
+    WorkspaceAuthUser, WorkspaceConnectionAccess, WorkspaceCredentialMode,
+    WorkspaceDeviceAuthorization, WorkspaceFeatureState, WorkspaceKind, WorkspaceLoginPoll,
 };
 use crate::monitoring;
 use crate::safety::{classify, decide, preview, GateDecision, PoolRef};
@@ -208,6 +208,18 @@ pub fn workspace_feature_state() -> WorkspaceFeatureState {
         })
         .unwrap_or(true);
     WorkspaceFeatureState { enabled }
+}
+
+#[tauri::command]
+pub fn platform_feature_flags(state: State<'_, AppState>) -> PlatformFeatureFlags {
+    PlatformFeatureFlags {
+        enabled: state
+            .features
+            .enabled_names()
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+    }
 }
 
 #[tauri::command]

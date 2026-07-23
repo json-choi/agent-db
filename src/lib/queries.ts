@@ -22,6 +22,7 @@ import {
   mcpPlatforms,
   mcpRuntimeStatus,
   mcpStatus,
+  platformFeatureFlags,
   refreshCatalog,
   runDashboard,
   runDocumentQuery,
@@ -105,6 +106,7 @@ export const qk = {
   dashboards: (connectionId: string) => ["dashboards", connectionId] as const,
   dashboardRun: (dashboardId: string) => ["dashboardRun", dashboardId] as const,
   drivers: () => ["drivers"] as const,
+  platformFeatureFlags: () => ["platformFeatureFlags"] as const,
   mcpPlatforms: () => ["mcpPlatforms"] as const,
   mcpRuntimeStatus: () => ["mcpRuntimeStatus"] as const,
   mcpStatus: () => ["mcpStatus"] as const,
@@ -143,6 +145,15 @@ export function workspaceContextQuery() {
       ]);
       return { feature, workspaces, active };
     },
+  });
+}
+
+export function platformFeatureFlagsQuery() {
+  return queryOptions({
+    queryKey: qk.platformFeatureFlags(),
+    staleTime: Infinity,
+    retry: false,
+    queryFn: platformFeatureFlags,
   });
 }
 

@@ -60,6 +60,13 @@ pub struct WorkspaceFeatureState {
     pub enabled: bool,
 }
 
+/// Process-stable experimental platform gates. An empty list is fail-closed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlatformFeatureFlags {
+    pub enabled: Vec<String>,
+}
+
 /// Public identity fields returned to the desktop after Better Auth validates a
 /// Bearer session. The session token itself never crosses the IPC boundary.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,0 +1,14 @@
+{
+  "protocolVersion": 1,
+  "commandSchemaVersion": 1,
+  "requestId": "018f1111-2222-7333-8444-555566667777",
+  "authentication": {
+    "terminalSessionId": "018faaaa-bbbb-7ccc-8ddd-eeeeeeeeeeee",
+    "token": "fixture-only-session-capability"
+  },
+  "command": "query.plan",
+  "arguments": {
+    "connection": "id:018f9999-8888-7777-8666-555544443333",
+    "sql": "SELECT 1"
+  }
+}
