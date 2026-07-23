@@ -38,6 +38,7 @@ pub enum Provider {
     Generic,
     Neon,
     PlanetScale,
+    GcpCloudSql,
 }
 
 /// Local or synchronized workspace container. Milestone 0 creates one stable,

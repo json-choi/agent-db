@@ -313,8 +313,8 @@ h3 {
 }
 
 .badge.nowhere {
-  background: var(--ds-danger);
-  border-color: var(--ds-danger);
+  background: var(--ds-danger-emphasis);
+  border-color: var(--ds-danger-emphasis);
   color: var(--ds-text-inverse);
 }
 
@@ -357,8 +357,8 @@ h3 {
 }
 
 .ds-engine-mark img {
-  width: var(--ds-control-sm);
-  height: var(--ds-control-sm);
+  width: var(--ds-icon-md);
+  height: var(--ds-icon-md);
   display: block;
   object-fit: contain;
   /* Brand logos stay quiet so the three-hue palette leads the screen. */

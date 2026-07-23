@@ -2,7 +2,10 @@
   flex-shrink: 0;
   display: grid;
   gap: var(--ds-space-1);
-  padding: var(--ds-space-8) var(--ds-space-3) var(--ds-space-3);
+  padding:
+    calc(var(--ds-window-controls-safe-height) + var(--ds-space-2))
+    var(--ds-space-3)
+    var(--ds-space-3);
   border-bottom: var(--ds-border-width) solid var(--ds-sidebar-border);
   background:
     linear-gradient(

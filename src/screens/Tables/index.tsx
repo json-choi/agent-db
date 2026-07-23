@@ -45,8 +45,8 @@ function sameFilters(a: Record<string, string>, b: Record<string, string>) {
 
 const PAGE = 100;
 
-// First/prev/page-indicator/next/last/refresh — identical in SqlTableData and
-// MongoTableData. `children` lets SqlTableData append its structure toggle after refresh.
+// Compact page controls shared by SQL and MongoDB. Text lives in accessible labels and
+// tooltips; icons keep the data toolbar from stealing width from the grid.
 function Pager({
   page,
   pageSize,
@@ -72,25 +72,45 @@ function Pager({
   const hasNext = total != null ? page < (lastPage ?? 0) : rows === pageSize;
   return (
     <div className="table-pager ds-command-group ds-control-row" aria-label={t("tables.pagination")}>
-      <button className="btn small" disabled={busy || !hasPrev} onClick={() => onPage(0)}>
-        « {t("common.first")}
+      <button
+        className="btn small"
+        disabled={busy || !hasPrev}
+        onClick={() => onPage(0)}
+        title={t("common.first")}
+        aria-label={t("common.first")}
+      >
+        <Icon name="chevronsLeft" />
       </button>
-      <button className="btn small" disabled={busy || !hasPrev} onClick={() => onPage(page - 1)}>
-        ‹ {t("common.prev")}
+      <button
+        className="btn small"
+        disabled={busy || !hasPrev}
+        onClick={() => onPage(page - 1)}
+        title={t("common.prev")}
+        aria-label={t("common.prev")}
+      >
+        <Icon name="arrowLeft" />
       </button>
       <span className="muted page-ind">
         {t("tables.page", { page: page + 1 })}
         {lastPage != null && ` / ${lastPage + 1}`}
       </span>
-      <button className="btn small" disabled={busy || !hasNext} onClick={() => onPage(page + 1)}>
-        {t("common.next")} ›
+      <button
+        className="btn small"
+        disabled={busy || !hasNext}
+        onClick={() => onPage(page + 1)}
+        title={t("common.next")}
+        aria-label={t("common.next")}
+      >
+        <Icon name="arrowRight" />
       </button>
       <button
         className="btn small"
         disabled={busy || lastPage == null || !hasNext}
         onClick={() => lastPage != null && onPage(lastPage)}
+        title={t("tables.last")}
+        aria-label={t("tables.last")}
       >
-        {t("tables.last")} »
+        <Icon name="chevronsRight" />
       </button>
       <button
         className="btn small refresh"
@@ -318,36 +338,107 @@ function SqlTableData({
 
   return (
     <div className="table-data">
-      <div className="table-data-head ds-workbench-head">
-        <div className="ds-workbench-title">
-          <h3>{t("tables.editor")}</h3>
-          <div className="ds-title-line">
-            <strong>{tableLabel(engine, table)}</strong>
-            <span className="ds-context-badge">{table.kind === "view" ? t("schema.view") : t("tables.sourceTable")}</span>
-          </div>
-          <div className="ds-meta-row">
-            <span>{t("tables.cols", { count: table.columns.length })}</span>
-            <span className="ds-meta-dot" />
-            <span>LIMIT {pageSize.toLocaleString()}</span>
-            {result && (
-              <>
-                <span className="ds-meta-dot" />
-                <span>
-                  {total != null
-                    ? t("tables.rowRangeTotal", {
-                        from,
-                        to,
-                        total: total.toLocaleString(),
-                      })
-                    : t("tables.rowRange", { from, to })}
-                  {result.truncated ? " (truncated)" : ""}
-                </span>
-                <span className="ds-meta-dot" />
-                <span>{result.durationMs} ms</span>
-              </>
-            )}
-          </div>
+      <div className="table-data-context">
+        <div className="table-data-identity">
+          <Icon name={table.kind === "view" ? "view" : "table"} />
+          <strong>{tableLabel(engine, table)}</strong>
+          <span className="ds-context-badge">
+            {table.kind === "view" ? t("schema.view") : t("tables.sourceTable")}
+          </span>
         </div>
+        <div className="ds-meta-row">
+          <span>{t("tables.cols", { count: table.columns.length })}</span>
+          <span className="ds-meta-dot" />
+          <span>LIMIT {pageSize.toLocaleString()}</span>
+          {result && (
+            <>
+              <span className="ds-meta-dot" />
+              <span>
+                {total != null
+                  ? t("tables.rowRangeTotal", {
+                      from,
+                      to,
+                      total: total.toLocaleString(),
+                    })
+                  : t("tables.rowRange", { from, to })}
+                {result.truncated ? " (truncated)" : ""}
+              </span>
+              <span className="ds-meta-dot" />
+              <span>{result.durationMs} ms</span>
+            </>
+          )}
+        </div>
+      </div>
+
+      <div className="grid-toolbar ds-data-toolbar ds-control-row">
+        <div className="ds-toolbar-group">
+          <button
+            className="btn small"
+            disabled={!canEdit}
+            title={canEdit ? t("tables.insert") : noEditTitle}
+            aria-label={t("tables.insert")}
+            onClick={() => openEdit("insert")}
+          >
+            <Icon name="plus" />
+            <span className="table-action-label">{t("tables.insert")}</span>
+          </button>
+          <button
+            className="btn small"
+            disabled={!canEdit || selected == null}
+            title={canEdit ? t("tables.edit") : noEditTitle}
+            aria-label={t("tables.edit")}
+            onClick={() => openEdit("edit")}
+          >
+            <Icon name="pencil" />
+            <span className="table-action-label">{t("tables.edit")}</span>
+          </button>
+          <button
+            className="btn small danger"
+            disabled={!canEdit || selected == null}
+            title={canEdit ? t("tables.delete") : noEditTitle}
+            aria-label={t("tables.delete")}
+            onClick={doDelete}
+          >
+            <Icon name="trash" />
+            <span className="table-action-label">{t("tables.delete")}</span>
+          </button>
+        </div>
+        <span className="table-toolbar-divider" aria-hidden="true" />
+        <div className="table-query-state" aria-label={t("tables.querySurface")}>
+          <span
+            className={activeFilters ? "table-state active" : "table-state"}
+            title={t("tables.filterState")}
+          >
+            <Icon name="filter" />
+            {activeFilters
+              ? t(activeFilters > 1 ? "tables.activeFiltersPlural" : "tables.activeFilters", {
+                  count: activeFilters,
+                })
+              : t("tables.noFilters")}
+          </span>
+          <span
+            className={sort ? "table-state active" : "table-state"}
+            title={t("tables.sortState")}
+          >
+            <Icon name="sort" />
+            {sort ? `${sort.col} ${sort.dir.toUpperCase()}` : t("tables.unsorted")}
+          </span>
+          <span
+            className={safety.allowWrites ? "table-state risk" : "table-state"}
+            title={t("tables.writePolicy")}
+          >
+            <Icon name={safety.allowWrites ? "pencil" : "circleSlash"} />
+            {safety.allowWrites
+              ? t("tables.writePolicyWrites")
+              : t("tables.writePolicyReadonly")}
+          </span>
+          {activeFilters > 0 && (
+            <button className="btn small" onClick={() => setFilters({})}>
+              {t("tables.clear")}
+            </button>
+          )}
+        </div>
+        <span className="ds-toolbar-spacer" />
         <Pager
           page={page}
           pageSize={pageSize}
@@ -358,43 +449,65 @@ function SqlTableData({
           onRefresh={() => void rowsQuery.refetch()}
         >
           <button
-            className="btn small"
+            className={`btn small${structure ? " active" : ""}`}
             aria-expanded={structure}
             title={t("tables.structureTitle")}
+            aria-label={t("tables.structureTitle")}
             onClick={() => setStructure((s) => !s)}
           >
-            {t("tables.structure")}
+            <Icon name="columns" />
           </button>
+          <details className="toolbar-menu">
+            <summary
+              className="btn small"
+              title={t("tables.more")}
+              aria-label={t("tables.more")}
+            >
+              <Icon name="moreVertical" />
+            </summary>
+            <div className="toolbar-menu-panel">
+              <button
+                className="btn small"
+                disabled={!canEdit || selected == null}
+                title={canEdit ? undefined : noEditTitle}
+                onClick={() => openEdit("duplicate")}
+              >
+                <Icon name="copy" />
+                {t("tables.duplicate")}
+              </button>
+              <button className="btn small" disabled={selected == null} onClick={() => copyRow(false)}>
+                <Icon name="copy" />
+                {t("tables.copyTsv")}
+              </button>
+              <button className="btn small" disabled={selected == null} onClick={() => copyRow(true)}>
+                <Icon name="copy" />
+                {t("tables.copyJson")}
+              </button>
+              <button
+                className="btn small"
+                disabled={!rows}
+                title={t("tables.exportPageTitle")}
+                onClick={() =>
+                  result && downloadCsv(`${table.name}-page${page + 1}-${stamp()}`, result.columns, result.rows)
+                }
+              >
+                <Icon name="download" />
+                {t("tables.exportCsv")}
+              </button>
+              <button
+                className="btn small"
+                disabled={!rows}
+                title={t("tables.exportPageTitle")}
+                onClick={() =>
+                  result && downloadJson(`${table.name}-page${page + 1}-${stamp()}`, result.columns, result.rows)
+                }
+              >
+                <Icon name="download" />
+                {t("tables.exportJson")}
+              </button>
+            </div>
+          </details>
         </Pager>
-      </div>
-
-      <div className="table-query-strip ds-filter-strip" aria-label={t("tables.querySurface")}>
-        <span className={activeFilters ? "ds-filter-token active" : "ds-filter-token"}>
-          <strong>WHERE</strong>
-          {activeFilters
-            ? t(activeFilters > 1 ? "tables.activeFiltersPlural" : "tables.activeFilters", {
-                count: activeFilters,
-              })
-            : t("tables.noFilters")}
-        </span>
-        <span className={sort ? "ds-filter-token active" : "ds-filter-token"}>
-          <strong>ORDER BY</strong>
-          {sort ? `${sort.col} ${sort.dir.toUpperCase()}` : t("tables.unsorted")}
-        </span>
-        <span className={safety.allowWrites ? "ds-filter-token risk" : "ds-filter-token"}>
-          <strong>{t("tables.writePolicy")}</strong>
-          {safety.allowWrites ? t("tables.writePolicyWrites") : t("tables.writePolicyReadonly")}
-        </span>
-        <span className="ds-toolbar-spacer" />
-        <span className="ds-filter-token column-policy" title={t("tables.columnPolicyHint")}>
-          <strong>{t("tables.columnPolicy")}</strong>
-          {t("tables.columnPolicyCompact")}
-        </span>
-        {activeFilters > 0 && (
-          <button className="btn small" onClick={() => setFilters({})}>
-            {t("tables.clear")}
-          </button>
-        )}
       </div>
 
       {/* Introspected metadata already on the prop — no backend call. Collapsed by default. */}
@@ -455,77 +568,6 @@ function SqlTableData({
         </div>
       )}
 
-      <div className="grid-toolbar ds-data-toolbar ds-control-row">
-        <div className="ds-toolbar-group">
-          <button
-            className="btn small"
-            disabled={!canEdit}
-            title={canEdit ? undefined : noEditTitle}
-            onClick={() => openEdit("insert")}
-          >
-            {t("tables.insert")}
-          </button>
-          <button
-            className="btn small"
-            disabled={!canEdit || selected == null}
-            title={canEdit ? undefined : noEditTitle}
-            onClick={() => openEdit("edit")}
-          >
-            {t("tables.edit")}
-          </button>
-          <button
-            className="btn small danger"
-            disabled={!canEdit || selected == null}
-            title={canEdit ? undefined : noEditTitle}
-            onClick={doDelete}
-          >
-            {t("tables.delete")}
-          </button>
-        </div>
-        <span className="ds-toolbar-spacer" />
-        <div className="ds-toolbar-group">
-        <details className="toolbar-menu">
-          <summary className="btn small">{t("tables.more")}</summary>
-          <div className="toolbar-menu-panel">
-            <button
-              className="btn small"
-              disabled={!canEdit || selected == null}
-              title={canEdit ? undefined : noEditTitle}
-              onClick={() => openEdit("duplicate")}
-            >
-              {t("tables.duplicate")}
-            </button>
-            <button className="btn small" disabled={selected == null} onClick={() => copyRow(false)}>
-              {t("tables.copyTsv")}
-            </button>
-            <button className="btn small" disabled={selected == null} onClick={() => copyRow(true)}>
-              {t("tables.copyJson")}
-            </button>
-            <button
-              className="btn small"
-              disabled={!rows}
-              title={t("tables.exportPageTitle")}
-              onClick={() =>
-                result && downloadCsv(`${table.name}-page${page + 1}-${stamp()}`, result.columns, result.rows)
-              }
-            >
-              {t("tables.exportCsv")}
-            </button>
-            <button
-              className="btn small"
-              disabled={!rows}
-              title={t("tables.exportPageTitle")}
-              onClick={() =>
-                result && downloadJson(`${table.name}-page${page + 1}-${stamp()}`, result.columns, result.rows)
-              }
-            >
-              {t("tables.exportJson")}
-            </button>
-          </div>
-        </details>
-        </div>
-      </div>
-
       {err && <div className="error">{err}</div>}
 
       {/* Dim (not blank) the stale grid while paging/sorting/filtering re-queries. */}
@@ -545,6 +587,12 @@ function SqlTableData({
                 setSelected(i);
                 setCellSel({ value, column });
               }}
+              columnMeta={Object.fromEntries(
+                table.columns.map((column) => [
+                  column.name,
+                  { dataType: column.dataType, pk: column.pk },
+                ]),
+              )}
             />
           ) : busy ? (
             // Reloading (filter cleared / table switched) — the stale zero-row result would
@@ -691,32 +739,33 @@ function MongoTableData({
 
   return (
     <div className="table-data">
-      <div className="table-data-head ds-workbench-head">
-        <div className="ds-workbench-title">
-          <h3>{t("tables.editor")}</h3>
-          <div className="ds-title-line">
-            <strong>{tableLabel(connection.engine, table)}</strong>
-            <span className="ds-context-badge">
-              {table.kind === "view" ? t("schema.view") : t("tables.sourceCollection")}
-            </span>
-          </div>
-          <div className="ds-meta-row">
-            <span>LIMIT {pageSize.toLocaleString()}</span>
-            {docPage && (
-              <>
-                <span className="ds-meta-dot" />
-                <span>
-                  {total != null
-                    ? t("tables.rowRangeTotal", { from, to, total: total.toLocaleString() })
-                    : t("tables.rowRange", { from, to })}
-                  {docPage.truncated ? " (truncated)" : ""}
-                </span>
-                <span className="ds-meta-dot" />
-                <span>{docPage.durationMs} ms</span>
-              </>
-            )}
-          </div>
+      <div className="table-data-context">
+        <div className="table-data-identity">
+          <Icon name={table.kind === "view" ? "view" : "collection"} />
+          <strong>{tableLabel(connection.engine, table)}</strong>
+          <span className="ds-context-badge">
+            {table.kind === "view" ? t("schema.view") : t("tables.sourceCollection")}
+          </span>
         </div>
+        <div className="ds-meta-row">
+          <span>LIMIT {pageSize.toLocaleString()}</span>
+          {docPage && (
+            <>
+              <span className="ds-meta-dot" />
+              <span>
+                {total != null
+                  ? t("tables.rowRangeTotal", { from, to, total: total.toLocaleString() })
+                  : t("tables.rowRange", { from, to })}
+                {docPage.truncated ? " (truncated)" : ""}
+              </span>
+              <span className="ds-meta-dot" />
+              <span>{docPage.durationMs} ms</span>
+            </>
+          )}
+        </div>
+      </div>
+      <div className="grid-toolbar ds-data-toolbar ds-control-row">
+        <span className="ds-toolbar-spacer" />
         <Pager
           page={page}
           pageSize={pageSize}
@@ -736,7 +785,16 @@ function MongoTableData({
       <div className={busy && docPage ? "table-data-body busy" : "table-data-body"}>
         {docPage ? (
           <>
-            <DataGrid result={result} startIndex={page * pageSize} />
+            <DataGrid
+              result={result}
+              startIndex={page * pageSize}
+              columnMeta={Object.fromEntries(
+                table.columns.map((column) => [
+                  column.name,
+                  { dataType: column.dataType, pk: column.pk },
+                ]),
+              )}
+            />
             {rows === 0 && !busy && <div className="muted">{t("tables.tableEmpty")}</div>}
           </>
         ) : (

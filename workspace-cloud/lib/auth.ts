@@ -1,4 +1,5 @@
-// Better Auth is the sole identity and organization authority for the control plane.
+// Better Auth owns identity, sessions, invitations, and organization records.
+// Membership authority mutations are narrowed to the revocation-gated workspace routes.
 // Provider credentials are stripped before persistence; desktop sessions use RFC 8628.
 import "server-only";
 import { randomUUID } from "node:crypto";
@@ -27,6 +28,14 @@ export const auth = betterAuth({
   baseURL: env.appOrigin(),
   secret: env.authSecret(),
   trustedOrigins: [env.appOrigin()],
+  // Membership authority changes must pass through the workspace routes that
+  // durably block lease issuance and drain existing credentials first. Better
+  // Auth's server-side auth.api methods remain available to those routes.
+  disabledPaths: [
+    "/organization/update-member-role",
+    "/organization/remove-member",
+    "/organization/leave",
+  ],
   database: drizzleAdapter(db, {
     provider: "pg",
     schema: authSchema,
@@ -80,6 +89,7 @@ export const auth = betterAuth({
       ac,
       roles: workspaceRoles,
       creatorRole: "owner",
+      disableOrganizationDeletion: true,
       membershipLimit: 100,
       invitationExpiresIn: 60 * 60 * 48,
       cancelPendingInvitationsOnReInvite: true,

@@ -68,11 +68,34 @@ pub struct Table {
     pub row_estimate: Option<i64>,
 }
 
+/// A non-tabular database object shown in the explorer. Keeping these separate from
+/// [`Table`] prevents routines, triggers, and sequences from accidentally flowing into
+/// data reads, schema diffs, SQL completion, or MCP table tools.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseObject {
+    /// Schema/namespace (None for single-schema engines).
+    pub schema: Option<String>,
+    pub name: String,
+    /// "function" | "procedure" | "trigger" | "sequence" | "materialized_view".
+    pub kind: String,
+    /// Compact, non-secret metadata such as a routine signature or trigger event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// Owning table for a trigger, when the engine exposes one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+}
+
 /// The introspected schema for one connection.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Catalog {
     pub tables: Vec<Table>,
+    /// Added after the original schema-cache contract. Defaulting keeps old cached JSON
+    /// readable and lets document databases return an empty object list.
+    #[serde(default)]
+    pub objects: Vec<DatabaseObject>,
 }
 
 /// Introspect a live connection's schema. SQL engines read via the read-only
@@ -129,5 +152,18 @@ pub async fn get_table_ddl(
         Live::Mongo(_) => Err(AppError::Config(
             "MongoDB collections have no SQL DDL".into(),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Catalog;
+
+    #[test]
+    fn catalog_keeps_pre_object_cache_json_compatible() {
+        let catalog: Catalog = serde_json::from_str(r#"{"tables":[]}"#).unwrap();
+
+        assert!(catalog.tables.is_empty());
+        assert!(catalog.objects.is_empty());
     }
 }

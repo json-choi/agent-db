@@ -38,7 +38,6 @@ import { fullTime, relTime } from "../../lib/relTime";
 import "./agentChat.css";
 
 const CODEX_CONSENT_KEY = "dopedb:agentChat:codexConsent";
-const RAIL_OPEN_KEY = "dopedb:agentChat:railOpen";
 // Distance (px) from the bottom of the message list within which a streaming chunk still
 // auto-scrolls the view — beyond this, the user has deliberately scrolled up to read back.
 const AUTO_SCROLL_THRESHOLD = 80;
@@ -150,37 +149,31 @@ function ThreadRow({
   return (
     <div
       className={`agent-chat-thread-row ds-object-row${active ? " active" : ""}`}
-      role="button"
-      tabIndex={0}
-      aria-selected={active}
-      onClick={onOpen}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onOpen();
-        }
-      }}
     >
-      <span className="agent-chat-thread-meta">
-        <span className="agent-chat-thread-title">
-          {thread.title || t("agentChat.threadUntitled")}
+      <button
+        type="button"
+        className="agent-chat-thread-open"
+        aria-pressed={active}
+        onClick={onOpen}
+      >
+        <span className="agent-chat-thread-meta">
+          <span className="agent-chat-thread-title">
+            {thread.title || t("agentChat.threadUntitled")}
+          </span>
+          <span className="agent-chat-thread-sub">
+            <span>{providerLabel}</span>
+            <span className="ds-meta-dot" />
+            <span title={fullTime(thread.updatedAt)}>{relTime(thread.updatedAt)}</span>
+          </span>
         </span>
-        <span className="agent-chat-thread-sub">
-          <span>{providerLabel}</span>
-          <span className="ds-meta-dot" />
-          <span title={fullTime(thread.updatedAt)}>{relTime(thread.updatedAt)}</span>
-        </span>
-      </span>
+      </button>
       <button
         type="button"
         className="btn small agent-chat-thread-delete"
         title={deleteLabel}
         aria-label={deleteLabel}
         disabled={busy || deleting}
-        onClick={(e) => {
-          e.stopPropagation();
-          onDelete();
-        }}
+        onClick={onDelete}
       >
         <Icon name="trash" />
       </button>
@@ -190,11 +183,15 @@ function ThreadRow({
 
 export default function AgentChat({
   compact = false,
+  historyOpen,
+  onHistoryOpenChange,
   onOpenLogs,
   onOpenMcpSettings,
   selectedConnection,
 }: {
   compact?: boolean;
+  historyOpen: boolean;
+  onHistoryOpenChange: (open: boolean) => void;
   onOpenLogs: () => void;
   onOpenMcpSettings: () => void;
   selectedConnection: ConnectionProfile;
@@ -225,6 +222,14 @@ export default function AgentChat({
   );
   const activeThread =
     scopedThreads.find((thread) => thread.id === threadId) ?? null;
+  // This is the only thread id safe to render or send for the selected database.
+  // It becomes null synchronously on a connection switch, before the cleanup effect.
+  const pendingThreadId =
+    pendingTurn?.connectionId === selectedConnection.id
+    && pendingTurn.threadId === threadId
+      ? pendingTurn.threadId
+      : null;
+  const scopedThreadId = activeThread?.id ?? pendingThreadId;
   const provider: AgentProvider = activeThread ? activeThread.provider : draftProvider;
 
   const selected = clis.find((c) => c.id === provider) ?? null;
@@ -242,27 +247,33 @@ export default function AgentChat({
   const [codexConsent, setCodexConsent] = useState(
     () => localStorage.getItem(CODEX_CONSENT_KEY) === "1",
   );
-  // Orca-style project navigation stays visible by default, but users can collapse it and
-  // the preference remains local to this device.
-  const [railOpen, setRailOpen] = useState(
-    () => !compact && localStorage.getItem(RAIL_OPEN_KEY) !== "0",
-  );
-  function toggleRail() {
-    setRailOpen((open) => {
-      localStorage.setItem(RAIL_OPEN_KEY, open ? "0" : "1");
-      return !open;
-    });
-  }
+  const railOpen = historyOpen;
   const [draft, setDraft] = useState("");
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const historyRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!historyOpen) return;
+    const frame = window.requestAnimationFrame(() => {
+      const active =
+        historyRef.current?.querySelector<HTMLButtonElement>(
+          '.agent-chat-thread-open[aria-pressed="true"]',
+        ) ??
+        historyRef.current?.querySelector<HTMLButtonElement>(
+          ".agent-chat-thread-open, .agent-chat-new-btn",
+        );
+      active?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [historyOpen]);
 
   // Unsent composer text belongs to whichever thread it was typed for — never carry it
   // across a thread switch, or it can get sent into the wrong conversation.
   useEffect(() => {
     setDraft("");
-  }, [threadId]);
+  }, [selectedConnection.id, threadId]);
 
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState("");
@@ -270,11 +281,11 @@ export default function AgentChat({
   // Before a conversation starts, jump to whichever CLI is actually usable — a user with
   // only Codex installed shouldn't land on Claude's onboarding by default.
   useEffect(() => {
-    if (threadId !== null || selectedReady) return;
+    if (scopedThreadId !== null || selectedReady) return;
     const ready = clis.find((c) => c.installed && c.authenticated);
     if (ready) setDraftProvider(ready.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clis, threadId, selectedReady]);
+  }, [clis, scopedThreadId, selectedReady]);
 
   // Seed the picker from the active thread's own row (its last-used model/effort), or from
   // this draft provider's remembered choice. Re-seeds only on a thread switch or provider
@@ -288,7 +299,7 @@ export default function AgentChat({
       setEffort(loadProviderStrings("effort")[provider]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [threadId, provider]);
+  }, [scopedThreadId, provider]);
 
   const modelsQuery = useQuery({ ...agentModelsQuery(provider), enabled: selectedReady });
   const models: AgentModel[] = modelsQuery.data ?? [];
@@ -316,7 +327,7 @@ export default function AgentChat({
     saveProviderString("effort", provider, v);
   }
 
-  const messagesQuery = useQuery(agentChatMessagesQuery(threadId));
+  const messagesQuery = useQuery(agentChatMessagesQuery(scopedThreadId));
   const persisted = messagesQuery.data ?? [];
   const messages = useMemo<DisplayMessage[]>(() => {
     const list: DisplayMessage[] = persisted.map((m) => ({
@@ -325,7 +336,7 @@ export default function AgentChat({
       text: m.text,
       error: m.error,
     }));
-    if (pendingTurn && pendingTurn.threadId === threadId) {
+    if (pendingTurn && pendingTurn.threadId === scopedThreadId) {
       if (shouldShowOptimisticUser(persisted, pendingTurn)) {
         list.push({
           id: pendingTurn.userMessageId,
@@ -345,13 +356,13 @@ export default function AgentChat({
       }
     }
     return list;
-  }, [persisted, pendingTurn, threadId]);
+  }, [persisted, pendingTurn, scopedThreadId]);
 
   // Opening a (different) conversation always starts at its latest message, regardless of
   // where the list happened to be scrolled to before.
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
-  }, [threadId]);
+  }, [scopedThreadId]);
 
   // Within the same conversation (streamed text growing the last bubble), only follow the
   // tail if the user was already reading near the bottom — otherwise a token arriving while
@@ -378,7 +389,7 @@ export default function AgentChat({
       await deleteChatThread(thread.id);
       queryClient.removeQueries({ queryKey: qk.chatMessages(thread.id) });
       await queryClient.invalidateQueries({ queryKey: qk.chatThreads() });
-      if (threadId === thread.id) openThread(null);
+      if (scopedThreadId === thread.id) openThread(null);
     } catch (e) {
       toast(errMessage(e), "error");
     } finally {
@@ -395,6 +406,7 @@ export default function AgentChat({
         text,
         provider,
         selectedConnection.id,
+        scopedThreadId,
         model || undefined,
         effort || undefined,
       );
@@ -410,64 +422,72 @@ export default function AgentChat({
   const showsAuthWarning = provider === "claude" && selected?.authMethod === "claude.ai";
   const providerReady = selectedReady && !needsConsent;
   const mcpReady = !!mcpRuntime.data?.httpRunning;
-  const chatReady = providerReady && mcpReady;
+  const threadScopeReady = threadId === null || threadsQuery.isSuccess;
+  const chatReady = providerReady && mcpReady && threadScopeReady;
   // Independent of `busy` (which also covers the post-done cache flush): Cancel is only
   // meaningful while a turn is actually still streaming.
-  const showCancel = !!pendingTurn && !pendingTurn.done && pendingTurn.threadId === threadId;
+  const showCancel =
+    !!pendingTurn
+    && !pendingTurn.done
+    && pendingTurn.threadId === scopedThreadId;
 
   return (
     <div className={`agent-chat-screen screen${compact ? " compact" : ""}`}>
       <div className="agent-chat-layout">
         {railOpen && (
-        <aside className="agent-chat-rail">
-          <button
-            type="button"
-            className="btn agent-chat-new-btn"
-            onClick={() => {
-              openThread(null);
-              setDraft("");
+          <aside
+            ref={historyRef}
+            id="agent-chat-history"
+            className="agent-chat-rail"
+            onKeyDown={(event) => {
+              if (event.key !== "Escape") return;
+              event.preventDefault();
+              event.stopPropagation();
+              onHistoryOpenChange(false);
             }}
           >
-            <Icon name="plus" />
-            {t("agentChat.newChat")}
-          </button>
-          <div className="agent-chat-thread-list">
-            {threadsQuery.isPending ? (
-              <Skeleton lines={4} />
-            ) : scopedThreads.length === 0 ? (
-              <div className="muted agent-chat-thread-empty">
-                {t("agentChat.threadListEmpty")}
-              </div>
-            ) : (
-              scopedThreads.map((th) => (
-                <ThreadRow
-                  key={th.id}
-                  thread={th}
-                  active={th.id === threadId}
-                  busy={!!pendingTurn && pendingTurn.threadId === th.id && !pendingTurn.done}
-                  deleting={deletingId === th.id}
-                  providerLabel={providerLabel(th.provider)}
-                  onOpen={() => openThread(th.id)}
-                  onDelete={() => void handleDeleteThread(th)}
-                />
-              ))
-            )}
-          </div>
-        </aside>
+            <button
+              type="button"
+              className="btn agent-chat-new-btn"
+              onClick={() => {
+                openThread(null);
+                setDraft("");
+                if (compact) onHistoryOpenChange(false);
+              }}
+            >
+              <Icon name="plus" />
+              {t("agentChat.newChat")}
+            </button>
+            <div className="agent-chat-thread-list">
+              {threadsQuery.isPending ? (
+                <Skeleton lines={4} />
+              ) : scopedThreads.length === 0 ? (
+                <div className="muted agent-chat-thread-empty">
+                  {t("agentChat.threadListEmpty")}
+                </div>
+              ) : (
+                scopedThreads.map((th) => (
+                  <ThreadRow
+                    key={th.id}
+                    thread={th}
+                    active={th.id === scopedThreadId}
+                    busy={!!pendingTurn && pendingTurn.threadId === th.id && !pendingTurn.done}
+                    deleting={deletingId === th.id}
+                    providerLabel={providerLabel(th.provider)}
+                    onOpen={() => {
+                      openThread(th.id);
+                      if (compact) onHistoryOpenChange(false);
+                    }}
+                    onDelete={() => void handleDeleteThread(th)}
+                  />
+                ))
+              )}
+            </div>
+          </aside>
         )}
 
         <div className="agent-chat-main">
           <div className="agent-chat-topbar">
-            <button
-              type="button"
-              className="btn small"
-              aria-expanded={railOpen}
-              aria-label={t("agentChat.toggleThreads")}
-              title={t("agentChat.toggleThreads")}
-              onClick={toggleRail}
-            >
-              <Icon name="sidebar" />
-            </button>
             {!railOpen && (
               <button
                 type="button"
@@ -514,19 +534,6 @@ export default function AgentChat({
                 </span>
               </label>
             )}
-            <span
-              className="agent-chat-connection-chip"
-              title={`${selectedConnection.engine} · ${selectedConnection.database}`}
-            >
-              <Icon name="database" />
-              <span className="agent-chat-context-label">{t("agentChat.contextLabel")}</span>
-              <strong>{selectedConnection.name || t("app.unnamed")}</strong>
-              {selectedConnection.env && (
-                <span className={`env-chip env-${selectedConnection.env}`}>
-                  {selectedConnection.env}
-                </span>
-              )}
-            </span>
           </div>
 
           {detect.isPending ? (
@@ -610,7 +617,7 @@ export default function AgentChat({
               )}
 
               <div className="agent-chat-messages" role="log" ref={listRef}>
-                {threadId !== null && messagesQuery.isPending ? (
+                {scopedThreadId !== null && messagesQuery.isPending ? (
                   <Skeleton lines={4} />
                 ) : messages.length === 0 ? (
                   <div className="agent-chat-empty">
@@ -685,6 +692,21 @@ export default function AgentChat({
                     </button>
                   </div>
                 )}
+                <span
+                  className="agent-chat-connection-chip"
+                  title={`${selectedConnection.engine} · ${selectedConnection.database}`}
+                >
+                  <Icon name="database" />
+                  <span className="agent-chat-context-label">
+                    {t("agentChat.contextLabel")}
+                  </span>
+                  <strong>{selectedConnection.name || t("app.unnamed")}</strong>
+                  {selectedConnection.env && (
+                    <span className={`env-chip env-${selectedConnection.env}`}>
+                      {selectedConnection.env}
+                    </span>
+                  )}
+                </span>
                 <textarea
                   value={draft}
                   onChange={(e) => {

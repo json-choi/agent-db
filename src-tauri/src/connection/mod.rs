@@ -137,4 +137,12 @@ impl Live {
             Live::Mongo(conn) => conn.ping().await,
         }
     }
+
+    /// Close provider-backed pools when their lease expires. Mongo clients have no
+    /// asynchronous close primitive; dropping their final handle closes the client.
+    pub async fn close(&self) {
+        if let Live::Sql(live) = self {
+            live.close().await;
+        }
+    }
 }

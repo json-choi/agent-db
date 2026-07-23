@@ -43,7 +43,10 @@ pub async fn introspect(conn: &MongoConnection) -> AppResult<Catalog> {
     .try_collect::<Vec<_>>()
     .await?;
 
-    Ok(Catalog { tables })
+    Ok(Catalog {
+        tables,
+        objects: Vec::new(),
+    })
 }
 
 async fn table_for(

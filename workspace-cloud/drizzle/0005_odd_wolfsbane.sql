@@ -1,0 +1,4 @@
+ALTER TABLE "workspace_control"."workspace_credential_lease" ADD COLUMN "cleanup_attempts" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "workspace_control"."workspace_credential_lease" ADD COLUMN "cleanup_next_attempt_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "workspace_control"."workspace_credential_lease" ADD COLUMN "cleanup_claimed_at" timestamp with time zone;--> statement-breakpoint
+CREATE INDEX "credential_lease_cleanup_ready_idx" ON "workspace_control"."workspace_credential_lease" USING btree ("cleanup_attempts","cleanup_next_attempt_at","expires_at") WHERE "revoked_at" IS NULL;

@@ -1,6 +1,6 @@
 // Admin configuration for managed credentials. Resource existence is checked through
 // the provider before the redacted selector is attached to a shared connection.
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, exists, isNull, sql } from "drizzle-orm";
 import { db } from "../../../../../../../../lib/db";
 import { env } from "../../../../../../../../lib/env";
 import {
@@ -11,17 +11,22 @@ import {
 } from "../../../../../../../../lib/http";
 import {
   activeProviderIntegration,
-  parsePlanetScaleResource,
-  providerAccessToken,
+  parseManagedProviderResource,
   revokeActiveLeases,
+  validateManagedProviderResource,
+  type ManagedProviderResource,
 } from "../../../../../../../../lib/provider-integrations";
+import { vercelOidcToken } from "../../../../../../../../lib/providers/gcp-cloud-sql";
+import { ProviderRequestError } from "../../../../../../../../lib/providers/provider-types";
 import {
-  PlanetScaleRequestError,
-  validatePlanetScaleResource,
-} from "../../../../../../../../lib/providers/planetscale";
+  claimRevocationGate,
+  releaseRevocationGateClaim,
+  revocationGateLockKey,
+} from "../../../../../../../../lib/revocation-gates";
 import {
   workspaceAuditEvent,
   workspaceConnection,
+  workspaceProviderIntegration,
 } from "../../../../../../../../lib/schema";
 import { authorizeWorkspace } from "../../../../../../../../lib/workspace-authorization";
 import { publicConnection } from "../../../../../../../../lib/workspace-connections";
@@ -58,25 +63,30 @@ export async function PUT(request: Request, context: RouteContext) {
   }
 
   let integrationId: string | null = null;
-  let providerResource: ReturnType<typeof parsePlanetScaleResource> | null = null;
+  let providerResource: ManagedProviderResource | null = null;
+  let managedProvider: string | null = null;
   if (body.mode === "managed") {
     if (typeof body.integrationId !== "string" || !isUuid(body.integrationId)) {
       return jsonError("Provider integration is required", 400);
     }
     integrationId = body.integrationId;
     const integration = await activeProviderIntegration(workspaceId, integrationId);
-    if (!integration || integration.provider !== "planetScale") {
+    if (!integration) {
       return jsonError("Provider integration not found", 404);
     }
     try {
-      providerResource = parsePlanetScaleResource(body.resource);
+      providerResource = parseManagedProviderResource(integration.provider, body.resource);
       if (providerResource.engine !== connection.engine) {
         return jsonError("Provider database engine does not match the connection", 409);
       }
-      const accessToken = await providerAccessToken(integration);
-      await validatePlanetScaleResource(accessToken, providerResource);
+      await validateManagedProviderResource({
+        integration,
+        resource: providerResource,
+        oidcToken: vercelOidcToken(request),
+      });
+      managedProvider = integration.provider;
     } catch (error) {
-      if (error instanceof PlanetScaleRequestError) {
+      if (error instanceof ProviderRequestError) {
         return jsonError(error.message, error.status);
       }
       return jsonError(
@@ -86,45 +96,112 @@ export async function PUT(request: Request, context: RouteContext) {
     }
   }
 
-  const revocation = await revokeActiveLeases({
+  const claim = await claimRevocationGate({
+    kind: "connection",
     organizationId: workspaceId,
     connectionId,
   });
+  if (!claim) {
+    return jsonError("Another connection access change is already in progress", 409);
+  }
+  let revocation;
+  try {
+    revocation = await revokeActiveLeases({
+      organizationId: workspaceId,
+      connectionId,
+    });
+  } catch (error) {
+    await releaseRevocationGateClaim(claim).catch(() => false);
+    throw error;
+  }
   if (revocation.deferred > 0) {
+    await releaseRevocationGateClaim(claim).catch(() => false);
     return jsonError(
       "Active database access could not be revoked yet. Retry before changing access.",
       409,
     );
   }
   const updatedAt = new Date();
-  const [updatedRows] = await db.batch([
+  const lockTarget = integrationId
+    ? {
+        kind: "integration" as const,
+        organizationId: workspaceId,
+        integrationId,
+      }
+    : {
+        kind: "connection" as const,
+        organizationId: workspaceId,
+        connectionId,
+      };
+  const integrationReady = integrationId && managedProvider
+    ? exists(
+        db.select({ id: workspaceProviderIntegration.id })
+          .from(workspaceProviderIntegration)
+          .where(and(
+            eq(workspaceProviderIntegration.id, integrationId),
+            eq(workspaceProviderIntegration.organizationId, workspaceId),
+            eq(workspaceProviderIntegration.provider, managedProvider),
+            eq(workspaceProviderIntegration.status, "active"),
+            isNull(workspaceProviderIntegration.revokedAt),
+            isNull(workspaceProviderIntegration.revocationPendingAt),
+          )),
+      )
+    : sql`TRUE`;
+  const [, updatedRows] = await db.batch([
+    db.execute(sql`
+      SELECT pg_advisory_xact_lock(
+        hashtextextended(${revocationGateLockKey(lockTarget)}, 0)
+      )
+    `),
     db.update(workspaceConnection).set({
       credentialMode: body.mode,
       providerIntegrationId: integrationId,
       providerResource,
-      ...(body.mode === "managed" ? { provider: "planetScale" } : {}),
-      revision: sql`${workspaceConnection.revision} + 1`,
+      ...(body.mode === "managed" && managedProvider
+        ? { provider: managedProvider }
+        : {}),
+      revocationPendingAt: null,
+      revocationClaimedAt: null,
+      revocationClaimId: null,
       updatedAt,
     }).where(and(
       eq(workspaceConnection.id, connectionId),
       eq(workspaceConnection.organizationId, workspaceId),
+      eq(workspaceConnection.revocationClaimId, claim.claimId),
       isNull(workspaceConnection.deletedAt),
+      integrationReady,
     )).returning(),
-    db.insert(workspaceAuditEvent).values({
-      organizationId: workspaceId,
-      actorUserId: authorization.session.user.id,
-      action: "connection.credential_mode.update",
-      resourceType: "connection",
-      resourceId: connectionId,
-      redactedSummary: {
-        mode: body.mode,
-        provider: body.mode === "managed" ? "planetScale" : null,
-        revokedLeases: revocation.revoked,
-      },
-      requestId: crypto.randomUUID(),
-    }),
-  ]);
+    db.execute(sql`
+      INSERT INTO ${workspaceAuditEvent}
+        ("organization_id", "actor_user_id", "action", "resource_type",
+         "resource_id", "redacted_summary", "request_id")
+      SELECT connection."organization_id", ${authorization.session.user.id},
+             'connection.credential_mode.update', 'connection',
+             connection."id"::text,
+             jsonb_build_object(
+               'mode', ${body.mode},
+               'provider', ${body.mode === "managed" ? managedProvider : null},
+               'revokedLeases', ${revocation.revoked}
+             ),
+             ${crypto.randomUUID()}::uuid
+      FROM ${workspaceConnection} AS connection
+      WHERE connection."id" = ${connectionId}::uuid
+        AND connection."organization_id" = ${workspaceId}
+        AND connection."updated_at" = ${updatedAt}
+        AND connection."deleted_at" IS NULL
+    `),
+  ]).catch(async (error) => {
+    await releaseRevocationGateClaim(claim).catch(() => false);
+    throw error;
+  });
   const updated = updatedRows[0];
+  if (!updated) {
+    await releaseRevocationGateClaim(claim).catch(() => false);
+    return jsonError(
+      "Connection or provider access changed concurrently. Retry the update.",
+      409,
+    );
+  }
   return privateJson({
     connection: publicConnection(updated, authorization.role, authorization.accessMode),
   });

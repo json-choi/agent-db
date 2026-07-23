@@ -16,6 +16,18 @@
 .db-section:hover {
   color: var(--ds-text);
 }
+.db-section .tw {
+  width: var(--ds-icon-sm);
+  flex: 0 0 var(--ds-icon-sm);
+  display: inline-grid;
+  place-items: center;
+}
+.db-section-icon,
+.db-object-icon {
+  flex: 0 0 auto;
+  color: var(--ds-text-muted);
+  font-size: var(--ds-icon-sm);
+}
 
 /* Per-row "DDL" button — hidden until row hover to keep the tree quiet.
    Overlaid (not in flow) so its reserved width doesn't truncate table names. */
@@ -446,6 +458,11 @@
   gap: var(--ds-row-gap-tight);
   padding: var(--ds-space-1) 0 var(--ds-space-2) var(--ds-space-4);
 }
+.db-object-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-row-gap-tight);
+}
 .connection-write-help {
   margin-top: calc(var(--ds-space-2) * -1);
 }
@@ -497,6 +514,30 @@
   cursor: pointer;
   user-select: none;
   font-size: var(--ds-font-size-ui);
+}
+.db-catalog-object {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-2);
+  min-height: var(--ds-control-sm);
+  padding: var(--ds-space-1) var(--ds-space-2);
+  color: var(--ds-text);
+  font-size: var(--ds-font-size-ui);
+}
+.db-catalog-object:hover {
+  background: var(--ds-hover);
+}
+.db-object-parent {
+  max-width: 42%;
+  overflow: hidden;
+  font-size: var(--ds-font-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.db-table:hover .db-object-icon,
+.db-table.selected .db-object-icon,
+.db-catalog-object:hover .db-object-icon {
+  color: currentColor;
 }
 .db-table:hover {
   background: var(--ds-hover);

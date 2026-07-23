@@ -6,7 +6,7 @@ use sqlx::{AssertSqlSafe, Row, SqlitePool};
 
 use crate::error::{AppError, AppResult};
 
-use super::{Catalog, Column, ForeignKey, Index, Table};
+use super::{Catalog, Column, DatabaseObject, ForeignKey, Index, Table};
 
 /// Quote an identifier for interpolation into a PRAGMA/COUNT statement.
 fn quote_ident(name: &str) -> String {
@@ -123,7 +123,25 @@ pub async fn introspect(pool: &SqlitePool) -> AppResult<Catalog> {
         });
     }
 
-    Ok(Catalog { tables })
+    let objects = sqlx::query(
+        "SELECT name, tbl_name, sql FROM sqlite_master
+         WHERE type = 'trigger' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+    )
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|row| {
+        Ok(DatabaseObject {
+            schema: None,
+            name: row.try_get("name")?,
+            kind: "trigger".into(),
+            detail: row.try_get("sql")?,
+            parent: row.try_get("tbl_name")?,
+        })
+    })
+    .collect::<AppResult<Vec<_>>>()?;
+
+    Ok(Catalog { tables, objects })
 }
 
 /// The stored DDL for a table/view plus the DDL of its (non-auto) indexes, as SQLite
@@ -152,4 +170,60 @@ pub async fn table_ddl(pool: &SqlitePool, table: &str) -> AppResult<String> {
         out.push(';');
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn introspect_lists_tables_views_and_triggers() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE VIEW active_users AS SELECT id, email FROM users")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TRIGGER users_email_guard
+             BEFORE UPDATE OF email ON users
+             BEGIN
+               SELECT CASE WHEN NEW.email = '' THEN RAISE(ABORT, 'email required') END;
+             END",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let catalog = introspect(&pool).await.unwrap();
+
+        assert!(catalog
+            .tables
+            .iter()
+            .any(|table| table.name == "users" && table.kind == "table"));
+        assert!(catalog
+            .tables
+            .iter()
+            .any(|table| table.name == "active_users" && table.kind == "view"));
+        let trigger = catalog
+            .objects
+            .iter()
+            .find(|object| object.kind == "trigger")
+            .unwrap();
+        assert_eq!(trigger.name, "users_email_guard");
+        assert_eq!(trigger.parent.as_deref(), Some("users"));
+        assert!(trigger
+            .detail
+            .as_deref()
+            .is_some_and(|ddl| ddl.contains("BEFORE UPDATE")));
+    }
 }

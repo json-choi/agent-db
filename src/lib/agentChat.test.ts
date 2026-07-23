@@ -48,6 +48,7 @@ function message(id: string, role: "user" | "assistant"): ChatMessageRecord {
 }
 
 const pending: PendingTurn = {
+  connectionId: "db-a",
   threadId: "thread-1",
   turnId: "turn-1",
   userMessageId: "user-1",

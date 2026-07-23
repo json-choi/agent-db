@@ -103,7 +103,7 @@ pub fn cache_opened(
     let generation = opened
         .evict_after
         .map(|_| NEXT_CACHE_GENERATION.fetch_add(1, Ordering::Relaxed));
-    {
+    let replaced = {
         let mut generations = CACHE_GENERATIONS
             .get_or_init(|| Mutex::new(HashMap::new()))
             .lock()
@@ -113,19 +113,32 @@ pub fn cache_opened(
         } else {
             generations.remove(&id);
         }
-        connections.lock().unwrap().insert(id, opened.live);
+        connections.lock().unwrap().insert(id, opened.live)
+    };
+    if let Some(replaced) = replaced {
+        tokio::spawn(async move {
+            replaced.close().await;
+        });
     }
     if let (Some(delay), Some(generation)) = (opened.evict_after, generation) {
         let connections = Arc::clone(connections);
         tokio::spawn(async move {
             tokio::time::sleep(delay).await;
-            let mut generations = CACHE_GENERATIONS
-                .get_or_init(|| Mutex::new(HashMap::new()))
-                .lock()
-                .unwrap();
-            if generations.get(&id) == Some(&generation) {
-                connections.lock().unwrap().remove(&id);
-                generations.remove(&id);
+            let expired = {
+                let mut generations = CACHE_GENERATIONS
+                    .get_or_init(|| Mutex::new(HashMap::new()))
+                    .lock()
+                    .unwrap();
+                if generations.get(&id) == Some(&generation) {
+                    let live = connections.lock().unwrap().remove(&id);
+                    generations.remove(&id);
+                    live
+                } else {
+                    None
+                }
+            };
+            if let Some(live) = expired {
+                live.close().await;
             }
         });
     }

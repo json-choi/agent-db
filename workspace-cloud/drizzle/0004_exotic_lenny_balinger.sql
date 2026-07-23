@@ -1,0 +1,1 @@
+CREATE INDEX "credential_lease_expiry_idx" ON "workspace_control"."workspace_credential_lease" USING btree ("expires_at");

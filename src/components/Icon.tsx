@@ -39,6 +39,18 @@ const glyphs = {
       <path d="M3 6h.01M3 12h.01M3 18h.01" />
     </>
   ),
+  history: (
+    <>
+      <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+      <path d="M3 3v5h5M12 7v5l3 2" />
+    </>
+  ),
+  user: (
+    <>
+      <circle cx="12" cy="8" r="4" />
+      <path d="M4 21a8 8 0 0 1 16 0" />
+    </>
+  ),
   chevronRight: <path d="m9 18 6-6-6-6" />,
   chevronDown: <path d="m6 9 6 6 6-6" />,
   caretUp: <path d="M12 8l5 8H7z" fill="currentColor" stroke="none" />,
@@ -54,6 +66,75 @@ const glyphs = {
     <>
       <rect x="3" y="3" width="18" height="18" rx="2" />
       <path d="M3 9h18M3 15h18M9 3v18M15 3v18" />
+    </>
+  ),
+  view: (
+    <>
+      <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z" />
+      <circle cx="12" cy="12" r="2.5" />
+    </>
+  ),
+  materializedView: (
+    <>
+      <path d="m12 3-9 5 9 5 9-5-9-5z" />
+      <path d="m3 12 9 5 9-5M3 16l9 5 9-5" />
+    </>
+  ),
+  function: (
+    <>
+      <path d="M5 19c3 0 3-14 7-14 1.7 0 2.4 1 3 2" />
+      <path d="M8 11h7M16 13l5 5M21 13l-5 5" />
+    </>
+  ),
+  procedure: (
+    <>
+      <path d="M8 3H5a2 2 0 0 0-2 2v4a2 2 0 0 1-2 2 2 2 0 0 1 2 2v4a2 2 0 0 0 2 2h3" />
+      <path d="M16 3h3a2 2 0 0 1 2 2v4a2 2 0 0 0 2 2 2 2 0 0 0-2 2v4a2 2 0 0 1-2 2h-3" />
+      <path d="M10 9h4M10 15h4" />
+    </>
+  ),
+  trigger: (
+    <path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z" />
+  ),
+  sequence: (
+    <>
+      <path d="M9 6h12M9 12h12M9 18h12" />
+      <path d="M4 5h1v3M3.5 8H6M4 11h1.2a1 1 0 0 1 .8 1.6L4 15h2M3.5 18h1.2a1.1 1.1 0 1 1 0 2.2H3.5M4.7 20.2a1.1 1.1 0 1 1 0 2.2H3.5" />
+    </>
+  ),
+  collection: (
+    <>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M7 4v16M3 9h4M3 15h4" />
+    </>
+  ),
+  columns: (
+    <>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M9 4v16M15 4v16" />
+    </>
+  ),
+  key: (
+    <>
+      <circle cx="8" cy="15" r="4" />
+      <path d="m11 12 9-9M17 6l3 3M14 9l3 3" />
+    </>
+  ),
+  filter: <path d="M3 5h18l-7 8v6l-4 2v-8L3 5z" />,
+  sort: (
+    <>
+      <path d="M8 6h13M8 12h9M8 18h5" />
+      <path d="m3 8 2-2 2 2M5 6v12M3 16l2 2 2-2" />
+    </>
+  ),
+  chevronsLeft: <path d="m11 17-5-5 5-5M18 17l-5-5 5-5" />,
+  chevronsRight: <path d="m13 17 5-5-5-5M6 17l5-5-5-5" />,
+  arrowLeft: <path d="m15 18-6-6 6-6" />,
+  arrowRight: <path d="m9 18 6-6-6-6" />,
+  panelRight: (
+    <>
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="M15 3v18" />
     </>
   ),
   dashboard: (

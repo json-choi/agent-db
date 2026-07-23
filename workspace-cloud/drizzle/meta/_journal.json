@@ -29,6 +29,34 @@
       "when": 1784796212241,
       "tag": "0003_curious_expediter",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1784814221253,
+      "tag": "0004_exotic_lenny_balinger",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1784815564335,
+      "tag": "0005_odd_wolfsbane",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1784817268557,
+      "tag": "0006_brave_dazzler",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1784818249404,
+      "tag": "0007_lean_slapstick",
+      "breakpoints": true
     }
   ]
 }

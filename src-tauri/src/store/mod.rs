@@ -1963,6 +1963,7 @@ pub(crate) fn provider_str(provider: Provider) -> &'static str {
         Provider::Generic => "generic",
         Provider::Neon => "neon",
         Provider::PlanetScale => "planetScale",
+        Provider::GcpCloudSql => "gcpCloudSql",
     }
 }
 
@@ -1972,6 +1973,7 @@ pub(crate) fn parse_provider(s: String) -> AppResult<Provider> {
         "generic" => Ok(Provider::Generic),
         "neon" => Ok(Provider::Neon),
         "planetScale" => Ok(Provider::PlanetScale),
+        "gcpCloudSql" => Ok(Provider::GcpCloudSql),
         other => Err(AppError::Config(format!("unknown provider '{other}'"))),
     }
 }

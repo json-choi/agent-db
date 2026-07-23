@@ -6,10 +6,12 @@ import { isUuid, jsonError, privateJson } from "../../../../../../../../lib/http
 import {
   activeProviderIntegration,
   issueManagedLease,
-  parsePlanetScaleResource,
+  parseManagedProviderResource,
   revokeActiveLeases,
 } from "../../../../../../../../lib/provider-integrations";
-import { PlanetScaleRequestError } from "../../../../../../../../lib/providers/planetscale";
+import { vercelOidcToken } from "../../../../../../../../lib/providers/gcp-cloud-sql";
+import { ProviderRequestError } from "../../../../../../../../lib/providers/provider-types";
+import { managedLeaseStillDeliverable } from "../../../../../../../../lib/revocation-gates";
 import {
   workspaceAuditEvent,
   workspaceConnection,
@@ -80,7 +82,10 @@ export async function POST(request: Request, context: RouteContext) {
   if (!integration) return jsonError("Provider integration not found", 404);
   let resource;
   try {
-    resource = parsePlanetScaleResource(connection.providerResource);
+    resource = parseManagedProviderResource(
+      integration.provider,
+      connection.providerResource,
+    );
   } catch {
     return jsonError("Managed database resource is invalid", 409);
   }
@@ -111,9 +116,14 @@ export async function POST(request: Request, context: RouteContext) {
       organizationId: workspaceId,
       connectionId,
       userId: authorization.session.user.id,
+      memberId: authorization.membership.id,
+      role: authorization.role,
+      connectionRevision: connection.revision,
+      engine: resource.engine,
       accessMode,
       integration,
       resource,
+      oidcToken: vercelOidcToken(request),
     });
     try {
       await db.insert(workspaceAuditEvent).values({
@@ -132,39 +142,40 @@ export async function POST(request: Request, context: RouteContext) {
     } catch {
       await revokeActiveLeases({
         organizationId: workspaceId,
+        leaseId: lease.leaseId,
         userId: authorization.session.user.id,
         connectionId,
       });
       return jsonError("Database access could not be audited", 500);
     }
-    const [currentAuthorization, currentConnection] = await Promise.all([
+    const [currentAuthorization, deliverable] = await Promise.all([
       authorizeWorkspace(
         request,
         workspaceId,
         accessMode === "write" ? "write" : "read",
       ),
-      db.query.workspaceConnection.findFirst({
-        where: and(
-          eq(workspaceConnection.id, connectionId),
-          eq(workspaceConnection.organizationId, workspaceId),
-          isNull(workspaceConnection.deletedAt),
-        ),
-        columns: {
-          credentialMode: true,
-          providerIntegrationId: true,
-          revision: true,
-        },
-      }),
+      managedLeaseStillDeliverable({
+        leaseId: lease.leaseId,
+        organizationId: workspaceId,
+        memberId: authorization.membership.id,
+        userId: authorization.session.user.id,
+        role: authorization.role,
+        connectionId,
+        connectionRevision: connection.revision,
+        engine: resource.engine,
+        integrationId: integration.id,
+        provider: integration.provider,
+        accessMode,
+      }, lease),
     ]);
     if (
       !currentAuthorization.ok
-      || !currentConnection
-      || currentConnection.credentialMode !== "managed"
-      || currentConnection.providerIntegrationId !== connection.providerIntegrationId
-      || currentConnection.revision !== connection.revision
+      || currentAuthorization.role !== authorization.role
+      || !deliverable
     ) {
       await revokeActiveLeases({
         organizationId: workspaceId,
+        leaseId: lease.leaseId,
         userId: authorization.session.user.id,
         connectionId,
       });
@@ -173,6 +184,7 @@ export async function POST(request: Request, context: RouteContext) {
     return privateJson({
       lease: {
         id: lease.leaseId,
+        provider: integration.provider,
         engine: resource.engine,
         host: lease.host,
         port: lease.port,
@@ -180,6 +192,9 @@ export async function POST(request: Request, context: RouteContext) {
         username: lease.username,
         password: lease.password,
         sslmode: lease.sslmode,
+        ...(lease.tlsServerCaPem
+          ? { tlsServerCaPem: lease.tlsServerCaPem }
+          : {}),
         accessMode,
         expiresAt: lease.expiresAt,
       },
@@ -191,7 +206,7 @@ export async function POST(request: Request, context: RouteContext) {
       },
     });
   } catch (error) {
-    if (error instanceof PlanetScaleRequestError) {
+    if (error instanceof ProviderRequestError) {
       return jsonError(error.message, error.status);
     }
     return jsonError("Managed database access could not be issued", 502);

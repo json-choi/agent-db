@@ -4,6 +4,11 @@ import "server-only";
 
 import { env } from "../env";
 import { planetScaleEngine } from "./planetscale-core";
+import {
+  ProviderRequestError,
+  type ManagedProviderLease,
+  type ProviderResourceItem,
+} from "./provider-types";
 
 const AUTH_ORIGIN = "https://auth.planetscale.com";
 const API_ORIGIN = "https://api.planetscale.com";
@@ -32,32 +37,17 @@ export type PlanetScaleResource = {
   engine: "postgres" | "mysql";
 };
 
-export type PlanetScaleLease = {
-  externalCredentialId: string;
+export type PlanetScaleLease = ManagedProviderLease & {
   externalCredentialKind: "role" | "password";
-  host: string;
-  port: number;
-  database: string;
-  username: string;
-  password: string;
   sslmode: "verify-full";
-  expiresAt: string;
 };
 
-export type PlanetScaleResourceItem = {
-  id: string;
-  name: string;
-  kind?: "postgres" | "mysql";
-  production?: boolean;
-  ready?: boolean;
-};
-
-export class PlanetScaleRequestError extends Error {
+export class PlanetScaleRequestError extends ProviderRequestError {
   constructor(
     message: string,
-    public readonly status: number,
+    status: number,
   ) {
-    super(message);
+    super("planetScale", message, status);
     this.name = "PlanetScaleRequestError";
   }
 }
@@ -244,12 +234,13 @@ async function paginated(
 function resourceItem(
   row: JsonObject,
   options: { includeKind?: boolean; includeBranch?: boolean } = {},
-): PlanetScaleResourceItem {
+): ProviderResourceItem {
   const name = requiredString(row.name ?? row.slug, "resource name");
   const kind = options.includeKind ? planetScaleEngine(row.kind) ?? undefined : undefined;
   return {
     id: typeof row.id === "string" ? row.id : name,
     name,
+    value: name,
     ...(kind ? { kind } : {}),
     ...(options.includeBranch ? {
       production: row.production === true,

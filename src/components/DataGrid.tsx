@@ -48,6 +48,7 @@ export default function DataGrid({
   selectedRow,
   onSelectRow,
   onCellClick,
+  columnMeta,
 }: {
   result: QueryResult;
   startIndex?: number;
@@ -58,6 +59,7 @@ export default function DataGrid({
   selectedRow?: number | null;
   onSelectRow?: (i: number) => void;
   onCellClick?: (value: unknown, rowIndex: number, col: string) => void;
+  columnMeta?: Record<string, { dataType: string; pk: boolean }>;
 }) {
   const { t } = useI18n();
   const interactive = !!onSelectRow || !!onCellClick;
@@ -236,7 +238,15 @@ export default function DataGrid({
                     : undefined
                 }
               >
-                {c}
+                <span
+                  className="grid-column-title"
+                  title={columnMeta?.[c]?.dataType}
+                >
+                  {columnMeta?.[c] ? (
+                    <Icon name={columnMeta[c].pk ? "key" : "columns"} />
+                  ) : null}
+                  <span>{c}</span>
+                </span>
                 {sort?.col === c && (
                   <span className="sort-arrow">
                     {" "}

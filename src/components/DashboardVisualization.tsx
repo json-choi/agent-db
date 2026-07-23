@@ -288,26 +288,48 @@ function TableFallback({ result }: { result: QueryResult }) {
 export default function DashboardVisualizationView({
   result,
   visualization,
+  compact = false,
 }: {
   result: QueryResult;
   visualization: DashboardVisualization;
+  compact?: boolean;
 }) {
   const { t } = useI18n();
-  if (result.rows.length === 0) return <div className="muted">{t("dashboard.noRows")}</div>;
+  if (result.rows.length === 0) {
+    return (
+      <div className={`dashboard-visualization${compact ? " compact" : ""}`}>
+        <div className="muted">{t("dashboard.noRows")}</div>
+      </div>
+    );
+  }
   const kind = resolvedDashboardKind(result, visualization);
   const mapping = dashboardMapping(result, visualization);
   if (kind !== "table" && mapping.yColumns.length === 0) {
-    return <TableFallback result={result} />;
+    return (
+      <div className={`dashboard-visualization${compact ? " compact" : ""}`}>
+        <TableFallback result={result} />
+      </div>
+    );
   }
   if (
     (kind === "line" || kind === "bar") &&
     chartableColumns(result, mapping.yColumns).length === 0
   ) {
-    return <TableFallback result={result} />;
+    return (
+      <div className={`dashboard-visualization${compact ? " compact" : ""}`}>
+        <TableFallback result={result} />
+      </div>
+    );
   }
-  if (kind === "table") return <DataGrid result={result} />;
+  if (kind === "table") {
+    return (
+      <div className={`dashboard-visualization${compact ? " compact" : ""}`}>
+        <DataGrid result={result} />
+      </div>
+    );
+  }
   return (
-    <>
+    <div className={`dashboard-visualization${compact ? " compact" : ""}`}>
       {kind === "metric" ? (
         <MetricView result={result} visualization={visualization} />
       ) : kind === "line" ? (
@@ -315,10 +337,12 @@ export default function DashboardVisualizationView({
       ) : (
         <BarChart result={result} visualization={visualization} />
       )}
-      <details className="dashboard-raw-data">
-        <summary>{t("dashboard.rawData")}</summary>
-        <DataGrid result={result} />
-      </details>
-    </>
+      {!compact && (
+        <details className="dashboard-raw-data">
+          <summary>{t("dashboard.rawData")}</summary>
+          <DataGrid result={result} />
+        </details>
+      )}
+    </div>
   );
 }

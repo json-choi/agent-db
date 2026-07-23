@@ -31,7 +31,13 @@ const DEFAULT_PORT: Record<Engine, number> = {
   mongodb: 27017,
 };
 
-const PROVIDER_ORDER: Provider[] = ["auto", "generic", "neon", "planetScale"];
+const PROVIDER_ORDER: Provider[] = [
+  "auto",
+  "generic",
+  "neon",
+  "planetScale",
+  "gcpCloudSql",
+];
 
 function compatibleDrivers(
   drivers: DriverDescriptor[],
@@ -532,7 +538,9 @@ export function ConnectionForm({
                     ? t("connections.providerGeneric")
                     : provider === "neon"
                       ? t("connections.providerNeon")
-                      : t("connections.providerPlanetScale")}
+                      : provider === "planetScale"
+                        ? t("connections.providerPlanetScale")
+                        : t("connections.providerGcpCloudSql")}
               </option>
             ))}
           </select>

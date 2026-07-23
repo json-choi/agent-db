@@ -1,8 +1,8 @@
 # Workspace Collaboration Roadmap
 
 Status: Milestone 0 implemented; Milestone 1 identity/RBAC slice implemented;
-Milestone 2 shared-connection core and optional PlanetScale managed-access slice
-implemented. General provider federation, full sync, KMS wrapping, backup,
+Milestone 2 shared-connection core plus PlanetScale, Neon, and GCP Cloud SQL
+managed-access adapters implemented. General provider inventory, full sync, KMS wrapping, backup,
 workspace-deletion, and per-connection-grant exit criteria stay open below.
 
 This roadmap defines how DopeDB can add team workspaces without turning the
@@ -25,8 +25,9 @@ Use a local-execution, hosted-control-plane architecture:
 - The workspace service synchronizes membership, connection templates, dashboards,
   analysis reports, revisions, and collaboration audit events.
 - Member-local mode keeps database credentials in that member's OS credential store.
-- Optional managed mode encrypts a workspace-owned provider OAuth grant at the control
-  plane and uses it only to create member-specific, least-privilege, short-lived
+- Optional managed mode encrypts reusable workspace-owned provider authorization at the
+  control plane (or uses keyless cloud federation) and uses it only to create
+  member-specific, least-privilege, short-lived
   database credentials. Those one-time credentials are never persisted by the
   service or desktop and are dropped from process memory with the live pool.
 - Provider authentication is adapter-based. Pipedream Connect can later replace
@@ -56,7 +57,7 @@ flowchart LR
     KB --> D
     KA --> PA["local provider adapter"]
     KB --> PB["local provider adapter"]
-    PA --> API["Neon · PlanetScale API"]
+    PA --> API["Neon · PlanetScale · GCP APIs"]
     PB --> API
     W --> MI["encrypted provider grant · managed mode"]
     MI --> API
@@ -218,13 +219,16 @@ Keep two adapter contracts with no shared secret-bearing configuration object:
 A provider resource may create or update a workspace connection template through a
 redacted selector, but the template never owns or serializes a provider token.
 
-Member-local mode remains available for every driver. Managed mode now stores an
-application-encrypted provider OAuth grant separately from connection templates and
-routes only provider control-plane calls through the workspace service. The first
-operational adapter is PlanetScale: Admin/Owner authorizes OAuth, selects organization,
-database, and branch, and the server creates a 15-minute PostgreSQL role or MySQL
-password matching the member's current read/read-write authority. The native client
-receives it once over HTTPS, creates the pool in Rust, and evicts the pool before expiry.
+Member-local mode remains available for every driver. Managed mode stores reusable
+provider authorization separately from connection templates and routes provider
+control-plane calls through the workspace service. PlanetScale uses OAuth and
+provider-native TTL roles/passwords. Neon uses an encrypted, preferably project-scoped
+API key to create a 15-minute SQL role whose grants are limited to current user schemas
+in the selected database. GCP Cloud SQL stores no service-account key: Vercel OIDC and
+Workload Identity Federation issue a 15-minute IAM database login token for separate
+read/write service accounts. The native client receives a credential once over HTTPS,
+pins provider-required TLS material, creates the pool in Rust, and evicts that pool
+before expiry.
 
 The deployment key is separate from database ciphertext today. Production hardening
 still needs KMS-wrapped key versions and rotation. Pipedream Connect is a planned
@@ -442,17 +446,22 @@ control plane to revalidate the active session, current membership, role, worksp
 and connection id. The check fails closed when the service is unavailable. Removing a
 member in member-local mode cannot revoke a database credential they already possess;
 the target database administrator must revoke that account separately. Managed
-PlanetScale credentials are revoked on role/removal changes when the provider is
-reachable and otherwise expire after at most 15 minutes.
+PlanetScale and Neon credentials are revoked on role/removal changes when the provider
+is reachable and otherwise expire after at most 15 minutes. Cloud SQL IAM tokens have
+no immediate revocation endpoint, so authority-changing mutations wait for the live
+lease to expire. Native pool eviction stops reuse before expiry, but a query that was
+already checked out is ultimately bounded by the target database's statement/session
+limits rather than by token expiry alone.
 
-Admins can also connect PlanetScale through OAuth in the web console, discover only
-authorized organizations/databases/branches, and attach a resource to a shared
-connection. The desktop then obtains a member-specific read or read/write credential
-without showing a password dialog. Provider grants are encrypted at rest; lease rows
-contain no plaintext credential; the desktop caches only a live pool until shortly
-before provider expiry.
+Admins can connect PlanetScale through OAuth, Neon through an API key, or GCP Cloud SQL
+through keyless WIF in the web console, discover only authorized three-level resource
+trees, and attach one database to a shared connection. The desktop then obtains a
+member-specific read or read/write credential without showing a password dialog.
+Reusable provider grants are encrypted at rest; GCP stores only trust coordinates;
+lease rows contain no plaintext credential; the desktop caches only a live pool until
+shortly before provider expiry.
 
-This core deliberately shares endpoint templates plus one redacted PlanetScale resource
+This core deliberately shares endpoint templates plus one redacted provider resource
 selector. It does not yet satisfy the later per-connection grant, shared-template editing,
 provider-resource inventory/import, or full tombstone-sync deliverables listed below.
 
@@ -485,10 +494,8 @@ Exit criteria:
 
 Deliverables:
 
-- Generalize the current PlanetScale boundary into a provider-neutral discovery and
-  capability contract independently of database drivers.
-- Add a Neon adapter and expand the PlanetScale pilot from its managed-access selector
-  into persisted resource discovery, capability detection, and idempotent import.
+- Expand the implemented provider-neutral PlanetScale/Neon/GCP managed-access boundary
+  into persisted resource inventory, capability detection, and idempotent import.
 - Add member/device provider credential bindings backed by the OS credential store.
 - Synchronize only redacted organization, project, database, branch, endpoint,
   compute, lifecycle, and capability metadata.

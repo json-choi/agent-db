@@ -18,8 +18,9 @@ use crate::connection::keychain::{
 };
 use crate::error::{AppError, AppResult};
 use crate::model::{
-    ConnectionProfile, WorkspaceAuthUser, WorkspaceConnectionAccess, WorkspaceCredentialMode,
-    WorkspaceDeviceAuthorization, WorkspaceLoginPoll, WorkspaceLoginPollStatus, WorkspaceRole,
+    ConnectionProfile, Provider, WorkspaceAuthUser, WorkspaceConnectionAccess,
+    WorkspaceCredentialMode, WorkspaceDeviceAuthorization, WorkspaceLoginPoll,
+    WorkspaceLoginPollStatus, WorkspaceRole,
 };
 
 const DEFAULT_CONTROL_PLANE_ORIGIN: &str = "https://app.dopedb.dev";
@@ -111,6 +112,7 @@ struct ManagedLeaseResponse {
 #[serde(rename_all = "camelCase")]
 struct RemoteManagedLease {
     id: String,
+    provider: String,
     engine: String,
     host: String,
     port: u16,
@@ -118,6 +120,7 @@ struct RemoteManagedLease {
     username: String,
     password: String,
     sslmode: String,
+    tls_server_ca_pem: Option<String>,
     access_mode: String,
     expires_at: String,
 }
@@ -670,8 +673,25 @@ pub(crate) async fn issue_managed_connection_lease(
     let secret = Zeroizing::new(std::mem::take(&mut lease.password));
     let lease_id = Uuid::parse_str(&lease.id)
         .map_err(|_| AppError::Network("managed database access returned an invalid id".into()))?;
+    let provider = crate::store::parse_provider(lease.provider)?;
     let engine = crate::store::parse_engine(lease.engine)?;
+    let valid_provider_tls = match provider {
+        Provider::Neon | Provider::PlanetScale => {
+            lease.sslmode == "verify-full" && lease.tls_server_ca_pem.is_none()
+        }
+        Provider::GcpCloudSql => {
+            matches!(lease.sslmode.as_str(), "verify-ca" | "verify-full")
+                && lease.tls_server_ca_pem.as_ref().is_some_and(|pem| {
+                    pem.len() <= 64 * 1024
+                        && pem.starts_with("-----BEGIN CERTIFICATE-----")
+                        && pem.trim_end().ends_with("-----END CERTIFICATE-----")
+                        && !pem.contains('\0')
+                })
+        }
+        Provider::Auto | Provider::Generic => false,
+    };
     if engine != profile.engine
+        || provider != profile.provider
         || lease.host.is_empty()
         || lease.host.len() > 512
         || lease.host.contains("://")
@@ -683,7 +703,7 @@ pub(crate) async fn issue_managed_connection_lease(
         || lease.username.len() > 512
         || secret.is_empty()
         || secret.len() > (1 << 16)
-        || lease.sslmode != "verify-full"
+        || !valid_provider_tls
         || !matches!(lease.access_mode.as_str(), "read" | "write")
         || (lease.access_mode == "write" && !profile.workspace_access.can_write())
     {
@@ -703,13 +723,18 @@ pub(crate) async fn issue_managed_connection_lease(
         ));
     }
     let mut leased_profile = profile.clone();
-    leased_profile.provider = crate::model::Provider::PlanetScale;
+    leased_profile.provider = provider;
     leased_profile.host = lease.host;
     leased_profile.port = lease.port;
     leased_profile.database = lease.database;
     leased_profile.username = lease.username;
     leased_profile.sslmode = lease.sslmode;
     leased_profile.extra_params.clear();
+    if let Some(ca) = lease.tls_server_ca_pem {
+        leased_profile
+            .extra_params
+            .insert("sslrootcert_pem".into(), ca);
+    }
     leased_profile.secret_ref = None;
     tracing::debug!(
         connection_id = %profile.id,

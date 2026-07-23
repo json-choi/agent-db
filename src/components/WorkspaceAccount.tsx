@@ -24,8 +24,10 @@ import "./WorkspaceAccount.css";
 
 export default function WorkspaceAccount({
   onScopeChanged,
+  compact = false,
 }: {
   onScopeChanged: () => void | Promise<void>;
+  compact?: boolean;
 }) {
   const { t } = useI18n();
   const toast = useToast();
@@ -36,6 +38,7 @@ export default function WorkspaceAccount({
   const [switchingAccount, setSwitchingAccount] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const loginAttempt = useRef(0);
   const pendingLogin = useRef<{ attempt: number; deviceCode: string } | null>(null);
   const pollInFlight = useRef<{
@@ -76,7 +79,9 @@ export default function WorkspaceAccount({
       if (!rootRef.current?.contains(event.target as Node)) setMenuOpen(false);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMenuOpen(false);
+      if (event.key !== "Escape") return;
+      setMenuOpen(false);
+      window.requestAnimationFrame(() => triggerRef.current?.focus());
     };
     window.addEventListener("mousedown", close);
     window.addEventListener("keydown", closeOnEscape);
@@ -334,18 +339,27 @@ export default function WorkspaceAccount({
   const user = auth.data?.authenticated ? auth.data.user : null;
 
   return (
-    <div className="workspace-account" aria-live="polite" ref={rootRef}>
+    <div
+      className={`workspace-account${compact ? " compact" : ""}`}
+      aria-live="polite"
+      ref={rootRef}
+    >
       {!authKnown ? (
         <div className="workspace-account-skeleton" aria-label={loginLabel} />
       ) : user ? (
         <>
           <button
+            ref={triggerRef}
             type="button"
+            data-rail-control={compact ? "" : undefined}
             className="workspace-account-identity"
             onClick={() => setMenuOpen((open) => !open)}
             aria-haspopup="menu"
             aria-expanded={menuOpen}
-            title={t("workspace.accountMenu")}
+            aria-label={
+              compact ? `${user.displayName || user.email} · ${user.email}` : undefined
+            }
+            title={`${user.displayName} · ${user.email}`}
           >
             <span className="workspace-account-avatar" aria-hidden="true">
               {(user.displayName || user.email).slice(0, 1).toUpperCase()}
@@ -436,13 +450,16 @@ export default function WorkspaceAccount({
         </>
       ) : (
         <button
+          ref={triggerRef}
           type="button"
+          data-rail-control={compact ? "" : undefined}
           className="workspace-account-login"
           onClick={() => (loginPhase === "waiting" ? cancelLogin() : void login())}
           disabled={loginPhase === "starting"}
-          title={loginPhase === "waiting" ? t("workspace.loginPending") : undefined}
+          title={loginPhase === "waiting" ? t("workspace.loginPending") : loginLabel}
+          aria-label={loginLabel}
         >
-          {loginLabel}
+          {compact ? <Icon name="user" /> : loginLabel}
         </button>
       )}
     </div>

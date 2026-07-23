@@ -8,7 +8,7 @@
  */
 
 :root {
-  color-scheme: light dark;
+  color-scheme: dark;
 
   /* Typography */
   --ds-font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue",
@@ -76,27 +76,27 @@
   --ds-z-popover: 8;
   --ds-z-modal: 50;
   --ds-z-toast: 1000;
-  --ds-glass-window-filter: saturate(1.28) blur(22px);
-  --ds-glass-filter: saturate(1.24) blur(18px);
-  --ds-glass-filter-soft: saturate(1.12) blur(10px);
+  --ds-glass-window-filter: saturate(1.14) blur(22px);
+  --ds-glass-filter: saturate(1.12) blur(18px);
+  --ds-glass-filter-soft: saturate(1.06) blur(10px);
   --ds-glass-sheen:
     linear-gradient(
       145deg,
-      rgba(255, 255, 255, 0.18) 0%,
-      rgba(255, 255, 255, 0.07) 38%,
-      rgba(255, 255, 255, 0.02) 62%,
+      rgba(255, 255, 255, 0.08) 0%,
+      rgba(255, 255, 255, 0.03) 38%,
+      rgba(255, 255, 255, 0.01) 62%,
       rgba(255, 255, 255, 0) 100%
     );
   --ds-glass-edge:
-    inset 0 var(--ds-border-width) 0 rgba(255, 255, 255, 0.34),
-    inset 0 calc(var(--ds-border-width) * -1) 0 rgba(255, 255, 255, 0.08);
-  --ds-sidebar-inset-shadow: rgba(0, 0, 0, 0.35);
-  --ds-shadow-control: 0 1px 2px rgba(16, 24, 40, 0.06);
+    inset 0 var(--ds-border-width) 0 rgba(255, 255, 255, 0.1),
+    inset 0 calc(var(--ds-border-width) * -1) 0 rgba(255, 255, 255, 0.025);
+  --ds-sidebar-inset-shadow: rgba(1, 4, 9, 0.42);
+  --ds-shadow-control: 0 1px 2px rgba(1, 4, 9, 0.28);
   --ds-shadow-panel:
-    0 1px 2px rgba(16, 24, 40, 0.07),
-    0 2px 8px rgba(16, 24, 40, 0.06);
+    0 1px 2px rgba(1, 4, 9, 0.32),
+    0 3px 10px rgba(1, 4, 9, 0.24);
   --ds-shadow-popover:
-    0 12px 36px rgba(16, 24, 40, 0.18),
+    0 14px 42px rgba(1, 4, 9, 0.46),
     var(--ds-glass-edge);
 
   /* Sizing */
@@ -113,39 +113,47 @@
   --ds-sidebar-min: 180px;
   --ds-sidebar-default: 240px;
   --ds-sidebar-max: 520px;
+  /* The app's .platform-macos scope enables this only for Tauri's overlay title bar. */
+  --ds-window-controls-safe-height: 0px;
   --ds-pane-pad: 16px;
   --ds-line: var(--ds-border-width) solid var(--ds-border-subtle);
 
-  /* Deep-gray chrome: pure neutral surfaces — green lives only in the accent. */
+  /*
+   * Familiar dark workspace palette based on the GitHub Primer dark-dimmed
+   * relationship: cool-neutral canvases, blue interaction, semantic statuses.
+   */
   --ds-bg-app:
-    linear-gradient(135deg, rgba(245, 246, 247, 0.3), rgba(238, 240, 242, 0.18)),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(230, 233, 236, 0.12));
-  --ds-bg-sidebar: #1b1e1d;
-  --ds-sidebar-border: rgba(0, 0, 0, 0.4);
-  --ds-surface-0: #ffffff;
-  --ds-surface-1: #f2f3f4;
-  --ds-surface-2: #e8eaec;
-  --ds-surface-elevated: #ffffff;
-  --ds-border-subtle: #e1e4e7;
-  --ds-border-strong: #c3c8cd;
-  --ds-text: #1d232f;
-  --ds-text-muted: #687386;
-  --ds-text-subtle: #8a94a5;
+    linear-gradient(135deg, rgba(34, 39, 46, 0.96), rgba(28, 33, 40, 0.94)),
+    #22272e;
+  --ds-bg-sidebar: #1c2128;
+  --ds-sidebar-border: #373e47;
+  --ds-surface-0: #22272e;
+  --ds-surface-1: #1c2128;
+  --ds-surface-2: #2d333b;
+  --ds-surface-elevated: #2d333b;
+  --ds-border-subtle: #373e47;
+  --ds-border-strong: #545d68;
+  --ds-text: #adbac7;
+  --ds-text-muted: #8c959f;
+  --ds-text-subtle: #768390;
   --ds-text-inverse: #ffffff;
-  --ds-text-on-accent-muted: rgba(255, 255, 255, 0.82);
-  --ds-border-on-accent: rgba(255, 255, 255, 0.42);
-  --ds-overlay: rgba(5, 9, 13, 0.32);
+  --ds-text-on-accent-muted: rgba(255, 255, 255, 0.86);
+  --ds-border-on-accent: rgba(255, 255, 255, 0.36);
+  --ds-overlay: rgba(1, 4, 9, 0.52);
 
-  /* Three chromatic hues, derived from the DopeDB icon. */
-  --ds-primary: #2b7d4f;
-  --ds-primary-hover: #256b44;
-  --ds-primary-active: #1f5a39;
-  --ds-primary-text: var(--ds-primary);
-  --ds-primary-soft: rgba(43, 125, 79, 0.13);
-  --ds-caution: #9a6511;
-  --ds-caution-soft: rgba(154, 101, 17, 0.14);
-  --ds-critical: #bd574d;
-  --ds-critical-soft: rgba(189, 87, 77, 0.14);
+  /* Blue is interactive; green, amber, and red are reserved for status meaning. */
+  --ds-primary: #316dca;
+  --ds-primary-hover: #2f6fca;
+  --ds-primary-active: #2b5faa;
+  --ds-primary-text: #539bf5;
+  --ds-primary-soft: rgba(83, 155, 245, 0.14);
+  --ds-positive: #57ab5a;
+  --ds-positive-soft: rgba(87, 171, 90, 0.15);
+  --ds-caution: #c69026;
+  --ds-caution-soft: rgba(198, 144, 38, 0.16);
+  --ds-critical: #f47067;
+  --ds-critical-emphasis: #c93c37;
+  --ds-critical-soft: rgba(244, 112, 103, 0.16);
 
   /* Softened status-color borders: one mix ratio shared by every tone chip/badge. */
   --ds-status-border-mix: 72%;
@@ -156,30 +164,31 @@
   --ds-accent-hover: var(--ds-primary-hover);
   --ds-accent-active: var(--ds-primary-active);
   --ds-accent-soft: var(--ds-primary-soft);
-  --ds-info: var(--ds-primary);
-  --ds-success: var(--ds-primary);
+  --ds-info: var(--ds-primary-text);
+  --ds-success: var(--ds-positive);
   --ds-warning: var(--ds-caution);
   --ds-danger: var(--ds-critical);
+  --ds-danger-emphasis: var(--ds-critical-emphasis);
 
   /* Trust/risk surfaces for agent-native workflows. */
-  --ds-trust-bg: rgba(43, 125, 79, 0.11);
-  --ds-trust-border: rgba(43, 125, 79, 0.34);
-  --ds-risk-bg: rgba(154, 101, 17, 0.13);
-  --ds-risk-border: rgba(154, 101, 17, 0.4);
-  --ds-danger-bg: rgba(189, 87, 77, 0.13);
-  --ds-danger-border: rgba(189, 87, 77, 0.42);
+  --ds-trust-bg: var(--ds-positive-soft);
+  --ds-trust-border: rgba(87, 171, 90, 0.36);
+  --ds-risk-bg: var(--ds-caution-soft);
+  --ds-risk-border: rgba(198, 144, 38, 0.38);
+  --ds-danger-bg: var(--ds-critical-soft);
+  --ds-danger-border: rgba(244, 112, 103, 0.4);
 
-  /* Data source colors collapse into the same three-hue system. */
-  --ds-source-blue: var(--ds-primary);
-  --ds-source-teal: var(--ds-primary);
-  --ds-source-green: var(--ds-primary);
+  /* Provider marks reuse the established semantic palette. */
+  --ds-source-blue: var(--ds-primary-text);
+  --ds-source-teal: #39c5cf;
+  --ds-source-green: var(--ds-positive);
   --ds-source-amber: var(--ds-caution);
   --ds-source-red: var(--ds-critical);
 
   /* Interaction */
-  --ds-hover: rgba(82, 96, 120, 0.1);
-  --ds-hover-strong: rgba(82, 96, 120, 0.16);
-  --ds-focus: var(--ds-primary);
+  --ds-hover: rgba(173, 186, 199, 0.08);
+  --ds-hover-strong: rgba(173, 186, 199, 0.14);
+  --ds-focus: var(--ds-primary-text);
   --ds-focus-ring: 0 0 0 var(--ds-focus-width) color-mix(in srgb, var(--ds-focus) 28%, transparent);
 
   font-family: var(--ds-font-sans);
@@ -187,108 +196,13 @@
   color: var(--ds-text);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --ds-bg-app:
-      linear-gradient(135deg, rgba(18, 20, 22, 0.28), rgba(24, 27, 30, 0.2)),
-      linear-gradient(180deg, rgba(30, 33, 35, 0.14), rgba(13, 15, 17, 0.22));
-    --ds-bg-sidebar: #17191b;
-    /* Cards must sit lighter than the pane background (mirrors light mode). */
-    --ds-surface-0: #2a2e30;
-    --ds-surface-1: #212527;
-    --ds-surface-2: #34383b;
-    --ds-surface-elevated: #2f3336;
-    --ds-border-subtle: #3f4448;
-    --ds-border-strong: #5b6165;
-    --ds-text: #f1f4f8;
-    --ds-text-muted: #b0b8c4;
-    --ds-text-subtle: #8f98a6;
-    --ds-text-inverse: #ffffff;
-    --ds-text-on-accent-muted: rgba(255, 255, 255, 0.82);
-    --ds-border-on-accent: rgba(255, 255, 255, 0.42);
-    --ds-overlay: rgba(5, 9, 13, 0.36);
-
-    --ds-primary: #3d9560;
-    --ds-primary-hover: #43a068;
-    --ds-primary-active: #358150;
-    --ds-primary-text: #66b884;
-    --ds-primary-soft: rgba(61, 149, 96, 0.18);
-    --ds-caution: #f2b84b;
-    --ds-caution-soft: rgba(242, 184, 75, 0.16);
-    --ds-critical: #ff6b5c;
-    --ds-critical-soft: rgba(255, 107, 92, 0.16);
-
-    --ds-accent: var(--ds-primary);
-    --ds-accent-text: var(--ds-primary-text);
-    --ds-accent-hover: var(--ds-primary-hover);
-    --ds-accent-active: var(--ds-primary-active);
-    --ds-accent-soft: var(--ds-primary-soft);
-    --ds-info: var(--ds-primary);
-    --ds-success: var(--ds-primary);
-    --ds-warning: var(--ds-caution);
-    --ds-danger: var(--ds-critical);
-
-    --ds-trust-bg: rgba(61, 149, 96, 0.16);
-    --ds-trust-border: rgba(61, 149, 96, 0.36);
-    --ds-risk-bg: rgba(242, 184, 75, 0.14);
-    --ds-risk-border: rgba(242, 184, 75, 0.36);
-    --ds-danger-bg: rgba(255, 107, 92, 0.14);
-    --ds-danger-border: rgba(255, 107, 92, 0.38);
-
-    --ds-source-blue: var(--ds-primary);
-    --ds-source-teal: var(--ds-primary);
-    --ds-source-green: var(--ds-primary);
-    --ds-source-amber: var(--ds-caution);
-    --ds-source-red: var(--ds-critical);
-
-    --ds-hover: rgba(169, 181, 197, 0.1);
-    --ds-hover-strong: rgba(169, 181, 197, 0.17);
-    --ds-focus: var(--ds-primary);
-    --ds-glass-sheen:
-      linear-gradient(
-        145deg,
-        rgba(255, 255, 255, 0.08) 0%,
-        rgba(255, 255, 255, 0.03) 36%,
-        rgba(255, 255, 255, 0.01) 62%,
-        rgba(255, 255, 255, 0) 100%
-      );
-    --ds-glass-edge:
-      inset 0 var(--ds-border-width) 0 rgba(255, 255, 255, 0.12),
-      inset 0 calc(var(--ds-border-width) * -1) 0 rgba(255, 255, 255, 0.03);
-    --ds-shadow-control: 0 1px 2px rgba(0, 0, 0, 0.16);
-    --ds-shadow-panel:
-      0 1px 2px rgba(0, 0, 0, 0.28),
-      0 2px 8px rgba(0, 0, 0, 0.24),
-      0 1px 1px rgba(255, 255, 255, 0.04) inset;
-    --ds-shadow-popover:
-      0 14px 42px rgba(0, 0, 0, 0.36),
-      var(--ds-glass-edge);
-  }
-}
-
 /*
- * Deep-gray chrome: the sidebar always renders on the dark palette, in both
- * color schemes. Re-declaring the semantic tokens here re-themes everything
- * inside it (explorer rows, chips, filter input) without per-component rules.
+ * The explorer uses the inset canvas, while inheriting all interaction and
+ * status colors from the global palette.
  */
 .sidebar {
-  --ds-surface-0: #242828;
-  --ds-surface-1: #1f2322;
-  --ds-surface-2: #2c302f;
-  --ds-surface-elevated: #262b2a;
-  --ds-border-subtle: #333836;
-  --ds-border-strong: #4a504d;
-  --ds-text: #edf0ee;
-  --ds-text-muted: #a9b1ad;
-  --ds-text-subtle: #858d89;
-  --ds-hover: rgba(255, 255, 255, 0.06);
-  --ds-hover-strong: rgba(255, 255, 255, 0.11);
-  --ds-primary-text: #6cbc88;
-  --ds-primary-soft: rgba(76, 175, 110, 0.16);
-  --ds-success: #6cbc88;
-  --ds-caution: #f2b84b;
-  --ds-caution-soft: rgba(242, 184, 75, 0.16);
-  --ds-critical: #ff6b5c;
-  --ds-critical-soft: rgba(255, 107, 92, 0.16);
-  --ds-shadow-control: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --ds-surface-0: #1c2128;
+  --ds-surface-1: #161b22;
+  --ds-surface-2: #22272e;
+  --ds-surface-elevated: #2d333b;
 }

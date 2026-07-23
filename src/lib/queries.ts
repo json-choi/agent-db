@@ -317,6 +317,20 @@ export function dashboardRunQuery(dashboardId: string | null) {
   });
 }
 
+// Dashboard tiles subscribe to cached results so already-run previews repaint instantly,
+// but only the explicitly selected tile may touch the live database. Keeping the
+// selection rule here makes it difficult for a canvas refactor to accidentally turn a
+// dashboard overview into an unbounded batch of SQL queries again.
+export function dashboardTileRunQueries(
+  dashboardIds: readonly string[],
+  selectedDashboardId: string | null,
+) {
+  return dashboardIds.map((dashboardId) => ({
+    ...dashboardRunQuery(dashboardId),
+    enabled: dashboardId === selectedDashboardId,
+  }));
+}
+
 // One page of documents — the MongoDB sibling of tableRowsQuery's page half. The exact
 // total is cached separately (documentCountQuery) so paging through a large collection
 // doesn't re-run count_documents on every page.

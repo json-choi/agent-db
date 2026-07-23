@@ -98,7 +98,12 @@ const DEFINITIONS: &[DriverDefinition] = &[
         version: "0.8",
         install_mode: DriverInstallMode::Bundled,
         install_state: DriverInstallState::Installed,
-        supported_providers: &[Provider::Generic, Provider::Neon, Provider::PlanetScale],
+        supported_providers: &[
+            Provider::Generic,
+            Provider::Neon,
+            Provider::PlanetScale,
+            Provider::GcpCloudSql,
+        ],
         capabilities: SQL_CAPABILITIES,
         recommended: true,
         adapter: Some(RuntimeAdapter::Postgres),
@@ -110,7 +115,11 @@ const DEFINITIONS: &[DriverDefinition] = &[
         version: "0.8",
         install_mode: DriverInstallMode::Bundled,
         install_state: DriverInstallState::Installed,
-        supported_providers: &[Provider::Generic, Provider::PlanetScale],
+        supported_providers: &[
+            Provider::Generic,
+            Provider::PlanetScale,
+            Provider::GcpCloudSql,
+        ],
         capabilities: SQL_CAPABILITIES,
         recommended: true,
         adapter: Some(RuntimeAdapter::Mysql),
@@ -309,6 +318,12 @@ mod tests {
 
         let planetscale = validate(&profile(Engine::Mysql, Provider::PlanetScale)).unwrap();
         assert_eq!(planetscale.id, "sqlx-mysql");
+
+        let cloud_sql_postgres =
+            validate(&profile(Engine::Postgres, Provider::GcpCloudSql)).unwrap();
+        assert_eq!(cloud_sql_postgres.id, "sqlx-postgres");
+        let cloud_sql_mysql = validate(&profile(Engine::Mysql, Provider::GcpCloudSql)).unwrap();
+        assert_eq!(cloud_sql_mysql.id, "sqlx-mysql");
     }
 
     #[test]

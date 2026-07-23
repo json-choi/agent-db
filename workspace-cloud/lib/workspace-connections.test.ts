@@ -21,6 +21,14 @@ describe("parseSharedConnection", () => {
     expect(parseSharedConnection(validTemplate)).toEqual(validTemplate);
   });
 
+  it("accepts a GCP Cloud SQL provider without accepting cloud credentials", () => {
+    expect(parseSharedConnection({
+      ...validTemplate,
+      provider: "gcpCloudSql",
+      host: "203.0.113.10",
+    })).toMatchObject({ provider: "gcpCloudSql" });
+  });
+
   it.each(["password", "token", "username", "connectionUrl", "secretRef"])(
     "rejects secret-bearing field %s",
     (field) => {

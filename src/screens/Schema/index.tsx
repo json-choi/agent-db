@@ -130,6 +130,9 @@ export default function SchemaExplorer({
   const { data: catalog, error: catalogError } = useQuery(catalogQuery(connection.id));
   const error = catalogError ? errMessage(catalogError) : null;
   const [filter, setFilter] = useState("");
+  // Metadata is useful on demand but expensive in horizontal space. Keep the canvas
+  // primary and let the user explicitly reveal the inspector.
+  const [inspectorOpen, setInspectorOpen] = useState(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(
     selectedTable ? tableKey(selectedTable) : null,
   );
@@ -163,10 +166,13 @@ export default function SchemaExplorer({
   const relationships = allRelationships.filter(
     (r) => visibleKeys.has(r.fromKey) && visibleKeys.has(r.toKey),
   );
+  // The inspector always follows a visible node. Keep the remembered key so clearing
+  // a filter restores the previous selection, but never show hidden-table metadata.
   const selected =
     tables.find((table) => tableKey(table) === selectedKey) ??
-    catalog?.tables.find((table) => tableKey(table) === selectedKey) ??
+    tables[0] ??
     null;
+  const activeSelectedKey = selected ? tableKey(selected) : null;
 
   const cols = tables.length <= 1 ? 1 : Math.min(3, Math.ceil(Math.sqrt(tables.length)));
   const rows = Math.max(1, Math.ceil(tables.length / cols));
@@ -193,13 +199,26 @@ export default function SchemaExplorer({
             {t("schema.fkCount", { count: allRelationships.length })}
           </span>
         )}
-        <input
-          className="schema-filter"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          placeholder={t("schema.filterPlaceholder")}
-          type="search"
-        />
+        <div className="schema-head-actions ds-control-row">
+          <input
+            className="schema-filter"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder={t("schema.filterPlaceholder")}
+            type="search"
+          />
+          <button
+            className={`btn small${inspectorOpen ? " active" : ""}`}
+            type="button"
+            aria-expanded={inspectorOpen}
+            aria-controls="schema-inspector"
+            title={t(inspectorOpen ? "schema.hideDetails" : "schema.showDetails")}
+            aria-label={t(inspectorOpen ? "schema.hideDetails" : "schema.showDetails")}
+            onClick={() => setInspectorOpen((open) => !open)}
+          >
+            <Icon name="panelRight" />
+          </button>
+        </div>
       </div>
 
       {error ? (
@@ -211,7 +230,7 @@ export default function SchemaExplorer({
       ) : tables.length === 0 ? (
         <div className="muted empty">{t("schema.noMatch")}</div>
       ) : (
-        <div className="schema-layout">
+        <div className={`schema-layout${inspectorOpen ? " inspector-open" : ""}`}>
           <div className="schema-canvas-wrap">
             <div
               className="schema-canvas"
@@ -242,7 +261,7 @@ export default function SchemaExplorer({
                   const to = positions.get(rel.toKey);
                   if (!from || !to) return null;
                   const highlighted =
-                    selectedKey === rel.fromKey || selectedKey === rel.toKey;
+                    activeSelectedKey === rel.fromKey || activeSelectedKey === rel.toKey;
                   return (
                     <path
                       key={rel.id}
@@ -261,13 +280,12 @@ export default function SchemaExplorer({
                 const fkCols = new Set(table.foreignKeys.map((fk) => fk.column));
                 return (
                   <button
+                    type="button"
                     key={key}
-                    className={selectedKey === key ? "schema-node selected" : "schema-node"}
+                    className={activeSelectedKey === key ? "schema-node selected" : "schema-node"}
                     style={{ left: `${pos.x}px`, top: `${pos.y}px` }}
-                    onClick={() => {
-                      setSelectedKey(key);
-                      onOpenTable(table);
-                    }}
+                    onClick={() => setSelectedKey(key)}
+                    onDoubleClick={() => onOpenTable(table)}
                   >
                     <span className="schema-node-head">
                       <strong>{labelFor(table)}</strong>
@@ -295,7 +313,7 @@ export default function SchemaExplorer({
             </div>
           </div>
 
-          <aside className="schema-inspector">
+          {inspectorOpen && <aside className="schema-inspector" id="schema-inspector">
             {selected ? (
               <>
                 <div className="schema-inspector-head">
@@ -366,7 +384,7 @@ export default function SchemaExplorer({
             ) : (
               <InfoTip label={t("schema.selectTable")} />
             )}
-          </aside>
+          </aside>}
         </div>
       )}
     </div>

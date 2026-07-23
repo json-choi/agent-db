@@ -15,7 +15,13 @@ import {
   getTableDdl,
   setConnectionsSchemaGroup,
 } from "../../ipc/commands";
-import type { Catalog, CatalogTable, ConnectionProfile } from "../../ipc/types";
+import type {
+  Catalog,
+  CatalogObject,
+  CatalogObjectKind,
+  CatalogTable,
+  ConnectionProfile,
+} from "../../ipc/types";
 import { errMessage } from "../../ipc/types";
 import { isDocumentEngine } from "../../lib/capabilities";
 import { catalogQuery, fetchFreshCatalog, qk } from "../../lib/queries";
@@ -34,7 +40,7 @@ import {
 import { tableKey, tableLabel } from "../../lib/tableRef";
 import ConfirmButton from "../../components/ConfirmButton";
 import EngineMark from "../../components/EngineMark";
-import { Icon } from "../../components/Icon";
+import { Icon, type IconName } from "../../components/Icon";
 import LazySqlViewer from "../../components/LazySqlViewer";
 import WorkspaceConnectionDialog from "../../components/WorkspaceConnectionDialog";
 import { useToast } from "../../components/Toast";
@@ -51,6 +57,55 @@ type DragStart = {
   x: number;
   y: number;
 };
+
+const SQL_OBJECT_SECTIONS: Array<{
+  kind: CatalogObjectKind;
+  icon: IconName;
+  label:
+    | "connections.materializedViews"
+    | "connections.functions"
+    | "connections.procedures"
+    | "connections.sequences"
+    | "connections.triggers";
+}> = [
+  {
+    kind: "materialized_view",
+    icon: "materializedView",
+    label: "connections.materializedViews",
+  },
+  { kind: "function", icon: "function", label: "connections.functions" },
+  { kind: "procedure", icon: "procedure", label: "connections.procedures" },
+  { kind: "sequence", icon: "sequence", label: "connections.sequences" },
+  { kind: "trigger", icon: "trigger", label: "connections.triggers" },
+];
+
+function supportedObjectKinds(engine: ConnectionProfile["engine"]) {
+  if (engine === "postgres") {
+    return new Set<CatalogObjectKind>([
+      "materialized_view",
+      "function",
+      "procedure",
+      "sequence",
+      "trigger",
+    ]);
+  }
+  if (engine === "mysql") {
+    return new Set<CatalogObjectKind>(["function", "procedure", "trigger"]);
+  }
+  if (engine === "sqlite") return new Set<CatalogObjectKind>(["trigger"]);
+  return new Set<CatalogObjectKind>();
+}
+
+function catalogObjectLabel(object: CatalogObject) {
+  const qualified = object.schema ? `${object.schema}.${object.name}` : object.name;
+  if (
+    (object.kind === "function" || object.kind === "procedure")
+    && object.detail != null
+  ) {
+    return `${qualified}(${object.detail})`;
+  }
+  return qualified;
+}
 
 function stripEnvTokens(value: string): string {
   return value
@@ -206,8 +261,10 @@ export function DatabaseExplorer({
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [refreshing, setRefreshing] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
-  const [tablesOpen, setTablesOpen] = useState(true);
-  const [viewsOpen, setViewsOpen] = useState(true);
+  // Tables/views are open by default, but each connection owns its own collapse state.
+  // Expanding a second connection must not unexpectedly collapse the first one.
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
+  const [objectSectionsOpen, setObjectSectionsOpen] = useState<Set<string>>(new Set());
   const [showRowCounts, setShowRowCounts] = useState(true);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [workspaceDialog, setWorkspaceDialog] = useState<{
@@ -649,6 +706,40 @@ export function DatabaseExplorer({
     );
   }
 
+  function objectMatchesFilter(object: CatalogObject, f: string) {
+    return [
+      object.schema,
+      object.name,
+      object.kind,
+      object.detail,
+      object.parent,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase()
+      .includes(f);
+  }
+
+  function toggleObjectSection(connectionId: string, kind: string) {
+    const key = `${connectionId}:${kind}`;
+    setObjectSectionsOpen((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  function toggleDefaultOpenSection(connectionId: string, kind: "table" | "view") {
+    const key = `${connectionId}:${kind}`;
+    setCollapsedSections((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
   function renderConnection(c: ConnectionProfile, nested = false) {
     const isSel = c.id === selectedId;
     const accessLabelBase =
@@ -839,6 +930,11 @@ export function DatabaseExplorer({
                 ? cat.tables.filter((t) => tableMatchesFilter(t, f))
                 : cat.tables
               : [];
+            const filteredObjects = cat
+              ? f
+                ? (cat.objects ?? []).filter((object) => objectMatchesFilter(object, f))
+                : (cat.objects ?? [])
+              : [];
             const all = orderTablesBySchemaDiff(filteredTables, diff);
             const missingTables = diff
               ? f
@@ -847,6 +943,14 @@ export function DatabaseExplorer({
               : [];
             const tbls = all.filter((t) => t.kind !== "view");
             const views = all.filter((t) => t.kind === "view");
+            const supportedKinds = supportedObjectKinds(c.engine);
+            const tablesOpen = !collapsedSections.has(`${c.id}:table`);
+            const viewsOpen = !collapsedSections.has(`${c.id}:view`);
+            const objectSections = SQL_OBJECT_SECTIONS.filter(
+              (section) =>
+                supportedKinds.has(section.kind)
+                || filteredObjects.some((object) => object.kind === section.kind),
+            );
             const renderRow = (table: CatalogTable) => {
               const key = tableKey(table);
               const tableDiff = diff?.tableDiffs[key];
@@ -880,6 +984,16 @@ export function DatabaseExplorer({
                     title={tableDiff ? tableDiffTitle(tableDiff) : undefined}
                     aria-hidden="true"
                   />
+                  <Icon
+                    className="db-object-icon"
+                    name={
+                      isDocumentEngine(c.engine)
+                        ? "collection"
+                        : table.kind === "view"
+                          ? "view"
+                          : "table"
+                    }
+                  />
                   <span className="tbl-name">
                     {tableLabel(c.engine, table)}
                   </span>
@@ -911,6 +1025,10 @@ export function DatabaseExplorer({
                 title={t("connections.schemaDiffTableMissing")}
               >
                 <span className="schema-diff-dot diff-missing" aria-hidden="true" />
+                <Icon
+                  className="db-object-icon"
+                  name={table.kind === "view" ? "view" : "table"}
+                />
                 <span className="tbl-name">{tableLabel(c.engine, table)}</span>
                 <span className="schema-diff-kind">
                   {t(table.kind === "view" ? "schemaDiff.objectView" : "schemaDiff.objectTable")}
@@ -920,7 +1038,7 @@ export function DatabaseExplorer({
             );
             return (
               <div className="db-tables">
-                {cat && cat.tables.length > 5 && (
+                {cat && cat.tables.length + (cat.objects?.length ?? 0) > 5 && (
                   <input
                     className="table-filter"
                     placeholder={t("connections.filterTables")}
@@ -936,59 +1054,126 @@ export function DatabaseExplorer({
                     {t("connections.loadingSchema")}
                   </div>
                 )}
-                {cat && all.length === 0 && missingTables.length === 0 && (
+                {cat
+                  && all.length === 0
+                  && filteredObjects.length === 0
+                  && missingTables.length === 0 && (
                   <div className="muted small-pad">
                     {f
                       ? t("connections.noTablesMatch", { filter: f })
-                      : t("connections.noTables")}
+                      : t("connections.noObjects")}
                   </div>
                 )}
-                {tbls.length > 0 && (
+                {(tbls.length > 0 || (!f && cat && !isDocumentEngine(c.engine))) && (
                   <>
                     <div
                       className="db-section"
                       role="button"
                       tabIndex={0}
                       aria-expanded={tablesOpen}
-                      onClick={() => setTablesOpen((o) => !o)}
+                      onClick={() => toggleDefaultOpenSection(c.id, "table")}
                       onKeyDown={(e) => {
                         if (e.key === "Enter" || e.key === " ") {
                           e.preventDefault();
-                          setTablesOpen((o) => !o);
+                          toggleDefaultOpenSection(c.id, "table");
                         }
                       }}
                     >
                       <span className="tw">
                         <Icon name={tablesOpen ? "chevronDown" : "chevronRight"} />
-                      </span>{" "}
-                      {t("connections.tables", { count: tbls.length })}
+                      </span>
+                      <Icon
+                        className="db-section-icon"
+                        name={isDocumentEngine(c.engine) ? "collection" : "table"}
+                      />
+                      {t(
+                        isDocumentEngine(c.engine)
+                          ? "connections.collections"
+                          : "connections.tables",
+                        { count: tbls.length },
+                      )}
                     </div>
                     {tablesOpen && tbls.map(renderRow)}
                   </>
                 )}
-                {views.length > 0 && (
+                {(views.length > 0 || (!f && cat && !isDocumentEngine(c.engine))) && (
                   <>
                     <div
                       className="db-section"
                       role="button"
                       tabIndex={0}
                       aria-expanded={viewsOpen}
-                      onClick={() => setViewsOpen((o) => !o)}
+                      onClick={() => toggleDefaultOpenSection(c.id, "view")}
                       onKeyDown={(e) => {
                         if (e.key === "Enter" || e.key === " ") {
                           e.preventDefault();
-                          setViewsOpen((o) => !o);
+                          toggleDefaultOpenSection(c.id, "view");
                         }
                       }}
                     >
                       <span className="tw">
                         <Icon name={viewsOpen ? "chevronDown" : "chevronRight"} />
-                      </span>{" "}
+                      </span>
+                      <Icon className="db-section-icon" name="view" />
                       {t("connections.views", { count: views.length })}
                     </div>
                     {viewsOpen && views.map(renderRow)}
                   </>
                 )}
+                {objectSections.map((section) => {
+                  const objects = filteredObjects.filter(
+                    (object) => object.kind === section.kind,
+                  );
+                  if (f && objects.length === 0) return null;
+                  const sectionKey = `${c.id}:${section.kind}`;
+                  // Search results should never be hidden behind a collapsed category.
+                  const expanded = Boolean(f) || objectSectionsOpen.has(sectionKey);
+                  return (
+                    <div className="db-object-section" key={section.kind}>
+                      <div
+                        className="db-section"
+                        role="button"
+                        tabIndex={0}
+                        aria-expanded={expanded}
+                        onClick={() => toggleObjectSection(c.id, section.kind)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            toggleObjectSection(c.id, section.kind);
+                          }
+                        }}
+                      >
+                        <span className="tw">
+                          <Icon name={expanded ? "chevronDown" : "chevronRight"} />
+                        </span>
+                        <Icon className="db-section-icon" name={section.icon} />
+                        {t(section.label, { count: objects.length })}
+                      </div>
+                      {expanded
+                        && objects.map((object, index) => (
+                          <div
+                            className="db-catalog-object ds-object-row"
+                            key={`${object.schema ?? ""}:${object.kind}:${object.name}:${
+                              object.detail ?? index
+                            }`}
+                            title={[
+                              catalogObjectLabel(object),
+                              object.parent ? `${t("connections.objectOn")} ${object.parent}` : null,
+                              object.detail && object.kind === "trigger" ? object.detail : null,
+                            ].filter(Boolean).join(" · ")}
+                          >
+                            <Icon className="db-object-icon" name={section.icon} />
+                            <span className="tbl-name">{catalogObjectLabel(object)}</span>
+                            {object.parent ? (
+                              <span className="db-object-parent muted">
+                                {t("connections.objectOn")} {object.parent}
+                              </span>
+                            ) : null}
+                          </div>
+                        ))}
+                    </div>
+                  );
+                })}
                 {missingTables.length > 0 && (
                   <>
                     <div className="db-section schema-diff-section">
@@ -1086,9 +1271,9 @@ export function DatabaseExplorer({
         )}
       </div>
 
-      <div className="sidebar-foot ds-control-row">
-        {workspaceAccount}
-      </div>
+      {workspaceAccount ? (
+        <div className="sidebar-foot ds-control-row">{workspaceAccount}</div>
+      ) : null}
 
       {dragPreview &&
         (() => {

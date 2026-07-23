@@ -2,7 +2,7 @@
 // Keep this file in lockstep with src-tauri/src/model.rs — it is the data contract.
 
 export type Engine = "postgres" | "mysql" | "sqlite" | "mongodb";
-export type Provider = "auto" | "generic" | "neon" | "planetScale";
+export type Provider = "auto" | "generic" | "neon" | "planetScale" | "gcpCloudSql";
 
 type WorkspaceKind = "personal" | "team";
 type WorkspaceLifecycleState = "active" | "archived" | "deleted";
@@ -306,8 +306,25 @@ export interface CatalogTable {
   rowEstimate: number | null;
 }
 
+export type CatalogObjectKind =
+  | "function"
+  | "procedure"
+  | "trigger"
+  | "sequence"
+  | "materialized_view";
+
+export interface CatalogObject {
+  schema: string | null;
+  name: string;
+  kind: CatalogObjectKind | string;
+  detail?: string | null;
+  parent?: string | null;
+}
+
 export interface Catalog {
   tables: CatalogTable[];
+  // Optional while schema caches created by older app versions are still present.
+  objects?: CatalogObject[];
 }
 
 // One-click connect: an AI platform dopedb can wire up (mirrors mcp/connect.rs).

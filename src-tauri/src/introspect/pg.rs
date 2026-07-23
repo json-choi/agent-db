@@ -7,7 +7,7 @@ use sqlx::{PgPool, Row};
 
 use crate::error::{AppError, AppResult};
 
-use super::{Catalog, Column, ForeignKey, Index, Table};
+use super::{Catalog, Column, DatabaseObject, ForeignKey, Index, Table};
 
 const COLS_SQL: &str = r#"
 SELECT c.table_schema, c.table_name, c.column_name, c.data_type, c.is_nullable,
@@ -31,6 +31,7 @@ WHERE c.table_schema NOT IN ('pg_catalog', 'information_schema')
     JOIN pg_class pc ON pc.oid = dep.objid
     JOIN pg_namespace pn ON pn.oid = pc.relnamespace
     WHERE dep.deptype = 'e'
+      AND dep.classid = 'pg_class'::regclass
       AND pn.nspname = c.table_schema
       AND pc.relname = c.table_name
   )
@@ -94,6 +95,125 @@ JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE c.relkind IN ('r', 'p')
   AND n.nspname NOT IN ('pg_catalog', 'information_schema')
 "#;
+
+// Non-tabular objects stay out of Catalog.tables so callers cannot try to SELECT from
+// a routine or sequence as if it were a data grid. Extension-owned objects are omitted
+// for the same reason as extension-owned relations above: they are implementation noise
+// in an application database explorer.
+const OBJECTS_SQL: &str = r#"
+SELECT n.nspname AS schema_name,
+       p.proname AS object_name,
+       CASE p.prokind WHEN 'p' THEN 'procedure' ELSE 'function' END AS object_kind,
+       pg_get_function_identity_arguments(p.oid) AS object_detail,
+       NULL::text AS parent_name
+FROM pg_proc p
+JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+  AND p.prokind IN ('f', 'p', 'w')
+  AND NOT EXISTS (
+    SELECT 1 FROM pg_depend dep
+    WHERE dep.deptype = 'e'
+      AND dep.classid = 'pg_proc'::regclass
+      AND dep.objid = p.oid
+  )
+UNION ALL
+SELECT n.nspname,
+       c.relname,
+       CASE c.relkind WHEN 'S' THEN 'sequence' ELSE 'materialized_view' END,
+       NULL::text,
+       NULL::text
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relkind IN ('S', 'm')
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+  AND NOT EXISTS (
+    SELECT 1 FROM pg_depend dep
+    WHERE dep.deptype = 'e'
+      AND dep.classid = 'pg_class'::regclass
+      AND dep.objid = c.oid
+  )
+UNION ALL
+SELECT n.nspname,
+       t.tgname,
+       'trigger',
+       pg_get_triggerdef(t.oid, false),
+       c.relname
+FROM pg_trigger t
+JOIN pg_class c ON c.oid = t.tgrelid
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE NOT t.tgisinternal
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+  AND NOT EXISTS (
+    SELECT 1 FROM pg_depend dep
+    WHERE dep.deptype = 'e'
+      AND dep.classid = 'pg_trigger'::regclass
+      AND dep.objid = t.oid
+  )
+ORDER BY schema_name, object_kind, object_name, object_detail
+"#;
+
+// PostgreSQL 10 and earlier represent routine kind with proisagg/proiswindow;
+// `pg_proc.prokind` arrived in PostgreSQL 11. Procedures do not exist on the
+// legacy branch, but functions, sequences, materialized views, and triggers do.
+const OBJECTS_LEGACY_SQL: &str = r#"
+SELECT n.nspname AS schema_name,
+       p.proname AS object_name,
+       'function' AS object_kind,
+       pg_get_function_identity_arguments(p.oid) AS object_detail,
+       NULL::text AS parent_name
+FROM pg_proc p
+JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+  AND NOT p.proisagg
+  AND NOT EXISTS (
+    SELECT 1 FROM pg_depend dep
+    WHERE dep.deptype = 'e'
+      AND dep.classid = 'pg_proc'::regclass
+      AND dep.objid = p.oid
+  )
+UNION ALL
+SELECT n.nspname,
+       c.relname,
+       CASE c.relkind WHEN 'S' THEN 'sequence' ELSE 'materialized_view' END,
+       NULL::text,
+       NULL::text
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relkind IN ('S', 'm')
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+  AND NOT EXISTS (
+    SELECT 1 FROM pg_depend dep
+    WHERE dep.deptype = 'e'
+      AND dep.classid = 'pg_class'::regclass
+      AND dep.objid = c.oid
+  )
+UNION ALL
+SELECT n.nspname,
+       t.tgname,
+       'trigger',
+       pg_get_triggerdef(t.oid, false),
+       c.relname
+FROM pg_trigger t
+JOIN pg_class c ON c.oid = t.tgrelid
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE NOT t.tgisinternal
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+  AND NOT EXISTS (
+    SELECT 1 FROM pg_depend dep
+    WHERE dep.deptype = 'e'
+      AND dep.classid = 'pg_trigger'::regclass
+      AND dep.objid = t.oid
+  )
+ORDER BY schema_name, object_kind, object_name, object_detail
+"#;
+
+fn objects_sql_for_version(server_version_num: u32) -> &'static str {
+    if server_version_num >= 110_000 {
+        OBJECTS_SQL
+    } else {
+        OBJECTS_LEGACY_SQL
+    }
+}
 
 pub async fn introspect(pool: &PgPool) -> AppResult<Catalog> {
     let mut tables: Vec<Table> = Vec::new();
@@ -174,7 +294,28 @@ pub async fn introspect(pool: &PgPool) -> AppResult<Catalog> {
         }
     }
 
-    Ok(Catalog { tables })
+    let server_version: String = sqlx::query_scalar("SHOW server_version_num")
+        .fetch_one(pool)
+        .await?;
+    let server_version_num = server_version.trim().parse::<u32>().map_err(|_| {
+        AppError::Config("PostgreSQL returned an invalid server_version_num".into())
+    })?;
+    let objects = sqlx::query(objects_sql_for_version(server_version_num))
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(|row| {
+            Ok(DatabaseObject {
+                schema: row.try_get("schema_name")?,
+                name: row.try_get("object_name")?,
+                kind: row.try_get("object_kind")?,
+                detail: row.try_get("object_detail")?,
+                parent: row.try_get("parent_name")?,
+            })
+        })
+        .collect::<AppResult<Vec<_>>>()?;
+
+    Ok(Catalog { tables, objects })
 }
 
 /// Synthesize CREATE TABLE + CREATE INDEX from the introspected catalog. This is a
@@ -314,5 +455,13 @@ mod tests {
         assert!(ddl.contains("FOREIGN KEY (\"user_id\") REFERENCES \"public\".\"users\" (\"id\")"));
         assert!(ddl
             .contains("CREATE INDEX \"idx_orders_user\" ON \"public\".\"orders\" (\"user_id\");"));
+    }
+
+    #[test]
+    fn object_catalog_selects_the_server_compatible_pg_proc_shape() {
+        assert!(objects_sql_for_version(100_000).contains("proisagg"));
+        assert!(!objects_sql_for_version(100_000).contains("p.prokind"));
+        assert!(objects_sql_for_version(110_000).contains("p.prokind"));
+        assert!(objects_sql_for_version(170_000).contains("'pg_proc'::regclass"));
     }
 }

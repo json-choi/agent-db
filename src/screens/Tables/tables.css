@@ -2,39 +2,54 @@
 
 /* Table data view (Data tab) — fills the pane; the grid scrolls inside it. */
 .table-data {
+  container-name: table-data-pane;
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
   height: 100%;
   overflow: hidden;
+  gap: 0;
+}
+.table-data-context {
+  flex-shrink: 0;
+  min-height: calc(var(--ds-control-lg) + var(--ds-space-2));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ds-space-3);
+  padding: 0 0 var(--ds-space-2);
+  border-bottom: var(--ds-border-width) solid var(--ds-border-subtle);
+}
+.table-data-identity {
+  min-width: 0;
+  display: flex;
+  align-items: center;
   gap: var(--ds-space-2);
 }
-.table-data-head {
-  flex-shrink: 0;
+.table-data-identity > .icon {
+  flex: 0 0 auto;
+  color: var(--ds-accent-text);
+  font-size: var(--ds-icon-md);
 }
-.table-data-head .ds-title-line {
-  max-width: 100%;
+.table-data-identity > strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--ds-font-size-ui);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.table-data-context .ds-meta-row {
+  flex: 0 1 auto;
+  justify-content: flex-end;
+  overflow: hidden;
+  white-space: nowrap;
 }
 .table-data .grid-scroll {
   max-height: none;
   flex: 1;
-}
-.table-query-strip {
-  flex-shrink: 0;
-  overflow-x: auto;
-}
-.table-query-strip .ds-filter-token.active {
-  color: var(--ds-accent-text);
-  border-color: color-mix(in srgb, var(--ds-accent) 42%, var(--ds-border-subtle));
-  background: var(--ds-accent-soft);
-}
-.table-query-strip .ds-filter-token.risk {
-  color: var(--ds-warning);
-  border-color: color-mix(in srgb, var(--ds-warning) 48%, var(--ds-border-subtle));
-}
-.table-query-strip .column-policy {
-  max-width: 260px;
+  border-radius: var(--ds-radius-xs);
 }
 /* Data-tab body: grid on the left, contextual panel (viewer/editor/approval) on right. */
 .table-data-body {
@@ -54,10 +69,63 @@
   transition: opacity 0.12s ease;
 }
 .grid-toolbar {
+  --ds-row-control-size: var(--ds-control-md);
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: var(--ds-space-2);
-  flex-wrap: wrap;
+  gap: var(--ds-space-1);
+  flex-wrap: nowrap;
+  min-width: 0;
+  /* Popovers are anchored inside this row, so clipping/scroll containment would
+     cut them off. Narrow layouts wrap the row instead of turning it into a scroller. */
+  overflow: visible;
+  padding: var(--ds-space-1) 0;
+}
+.grid-toolbar .ds-toolbar-group {
+  flex-wrap: nowrap;
+  gap: var(--ds-space-1);
+}
+.grid-toolbar .btn {
+  flex: 0 0 auto;
+  gap: var(--ds-icon-text-gap-tight);
+}
+.grid-toolbar .btn.active {
+  border-color: var(--ds-accent-text);
+  background: var(--ds-accent-soft);
+  color: var(--ds-accent-text);
+}
+.table-toolbar-divider {
+  width: var(--ds-border-width);
+  height: var(--ds-control-sm);
+  flex: 0 0 auto;
+  margin: 0 var(--ds-space-1);
+  background: var(--ds-border-subtle);
+}
+.table-query-state {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-3);
+  color: var(--ds-text-muted);
+  font-size: var(--ds-font-size-sm);
+}
+.table-state {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.table-state .icon {
+  flex: 0 0 auto;
+}
+.table-state.active {
+  color: var(--ds-accent-text);
+}
+.table-state.risk {
+  color: var(--ds-warning);
 }
 .toolbar-menu {
   position: relative;
@@ -73,7 +141,7 @@
   position: absolute;
   z-index: var(--ds-z-sticky);
   top: calc(100% + var(--ds-popover-offset-lg));
-  left: 0;
+  right: 0;
   min-width: 152px;
   display: grid;
   gap: var(--ds-space-2);
@@ -85,6 +153,47 @@
 }
 .toolbar-menu-panel .btn {
   justify-content: flex-start;
+}
+
+.table-structure {
+  flex: 0 1 280px;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(240px, 0.6fr);
+  gap: var(--ds-space-4);
+  overflow: auto;
+  padding: var(--ds-space-3) 0;
+  border-bottom: var(--ds-border-width) solid var(--ds-border-subtle);
+}
+.struct-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--ds-font-size-sm);
+}
+.struct-table th,
+.struct-table td {
+  padding: var(--ds-space-1) var(--ds-space-2);
+  border-bottom: var(--ds-border-width) solid var(--ds-border-subtle);
+  text-align: left;
+}
+.struct-table th {
+  color: var(--ds-text-muted);
+  font-weight: 650;
+}
+.struct-meta {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: var(--ds-space-4);
+  color: var(--ds-text-muted);
+  font-size: var(--ds-font-size-sm);
+}
+.struct-meta strong {
+  color: var(--ds-text);
+}
+.struct-meta ul {
+  margin: var(--ds-space-2) 0 0;
+  padding-left: var(--ds-space-4);
 }
 
 .grid-panel {
@@ -106,15 +215,18 @@
 }
 
 /* Table data pager + wide-cell handling */
-.table-data-head .table-pager {
+.table-pager {
   --ds-row-control-size: var(--ds-control-field-sm);
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: var(--ds-space-2);
+  gap: var(--ds-space-1);
 }
 
 .table-pager .page-ind {
+  min-width: 58px;
   font-size: var(--ds-font-size-sm);
+  text-align: center;
   white-space: nowrap;
 }
 /* Cap very wide cells with an ellipsis; the row still scrolls horizontally for many columns. */
@@ -124,12 +236,19 @@
   text-overflow: ellipsis;
 }
 
-@media (max-width: 920px) {
-  .table-data-head {
+@container table-data-pane (max-width: 920px) {
+  .table-data-context {
+    align-items: flex-start;
     flex-direction: column;
+    gap: var(--ds-space-1);
+    padding-bottom: var(--ds-space-2);
   }
-  .table-data-head .table-pager {
+  .table-data-context .ds-meta-row {
+    width: 100%;
     justify-content: flex-start;
+  }
+  .table-structure {
+    grid-template-columns: minmax(0, 1fr);
   }
   .table-data-body {
     flex-direction: column;
@@ -141,23 +260,9 @@
   }
 }
 
-@media (max-width: 760px) {
-  .table-data {
-    gap: var(--ds-space-2);
-  }
-
-  .grid-toolbar {
-    align-items: stretch;
-  }
-
-  .grid-toolbar .btn,
-  .toolbar-menu,
-  .toolbar-menu summary {
-    width: 100%;
-  }
-
+@container table-data-pane (max-width: 760px) {
   .toolbar-menu-panel {
-    left: 0;
+    left: auto;
     right: 0;
     min-width: 0;
   }
@@ -166,16 +271,27 @@
     max-height: min(360px, 44dvh);
   }
 
-  .table-data-head .table-pager,
-  .table-query-strip {
-    width: 100%;
+  .table-action-label,
+  .table-query-state {
+    display: none;
   }
 
-  .table-data-head .table-pager {
+  .table-toolbar-divider {
+    margin-right: 0;
+  }
+}
+
+@container table-data-pane (max-width: 480px) {
+  .grid-toolbar {
     flex-wrap: wrap;
   }
 
-  .table-query-strip .column-policy {
-    max-width: none;
+  .grid-toolbar > .ds-toolbar-spacer {
+    display: none;
+  }
+
+  .table-pager {
+    width: 100%;
+    justify-content: flex-end;
   }
 }

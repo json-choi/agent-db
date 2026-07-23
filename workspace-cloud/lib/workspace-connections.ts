@@ -4,7 +4,7 @@ import type { WorkspaceRoleName } from "./workspace-permissions";
 
 // SQLite paths identify files on one machine and are not meaningful team endpoints.
 const engines = ["postgres", "mysql", "mongodb"] as const;
-const providers = ["auto", "generic", "neon", "planetScale"] as const;
+const providers = ["auto", "generic", "neon", "planetScale", "gcpCloudSql"] as const;
 const allowedKeys = new Set([
   "name", "engine", "provider", "driverId", "host", "port", "database",
   "sslmode", "readonlyDefault", "allowWrites", "env", "schemaGroup",

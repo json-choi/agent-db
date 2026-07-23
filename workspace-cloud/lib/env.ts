@@ -41,6 +41,7 @@ function optional(name: string): string | null {
 export const env = {
   appOrigin,
   authSecret,
+  cronSecret: () => optional("CRON_SECRET"),
   credentialKey: () => required("WORKSPACE_CREDENTIAL_KEY"),
   databaseUrl: () => required("DATABASE_URL"),
   googleClientId: () => required("GOOGLE_CLIENT_ID"),

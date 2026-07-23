@@ -5,6 +5,10 @@ import { db } from "../../../../../../../lib/db";
 import { env } from "../../../../../../../lib/env";
 import { isUuid, jsonError, mutationAllowed, privateJson } from "../../../../../../../lib/http";
 import { revokeActiveLeases } from "../../../../../../../lib/provider-integrations";
+import {
+  claimRevocationGate,
+  releaseRevocationGateClaim,
+} from "../../../../../../../lib/revocation-gates";
 import { workspaceAuditEvent, workspaceConnection } from "../../../../../../../lib/schema";
 import { authorizeWorkspace } from "../../../../../../../lib/workspace-authorization";
 import { parseSharedConnection, publicConnection } from "../../../../../../../lib/workspace-connections";
@@ -55,7 +59,7 @@ export async function PATCH(request: Request, context: RouteContext) {
       eq(workspaceConnection.organizationId, workspaceId),
       isNull(workspaceConnection.deletedAt),
     ),
-    columns: { id: true, engine: true, credentialMode: true },
+    columns: { id: true, engine: true, provider: true, credentialMode: true },
   });
   if (!existing) return jsonError("Connection not found", 404);
   let input;
@@ -70,11 +74,26 @@ export async function PATCH(request: Request, context: RouteContext) {
       409,
     );
   }
-  const revocation = await revokeActiveLeases({
+  const claim = await claimRevocationGate({
+    kind: "connection",
     organizationId: workspaceId,
     connectionId,
   });
+  if (!claim) {
+    return jsonError("Another connection access change is already in progress", 409);
+  }
+  let revocation;
+  try {
+    revocation = await revokeActiveLeases({
+      organizationId: workspaceId,
+      connectionId,
+    });
+  } catch (error) {
+    await releaseRevocationGateClaim(claim).catch(() => false);
+    throw error;
+  }
   if (revocation.deferred > 0) {
+    await releaseRevocationGateClaim(claim).catch(() => false);
     return jsonError("Active database access could not be revoked. Retry the update.", 409);
   }
   const updatedAt = new Date();
@@ -84,7 +103,7 @@ export async function PATCH(request: Request, context: RouteContext) {
       .set({
         name: input.name,
         engine: input.engine,
-        provider: existing.credentialMode === "managed" ? "planetScale" : input.provider,
+        provider: existing.credentialMode === "managed" ? existing.provider : input.provider,
         driverId: input.driverId,
         host: input.host,
         port: input.port,
@@ -94,12 +113,15 @@ export async function PATCH(request: Request, context: RouteContext) {
         allowWrites: input.allowWrites,
         environment: input.env,
         schemaGroup: input.schemaGroup,
-        revision: sql`${workspaceConnection.revision} + 1`,
+        revocationPendingAt: null,
+        revocationClaimedAt: null,
+        revocationClaimId: null,
         updatedAt,
       })
       .where(and(
         eq(workspaceConnection.id, connectionId),
         eq(workspaceConnection.organizationId, workspaceId),
+        eq(workspaceConnection.revocationClaimId, claim.claimId),
         isNull(workspaceConnection.deletedAt),
       ))
       .returning(),
@@ -117,9 +139,15 @@ export async function PATCH(request: Request, context: RouteContext) {
         AND connection."updated_at" = ${updatedAt}
         AND connection."deleted_at" IS NULL
     `),
-  ]);
+  ]).catch(async (error) => {
+    await releaseRevocationGateClaim(claim).catch(() => false);
+    throw error;
+  });
   const updated = updatedRows[0];
-  if (!updated) return jsonError("Connection not found", 404);
+  if (!updated) {
+    await releaseRevocationGateClaim(claim).catch(() => false);
+    return jsonError("Connection access changed concurrently. Retry the update.", 409);
+  }
   return privateJson({
     connection: publicConnection(updated, authorization.role, authorization.accessMode),
   });
@@ -133,21 +161,52 @@ export async function DELETE(request: Request, context: RouteContext) {
   }
   const authorization = await authorizeWorkspace(request, workspaceId, "manage");
   if (!authorization.ok) return jsonError(authorization.error, authorization.status);
-  const revocation = await revokeActiveLeases({
+  const existing = await db.query.workspaceConnection.findFirst({
+    where: and(
+      eq(workspaceConnection.id, connectionId),
+      eq(workspaceConnection.organizationId, workspaceId),
+      isNull(workspaceConnection.deletedAt),
+    ),
+    columns: { id: true },
+  });
+  if (!existing) return jsonError("Connection not found", 404);
+  const claim = await claimRevocationGate({
+    kind: "connection",
     organizationId: workspaceId,
     connectionId,
   });
+  if (!claim) {
+    return jsonError("Another connection access change is already in progress", 409);
+  }
+  let revocation;
+  try {
+    revocation = await revokeActiveLeases({
+      organizationId: workspaceId,
+      connectionId,
+    });
+  } catch (error) {
+    await releaseRevocationGateClaim(claim).catch(() => false);
+    throw error;
+  }
   if (revocation.deferred > 0) {
+    await releaseRevocationGateClaim(claim).catch(() => false);
     return jsonError("Active database access could not be revoked. Retry deletion.", 409);
   }
   const deletedAt = new Date();
   const requestId = crypto.randomUUID();
   const [deletedRows] = await db.batch([
     db.update(workspaceConnection)
-      .set({ deletedAt, updatedAt: deletedAt })
+      .set({
+        deletedAt,
+        updatedAt: deletedAt,
+        revocationPendingAt: null,
+        revocationClaimedAt: null,
+        revocationClaimId: null,
+      })
       .where(and(
         eq(workspaceConnection.id, connectionId),
         eq(workspaceConnection.organizationId, workspaceId),
+        eq(workspaceConnection.revocationClaimId, claim.claimId),
         isNull(workspaceConnection.deletedAt),
       ))
       .returning({ id: workspaceConnection.id, name: workspaceConnection.name }),
@@ -163,9 +222,15 @@ export async function DELETE(request: Request, context: RouteContext) {
         AND connection."organization_id" = ${workspaceId}
         AND connection."deleted_at" = ${deletedAt}
     `),
-  ]);
+  ]).catch(async (error) => {
+    await releaseRevocationGateClaim(claim).catch(() => false);
+    throw error;
+  });
   const deleted = deletedRows[0];
-  if (!deleted) return jsonError("Connection not found", 404);
+  if (!deleted) {
+    await releaseRevocationGateClaim(claim).catch(() => false);
+    return jsonError("Connection access changed concurrently. Retry deletion.", 409);
+  }
   return new Response(null, {
     status: 204,
     headers: { "cache-control": "private, no-store" },

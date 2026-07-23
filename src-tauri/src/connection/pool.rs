@@ -12,11 +12,22 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Executor;
 
 use crate::error::{AppError, AppResult};
-use crate::model::{ConnectionProfile, Engine};
+use crate::model::{ConnectionProfile, Engine, WorkspaceCredentialMode};
 
 use super::providers;
 
 const MAX_CONNS: u32 = 5;
+// Managed SQL profiles create one read and one write pool. Two connections per pool
+// keep their combined maximum aligned with Neon's lease-role CONNECTION LIMIT 4.
+const MANAGED_MAX_CONNS_PER_POOL: u32 = 2;
+
+fn pool_connection_limit(mode: WorkspaceCredentialMode) -> u32 {
+    if mode == WorkspaceCredentialMode::Managed {
+        MANAGED_MAX_CONNS_PER_POOL
+    } else {
+        MAX_CONNS
+    }
+}
 
 /// A live sqlx pool for one of the three supported engines. Cheap to clone — each
 /// inner sqlx pool is an `Arc` handle.
@@ -42,6 +53,15 @@ impl DbPool {
             }
         }
         Ok(())
+    }
+
+    /// Close the shared SQLx pool and wake tasks waiting to acquire a connection.
+    pub async fn close(&self) {
+        match self {
+            DbPool::Postgres(pool) => pool.close().await,
+            DbPool::Mysql(pool) => pool.close().await,
+            DbPool::Sqlite(pool) => pool.close().await,
+        }
     }
 }
 
@@ -73,6 +93,11 @@ impl LiveConnection {
     pub async fn test(&self) -> AppResult<()> {
         self.write_pool.ping().await
     }
+
+    /// Close both underlying pools for a lease or connection that is no longer valid.
+    pub async fn close(&self) {
+        tokio::join!(self.read_pool.close(), self.write_pool.close());
+    }
 }
 
 /// SQLx adapter entrypoint. Driver selection and compatibility validation live in
@@ -90,6 +115,7 @@ pub(crate) async fn connect_sqlx(
     }
     let skip_fk_metadata = providers::skip_fk_metadata(profile);
     let acquire = providers::connect_timeout(profile);
+    let max_connections = pool_connection_limit(profile.credential_mode);
 
     let (write_pool, read_pool) = match adapter_engine {
         Engine::Postgres => {
@@ -103,13 +129,13 @@ pub(crate) async fn connect_sqlx(
             let base = providers::apply_pg_tuning(profile, base);
 
             let rw = PgPoolOptions::new()
-                .max_connections(MAX_CONNS)
+                .max_connections(max_connections)
                 .acquire_timeout(acquire)
                 .connect_with(base.clone())
                 .await?;
 
             let ro = PgPoolOptions::new()
-                .max_connections(MAX_CONNS)
+                .max_connections(max_connections)
                 .acquire_timeout(acquire)
                 .after_connect(|conn, _meta| {
                     Box::pin(async move {
@@ -134,13 +160,13 @@ pub(crate) async fn connect_sqlx(
             let base = providers::apply_mysql_tuning(profile, base);
 
             let rw = MySqlPoolOptions::new()
-                .max_connections(MAX_CONNS)
+                .max_connections(max_connections)
                 .acquire_timeout(acquire)
                 .connect_with(base.clone())
                 .await?;
 
             let ro = MySqlPoolOptions::new()
-                .max_connections(MAX_CONNS)
+                .max_connections(max_connections)
                 .acquire_timeout(acquire)
                 .after_connect(|conn, _meta| {
                     Box::pin(async move {
@@ -174,14 +200,14 @@ pub(crate) async fn connect_sqlx(
                 .filename(path)
                 .create_if_missing(false);
             let rw = SqlitePoolOptions::new()
-                .max_connections(MAX_CONNS)
+                .max_connections(max_connections)
                 .connect_with(rw_opts)
                 .await?;
 
             // Unforgeable file-level read-only handle.
             let ro_opts = SqliteConnectOptions::new().filename(path).read_only(true);
             let ro = SqlitePoolOptions::new()
-                .max_connections(MAX_CONNS)
+                .max_connections(max_connections)
                 .connect_with(ro_opts)
                 .await?;
 
@@ -268,5 +294,13 @@ mod tests {
     #[test]
     fn mysql_sslmode_unknown_errors() {
         assert!(mysql_ssl_mode("prefered").is_err());
+    }
+
+    #[test]
+    fn managed_pool_pair_stays_within_neon_role_limit() {
+        let per_pool = pool_connection_limit(WorkspaceCredentialMode::Managed);
+        assert_eq!(per_pool, 2);
+        assert_eq!(per_pool * 2, 4);
+        assert_eq!(pool_connection_limit(WorkspaceCredentialMode::Local), 5);
     }
 }

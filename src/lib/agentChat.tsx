@@ -24,6 +24,7 @@ import { qk } from "./queries";
 // streaming assistant buffer. Cleared once the corresponding messages query has refetched
 // the persisted rows, so there is no gap where neither the buffer nor the DB copy is shown.
 export interface PendingTurn {
+  connectionId: string;
   threadId: string;
   turnId: string;
   userMessageId: string;
@@ -45,6 +46,7 @@ interface AgentChatValue {
     text: string,
     provider: AgentProvider,
     connectionId: string,
+    existingThreadId: string | null,
     model?: string,
     effort?: string,
   ) => Promise<boolean>;
@@ -170,6 +172,7 @@ export function AgentChatProvider({ children }: { children: ReactNode }) {
       text: string,
       provider: AgentProvider,
       connectionId: string,
+      existingThreadId: string | null,
       model?: string,
       effort?: string,
     ) => {
@@ -179,10 +182,11 @@ export function AgentChatProvider({ children }: { children: ReactNode }) {
       const turnId = window.crypto.randomUUID();
       const userMessageId = window.crypto.randomUUID();
       const turnStartIso = new Date().toISOString();
-      // Captured once at call time: if the user navigates to a different thread while
-      // createChatThread is still in flight below, this stays the draft's original value
-      // so the late setThreadId doesn't snap the view back to the new draft thread.
-      const initialThreadId = threadId;
+      // The caller supplies the thread already proven to belong to this connection.
+      // Never reuse the provider's global thread id: during a database switch it can
+      // still point at the previous connection until React flushes passive effects.
+      const initialThreadId = existingThreadId;
+      const initialViewThreadId = threadId;
 
       try {
         // A draft conversation gets its DB row only now, on its first message, so an
@@ -192,10 +196,13 @@ export function AgentChatProvider({ children }: { children: ReactNode }) {
           const thread = await createChatThread(provider, connectionId, model, effort);
           tid = thread.id;
           const createdTid = tid;
-          setThreadId((current) => (current === initialThreadId ? createdTid : current));
+          setThreadId((current) =>
+            current === initialViewThreadId ? createdTid : current
+          );
           void queryClient.invalidateQueries({ queryKey: qk.chatThreads() });
         }
         setPendingTurn({
+          connectionId,
           threadId: tid,
           turnId,
           userMessageId,

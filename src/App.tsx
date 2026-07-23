@@ -4,7 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
-  type RefObject,
+  type ReactNode,
 } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { check, type Update } from "@tauri-apps/plugin-updater";
@@ -31,7 +31,7 @@ import TableData from "./screens/Tables";
 import SchemaExplorer from "./screens/Schema";
 import Sql from "./screens/Sql";
 import Documents from "./screens/Documents";
-import Dashboards from "./screens/Dashboards";
+import Dashboards, { DashboardSidebar } from "./screens/Dashboards";
 import Activity from "./screens/Activity";
 import SchemaDiff from "./screens/SchemaDiff";
 import Onboarding from "./screens/Onboarding";
@@ -40,17 +40,26 @@ import AgentChat from "./screens/AgentChat";
 import AgentLogDialog from "./components/AgentLogDialog";
 import EngineMark from "./components/EngineMark";
 import { Icon } from "./components/Icon";
+import WorkbenchDocumentStrip from "./components/WorkbenchDocumentStrip";
 import { ToastProvider, useToast } from "./components/Toast";
 import WorkspaceAccount from "./components/WorkspaceAccount";
 import WorkspaceSwitcher from "./components/WorkspaceSwitcher";
 import { AgentChatProvider } from "./lib/agentChat";
 import { AgentFeedProvider, useAgentFeed } from "./lib/agentFeed";
 import { useI18n, type I18nKey } from "./lib/i18n";
+import {
+  queryDocument,
+  stableDocument,
+  supportsDocument,
+  tableDocument,
+  type WorkbenchDocument,
+} from "./lib/workbenchDocuments";
 
-// Primary workbench destinations live in the icon rail. Agent is a persistent right-hand
-// dock, so every surface shares the one connection selected in the database explorer.
-type Tab = "data" | "schema" | "sql" | "dashboard" | "documents" | "activity";
-const ALL_TABS: Tab[] = ["data", "schema", "sql", "dashboard", "documents", "activity"];
+// Chat2DB-style information architecture:
+// - the global rail switches products (database workspace / dashboard);
+// - database tools are real documents inside the selected connection's workbench;
+// - Agent remains a persistent utility dock and inherits that one connection context.
+type AppArea = "workspace" | "dashboard";
 
 // `null` = not editing; "new" = blank form; a profile = edit that profile.
 type Editing = ConnectionProfile | "new" | null;
@@ -69,6 +78,8 @@ export default function App() {
 }
 
 const SIDEBAR_MIN = 180;
+const IS_MACOS = typeof navigator !== "undefined"
+  && /Macintosh|Mac OS X/.test(navigator.userAgent);
 const SIDEBAR_MAX = 520;
 const SIDEBAR_DEFAULT = 240;
 const MCP_PLATFORM_REFRESH_INTERVAL_MS = 5 * 60_000;
@@ -174,44 +185,31 @@ function ConnectionPicker({
   );
 }
 
-// Compact workbench rail: keeps the high-frequency destinations visible without
-// stealing space from the database tree. The selected connection remains the
-// single context for every destination.
+// Product-level rail. Data/ER/query/history are intentionally absent: those actions
+// live in the workbench document bar, so there is only one path to each tool.
 function WorkbenchRail({
-  tab,
-  visibleTabs,
-  agentOpen,
-  agentAvailable,
+  area,
+  dashboardAvailable,
   settingsOpen,
-  unseen,
-  agentButtonRef,
-  onTab,
-  onAgent,
+  account,
+  onArea,
   onSettings,
 }: {
-  tab: Tab | null;
-  visibleTabs: Tab[];
-  agentOpen: boolean;
-  agentAvailable: boolean;
+  area: AppArea | null;
+  dashboardAvailable: boolean;
   settingsOpen: boolean;
-  unseen: number;
-  agentButtonRef: RefObject<HTMLButtonElement | null>;
-  onTab: (tab: Tab) => void;
-  onAgent: () => void;
+  account: ReactNode;
+  onArea: (area: AppArea) => void;
   onSettings: () => void;
 }) {
   const { t } = useI18n();
   const items: Array<{
-    id: Tab;
-    icon: "database" | "table" | "play" | "dashboard" | "chart" | "list";
+    id: AppArea;
+    icon: "database" | "dashboard";
     label: I18nKey;
   }> = [
-    { id: "data", icon: "database", label: "tabs.data" },
-    { id: "schema", icon: "table", label: "tabs.schema" },
-    { id: "sql", icon: "play", label: "tabs.sql" },
+    { id: "workspace", icon: "database", label: "workspace.label" },
     { id: "dashboard", icon: "dashboard", label: "tabs.dashboard" },
-    { id: "documents", icon: "list", label: "tabs.documents" },
-    { id: "activity", icon: "chart", label: "tabs.activity" },
   ];
   return (
     <nav
@@ -223,7 +221,7 @@ function WorkbenchRail({
         }
         const buttons = [
           ...event.currentTarget.querySelectorAll<HTMLButtonElement>(
-            ".workbench-rail-button:not(:disabled)",
+            ".workbench-rail-button:not(:disabled), [data-rail-control]:not(:disabled)",
           ),
         ];
         const current = buttons.indexOf(event.target as HTMLButtonElement);
@@ -234,39 +232,33 @@ function WorkbenchRail({
         buttons[(current + direction + buttons.length) % buttons.length]?.focus();
       }}
     >
+      {/* Overlay title bars place native traffic lights above the webview. This
+          structural slot reserves that OS-owned rectangle before any app control. */}
+      <div
+        className="workbench-window-controls-safe"
+        data-window-controls-safe-zone
+        data-tauri-drag-region="deep"
+        aria-hidden="true"
+      />
       <div className="workbench-rail-brand">d</div>
       <div className="workbench-rail-items">
-        {items.filter((item) => visibleTabs.includes(item.id)).map((item) => (
+        {items.map((item) => (
           <button
             key={item.id}
             type="button"
-            className={`workbench-rail-button${tab === item.id ? " active" : ""}`}
-            onClick={() => onTab(item.id)}
+            className={`workbench-rail-button${area === item.id ? " active" : ""}`}
+            onClick={() => onArea(item.id)}
             title={t(item.label)}
             aria-label={t(item.label)}
-            aria-current={tab === item.id ? "page" : undefined}
+            aria-current={area === item.id ? "page" : undefined}
+            disabled={item.id === "dashboard" && !dashboardAvailable}
           >
             <Icon name={item.icon} />
           </button>
         ))}
-        <span className="workbench-rail-separator" />
-        <button
-          ref={agentButtonRef}
-          type="button"
-          className={`workbench-rail-button${agentOpen ? " active" : ""}`}
-          onClick={onAgent}
-          title={t("tabs.agent")}
-          aria-label={t("tabs.agent")}
-          aria-pressed={agentOpen}
-          disabled={!agentAvailable}
-        >
-          <Icon name="sidebar" />
-          {unseen > 0 && (
-            <span className="workbench-rail-count">{unseen > 9 ? "9+" : unseen}</span>
-          )}
-        </button>
       </div>
       <div className="workbench-rail-bottom">
+        {account}
         <button
           type="button"
           className={`workbench-rail-button${settingsOpen ? " active" : ""}`}
@@ -309,29 +301,33 @@ function Shell() {
   const [selectedId, setSelectedId] = useState<string | null>(() =>
     localStorage.getItem("selectedId"),
   );
-  const [selectedTable, setSelectedTable] = useState<CatalogTable | null>(null);
   const [editing, setEditing] = useState<Editing>(null);
   const [safety, setSafety] = useState<SafetySettings | null>(null);
   const [safetyError, setSafetyError] = useState<string | null>(null);
   // A user who last had the old Audit tab open should land in its expanded details
   // after the two top-level tabs are consolidated into Activity.
   const legacyAuditOpen = useRef(localStorage.getItem("tab") === "audit");
-  const [tab, setTab] = useState<Tab>(() => {
-    const saved = localStorage.getItem("tab");
-    if (saved === "history" || saved === "audit") return "activity";
-    if (saved === "chat" || saved === "agent") return "data";
-    return (ALL_TABS as string[]).includes(saved ?? "") ? (saved as Tab) : "data";
-  });
+  const restoredDocumentKind = useRef<WorkbenchDocument["kind"]>(
+    (() => {
+      const saved = localStorage.getItem("tab");
+      if (saved === "history" || saved === "audit") return "activity";
+      if (saved === "sql" || saved === "documents" || saved === "schema") return saved;
+      return "schema";
+    })(),
+  ).current;
+  const [area, setArea] = useState<AppArea>(() =>
+    localStorage.getItem("appArea") === "dashboard" || localStorage.getItem("tab") === "dashboard"
+      ? "dashboard"
+      : "workspace",
+  );
+  const [documents, setDocuments] = useState<WorkbenchDocument[]>([]);
+  const [activeDocumentId, setActiveDocumentId] = useState<string | null>(null);
   const [agentDockOpen, setAgentDockOpen] = useState(
     () => localStorage.getItem("agentDockOpen") !== "0",
   );
   const [agentOverlay, setAgentOverlay] = useState(
     () => window.matchMedia("(max-width: 900px)").matches,
   );
-  const [sqlDraft, setSqlDraft] = useState("SELECT 1;");
-  // Mirrors sqlDraft for MongoDB connections, where an Activity row click routes here
-  // instead of the (absent) SQL tab — see loadSql below.
-  const [docDraft, setDocDraft] = useState<string | null>(null);
   const [dashboardFocusId, setDashboardFocusId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -341,8 +337,11 @@ function Shell() {
   const [schemaDiffGroupKey, setSchemaDiffGroupKey] = useState<string | null>(null);
   const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
   const [agentLogOpen, setAgentLogOpen] = useState(false);
+  const [agentHistoryOpen, setAgentHistoryOpen] = useState(false);
   const agentButtonRef = useRef<HTMLButtonElement | null>(null);
   const agentCloseRef = useRef<HTMLButtonElement | null>(null);
+  const agentHistoryButtonRef = useRef<HTMLButtonElement | null>(null);
+  const agentHistoryOpenRef = useRef(false);
   const agentDockRef = useRef<HTMLElement | null>(null);
   const updateCheckInFlight = useRef(false);
   const lastUpdateCheckAt = useRef(0);
@@ -370,12 +369,11 @@ function Shell() {
 
   const openDashboard = useCallback((dashboard: Dashboard) => {
     setSelectedId(dashboard.connectionId);
-    setSelectedTable(null);
     setEditing(null);
     setSettingsOpen(false);
     setSchemaDiffGroupKey(null);
     setDashboardFocusId(dashboard.id);
-    setTab("dashboard");
+    setArea("dashboard");
   }, []);
   const consumeDashboardFocus = useCallback(() => setDashboardFocusId(null), []);
 
@@ -390,16 +388,25 @@ function Shell() {
     };
   }, [openDashboard]);
 
-  // Persist tab/selectedId so a restart resumes where the user left off (mirrors sidebarW).
+  // Persist the product area and selected connection. Keep writing the legacy `tab`
+  // key for one release so older builds can still restore a sensible destination.
   useEffect(() => {
-    localStorage.setItem("tab", tab);
-  }, [tab]);
+    localStorage.setItem("appArea", area);
+    localStorage.setItem("tab", area === "dashboard" ? "dashboard" : "data");
+  }, [area]);
   useEffect(() => {
     if (selectedId) localStorage.setItem("selectedId", selectedId);
     else localStorage.removeItem("selectedId");
   }, [selectedId]);
 
   const selected = conns.find((c) => c.id === selectedId) ?? null;
+  const selectedDocuments = useMemo(
+    () => documents.filter((document) => document.connectionId === selectedId),
+    [documents, selectedId],
+  );
+  const activeDocument =
+    selectedDocuments.find((document) => document.id === activeDocumentId) ?? null;
+  const selectedTable = activeDocument?.kind === "data" ? activeDocument.table : null;
   const showAgentDock = agentDockOpen && !!selected && !settingsOpen && editing === null;
   // Schema diff is a SQL-only comparison feature — a group whose connections are MongoDB
   // is never a valid diff candidate, even if one somehow carries a schemaGroup value.
@@ -416,30 +423,54 @@ function Shell() {
     schemaGroups.find((group) => group.key === schemaDiffGroupKey) ?? null;
 
   // SQL and Documents are mutually exclusive per connection, gated by the resolved
-  // driver's capabilities (fail-closed: no match hides SQL). No connection selected keeps
-  // the full SQL tab set (existing behavior) and hides Documents.
+  // driver capability. Engine fallback avoids a SQL/Documents flash while drivers load.
   const driversQ = useQuery(driversQuery());
-  // While the driver list is still loading, keep the SQL tab set — deciding on an
-  // empty list would flash Documents and kick a restored "sql" tab back to "data".
   const supportsSql =
-    !selected || !driversQ.data || hasCapability(driversQ.data, selected, "sql");
-  const visibleTabs = useMemo(
-    () =>
-      ALL_TABS.filter((t) => {
-        if (t === "sql" || t === "dashboard") return supportsSql;
-        if (t === "documents") return !supportsSql;
-        return true;
-      }),
-    [supportsSql],
-  );
-  // A restored selectedId with conns still loading means visibleTabs is not final
-  // yet — resetting now would clobber a persisted "documents" tab on every launch.
-  // Once conns arrive, a selectedId that matches nothing is stale, not pending.
-  const selectionPending = selectedId !== null && !selected && conns.length === 0;
+    !selected ||
+    (driversQ.data
+      ? hasCapability(driversQ.data, selected, "sql")
+      : !isDocumentEngine(selected.engine));
+  const initializedConnection = useRef<string | null>(null);
   useEffect(() => {
-    if (selectionPending) return;
-    if (!visibleTabs.includes(tab)) setTab("data");
-  }, [selectionPending, visibleTabs, tab]);
+    if (!selected) {
+      if (initializedConnection.current !== null || documents.length > 0) {
+        initializedConnection.current = null;
+        setDocuments([]);
+      }
+      if (activeDocumentId !== null) setActiveDocumentId(null);
+      return;
+    }
+    if (initializedConnection.current === selected.id) {
+      const valid = documents.filter(
+        (document) => supportsDocument(document, selected.id, supportsSql),
+      );
+      if (valid.length !== documents.length) {
+        setDocuments(valid);
+        setActiveDocumentId((current) =>
+          valid.some((document) => document.id === current) ? current : (valid[0]?.id ?? null),
+        );
+      }
+      return;
+    }
+
+    initializedConnection.current = selected.id;
+    const preferred = supportsSql
+      ? restoredDocumentKind === "documents"
+        ? "schema"
+        : restoredDocumentKind
+      : restoredDocumentKind === "sql"
+        ? "documents"
+        : restoredDocumentKind;
+    const initial =
+      preferred === "sql" || preferred === "documents"
+        ? queryDocument(selected.id, preferred)
+        : stableDocument(
+            selected.id,
+            preferred === "activity" ? "activity" : "schema",
+          );
+    setDocuments([initial]);
+    setActiveDocumentId(initial.id);
+  }, [activeDocumentId, documents, restoredDocumentKind, selected, supportsSql]);
 
   useEffect(() => {
     const media = window.matchMedia("(max-width: 900px)");
@@ -449,15 +480,25 @@ function Shell() {
   }, []);
 
   useEffect(() => {
+    agentHistoryOpenRef.current = agentHistoryOpen;
+  }, [agentHistoryOpen]);
+
+  useEffect(() => {
     if (!showAgentDock || !agentOverlay) return;
     const close = () => {
       localStorage.setItem("agentDockOpen", "0");
       setAgentDockOpen(false);
+      setAgentHistoryOpen(false);
       window.requestAnimationFrame(() => agentButtonRef.current?.focus());
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
+        if (agentHistoryOpenRef.current) {
+          setAgentHistoryOpen(false);
+          window.requestAnimationFrame(() => agentHistoryButtonRef.current?.focus());
+          return;
+        }
         close();
         return;
       }
@@ -536,7 +577,9 @@ function Shell() {
 
   async function reloadWorkspaceScope() {
     setSelectedId(null);
-    setSelectedTable(null);
+    initializedConnection.current = null;
+    setDocuments([]);
+    setActiveDocumentId(null);
     setEditing(null);
     setSettingsOpen(false);
     setSchemaDiffGroupKey(null);
@@ -639,15 +682,15 @@ function Shell() {
   };
 
   function loadSql(sql: string) {
-    // A mongo connection has no SQL tab (see visibleTabs) — route the same Activity
-    // "load" action to Documents instead so the row click isn't silently dropped.
-    if (supportsSql) {
-      setSqlDraft(sql);
-      setTab("sql");
-    } else {
-      setDocDraft(sql);
-      setTab("documents");
-    }
+    if (!selected) return;
+    const document = queryDocument(
+      selected.id,
+      supportsSql ? "sql" : "documents",
+      sql,
+    );
+    setDocuments((current) => [...current, document]);
+    setActiveDocumentId(document.id);
+    setArea("workspace");
   }
 
   function openMcpSettings() {
@@ -669,20 +712,106 @@ function Shell() {
     setAgentDockOpen(true);
   }
 
+  function closeAgentDock() {
+    localStorage.setItem("agentDockOpen", "0");
+    setAgentDockOpen(false);
+    setAgentHistoryOpen(false);
+  }
+
+  function toggleAgentDock() {
+    if (!selected) return;
+    if (showAgentDock) {
+      closeAgentDock();
+      return;
+    }
+    setSettingsOpen(false);
+    setEditing(null);
+    setSchemaDiffGroupKey(null);
+    openAgentDock();
+  }
+
   function syncAvailableUpdate(update: Update | null) {
     lastUpdateCheckAt.current = Date.now();
     setAvailableUpdate(update);
   }
 
-  function selectConnection(id: string, nextTab: Tab = "data") {
+  function selectConnection(id: string, nextArea: AppArea = area) {
+    const connection = conns.find((candidate) => candidate.id === id);
+    const initial = connection && isDocumentEngine(connection.engine)
+      ? queryDocument(id, "documents")
+      : stableDocument(id, "schema");
+    initializedConnection.current = id;
     setSelectedId(id);
-    setSelectedTable(null);
+    setDocuments([initial]);
+    setActiveDocumentId(initial.id);
     setEditing(null);
     setSettingsOpen(false);
     setSchemaDiffGroupKey(null);
     setDashboardFocusId(null);
     setAgentLogOpen(false);
-    setTab(nextTab);
+    setArea(nextArea);
+  }
+
+  function activateDocument(document: WorkbenchDocument) {
+    setDocuments((current) =>
+      current.some((candidate) => candidate.id === document.id)
+        ? current
+        : [...current, document],
+    );
+    setActiveDocumentId(document.id);
+    setEditing(null);
+    setSettingsOpen(false);
+    setSchemaDiffGroupKey(null);
+    setArea("workspace");
+  }
+
+  function openTableDocument(connection: ConnectionProfile, table: CatalogTable) {
+    if (selectedId !== connection.id) {
+      initializedConnection.current = connection.id;
+      setSelectedId(connection.id);
+      setDocuments([]);
+    }
+    activateDocument(tableDocument(connection.id, table));
+  }
+
+  function openStableDocument(kind: "schema" | "activity") {
+    if (!selected) return;
+    activateDocument(stableDocument(selected.id, kind));
+  }
+
+  function openQueryDocument() {
+    if (!selected) return;
+    preloadSqlEditor();
+    activateDocument(queryDocument(selected.id, supportsSql ? "sql" : "documents"));
+  }
+
+  function closeDocument(id: string) {
+    const index = selectedDocuments.findIndex((document) => document.id === id);
+    if (index < 0) return;
+    let remaining = selectedDocuments.filter((document) => document.id !== id);
+    if (remaining.length === 0 && selected && supportsSql) {
+      remaining = [stableDocument(selected.id, "schema")];
+    }
+    setDocuments((current) => [
+      ...current.filter((document) => document.connectionId !== selectedId),
+      ...remaining,
+    ]);
+    if (activeDocumentId === id) {
+      setActiveDocumentId(
+        remaining[Math.min(index, Math.max(0, remaining.length - 1))]?.id ?? null,
+      );
+    }
+  }
+
+  function setActiveQueryDraft(value: string) {
+    if (!activeDocument || (activeDocument.kind !== "sql" && activeDocument.kind !== "documents")) {
+      return;
+    }
+    setDocuments((current) =>
+      current.map((document) =>
+        document.id === activeDocument.id ? { ...document, draft: value } : document,
+      ),
+    );
   }
 
   function startNewConnection() {
@@ -766,7 +895,7 @@ function Shell() {
     const needsConn = (
       <ConnectionPicker
         connections={conns}
-        onSelect={(id) => selectConnection(id, tab)}
+        onSelect={(id) => selectConnection(id, area)}
         onNew={startNewConnection}
       />
     );
@@ -782,7 +911,7 @@ function Shell() {
                 {selected.env && <span className={`env-chip env-${selected.env}`}>{selected.env}</span>}
                 <span className="ds-meta-dot" />
                 <span className="app-title-meta">{selected.database}</span>
-                {selectedTable && (
+                {area === "workspace" && selectedTable && (
                   <>
                     <span className="ds-meta-dot" />
                     <span className="app-title-meta">{tableLabel(selected.engine, selectedTable)}</span>
@@ -790,86 +919,108 @@ function Shell() {
                 )}
               </div>
             </div>
+            <div className="main-head-actions ds-control-row">
+              <button
+                ref={agentButtonRef}
+                type="button"
+                className={`btn small main-agent-toggle${showAgentDock ? " active" : ""}`}
+                onClick={toggleAgentDock}
+                title={t("tabs.agent")}
+                aria-label={t("tabs.agent")}
+                aria-pressed={showAgentDock}
+              >
+                <Icon name="sidebar" />
+                {unseen > 0 && (
+                  <span className="workbench-rail-count">
+                    {unseen > 9 ? "9+" : unseen}
+                  </span>
+                )}
+              </button>
+            </div>
           </header>
         )}
 
-        <section className="tab-body">
-          {tab === "data" &&
-            (!selected ? (
-              needsConn
-            ) : selectedTable ? (
-              safety ? (
-                <TableData connection={selected} table={selectedTable} safety={safety} />
-              ) : (
-                safetyFallback
-              )
-            ) : (
-              <SchemaExplorer
+        {selected && area === "workspace" && (
+          <WorkbenchDocumentStrip
+            documents={selectedDocuments}
+            activeId={activeDocumentId}
+            engine={selected.engine}
+            supportsSql={supportsSql}
+            onActivate={setActiveDocumentId}
+            onClose={closeDocument}
+            onNewQuery={openQueryDocument}
+            onOpenActivity={() => openStableDocument("activity")}
+          />
+        )}
+
+        <section className={`tab-body workbench-canvas area-${area}`}>
+          {!selected ? (
+            needsConn
+          ) : area === "dashboard" ? (
+            <Dashboards
+              connection={selected}
+              focusId={dashboardFocusId}
+              onFocusConsumed={consumeDashboardFocus}
+              onOpenAgent={openAgentDock}
+            />
+          ) : !activeDocument ? (
+            <div className="workbench-empty">
+              <Icon name={supportsSql ? "play" : "list"} />
+              <span className="muted">
+                {supportsSql ? t("tabs.sql") : t("tabs.documents")}
+              </span>
+              <button className="btn primary" onClick={openQueryDocument}>
+                <Icon name="plus" />
+                {supportsSql ? t("tabs.sql") : t("tabs.documents")}
+              </button>
+            </div>
+          ) : activeDocument.kind === "data" ? (
+            safety ? (
+              <TableData
+                key={activeDocument.id}
                 connection={selected}
-                selectedTable={selectedTable}
-                onOpenTable={(table) => {
-                  setSelectedTable(table);
-                  setTab("data");
-                }}
-              />
-            ))}
-          {tab === "schema" &&
-            (selected ? (
-              <SchemaExplorer
-                connection={selected}
-                selectedTable={selectedTable}
-                onOpenTable={(table) => {
-                  setSelectedTable(table);
-                  setTab("data");
-                }}
-              />
-            ) : (
-              needsConn
-            ))}
-          {tab === "sql" &&
-            (!selected ? (
-              needsConn
-            ) : safety ? (
-              <Sql
-                connection={selected}
+                table={activeDocument.table}
                 safety={safety}
-                draft={sqlDraft}
-                setDraft={setSqlDraft}
               />
             ) : (
               safetyFallback
-            ))}
-          {tab === "documents" &&
-            (selected ? (
-              <Documents key={selected.id} connection={selected} draft={docDraft} />
-            ) : (
-              needsConn
-            ))}
-          {tab === "dashboard" &&
-            (selected ? (
-              <Dashboards
+            )
+          ) : activeDocument.kind === "schema" ? (
+            <SchemaExplorer
+              key={activeDocument.id}
+              connection={selected}
+              selectedTable={null}
+              onOpenTable={(table) => openTableDocument(selected, table)}
+            />
+          ) : activeDocument.kind === "sql" ? (
+            safety ? (
+              <Sql
+                key={activeDocument.id}
                 connection={selected}
-                focusId={dashboardFocusId}
-                onFocusConsumed={consumeDashboardFocus}
-                onOpenAgent={openAgentDock}
+                safety={safety}
+                draft={activeDocument.draft}
+                setDraft={setActiveQueryDraft}
               />
             ) : (
-              needsConn
-            ))}
-          {tab === "activity" &&
-            (selected ? (
-              <Activity
-                key={selected.id}
-                connection={selected}
-                onLoadSql={loadSql}
-                initialAuditOpen={legacyAuditOpen.current}
-                onInitialAuditOpenConsumed={() => {
-                  legacyAuditOpen.current = false;
-                }}
-              />
-            ) : (
-              needsConn
-            ))}
+              safetyFallback
+            )
+          ) : activeDocument.kind === "documents" ? (
+            <Documents
+              key={activeDocument.id}
+              connection={selected}
+              draft={activeDocument.draft}
+            />
+          ) : (
+            <Activity
+              key={activeDocument.id}
+              connection={selected}
+              onLoadSql={loadSql}
+              initialAuditOpen={legacyAuditOpen.current}
+              onInitialAuditOpenConsumed={() => {
+                legacyAuditOpen.current = false;
+              }}
+            />
+          )}
         </section>
       </>
     );
@@ -885,38 +1036,30 @@ function Shell() {
       : t("mcp.badgeDisconnectedTitle");
   return (
     <div
-      className={`app${showAgentDock ? " agent-open" : ""}`}
+      className={`app${IS_MACOS ? " platform-macos" : ""}${
+        showAgentDock ? " agent-open" : ""
+      }`}
       style={{
         gridTemplateColumns: `48px ${sidebarW}px 5px minmax(0, 1fr) ${
-          showAgentDock ? "minmax(300px, 360px)" : "0px"
+          showAgentDock ? "minmax(300px, 340px)" : "0px"
         }`,
       }}
     >
       <WorkbenchRail
-        tab={settingsOpen ? null : tab}
-        visibleTabs={visibleTabs}
-        agentOpen={showAgentDock}
-        agentAvailable={!!selected}
+        area={settingsOpen ? null : area}
+        dashboardAvailable={!selected || supportsSql}
         settingsOpen={settingsOpen}
-        unseen={unseen}
-        agentButtonRef={agentButtonRef}
-        onTab={(next) => {
-          if (next === "sql") preloadSqlEditor();
+        account={
+          <WorkspaceAccount compact onScopeChanged={reloadWorkspaceScope} />
+        }
+        onArea={(next) => {
           setSettingsOpen(false);
           setEditing(null);
           setSchemaDiffGroupKey(null);
-          setTab(next);
-        }}
-        onAgent={() => {
-          if (settingsOpen || editing !== null || !agentDockOpen) {
-            setSettingsOpen(false);
-            setEditing(null);
-            setSchemaDiffGroupKey(null);
-            openAgentDock();
-            return;
+          setArea(next);
+          if (next === "workspace" && selected) {
+            openStableDocument("schema");
           }
-          localStorage.setItem("agentDockOpen", "0");
-          setAgentDockOpen(false);
         }}
         onSettings={() => {
           setSettingsSection(undefined);
@@ -924,64 +1067,69 @@ function Shell() {
           setSchemaDiffGroupKey(null);
         }}
       />
-      <DatabaseExplorer
-        workspaceAccount={<WorkspaceAccount onScopeChanged={reloadWorkspaceScope} />}
-        workspaceHeader={
-          <WorkspaceSwitcher
-            onNew={startNewConnection}
-            onChanged={reloadWorkspaceScope}
-          />
-        }
-        connections={conns}
-        selectedId={selectedId}
-        selectedTableKey={selectedTable ? tableKey(selectedTable) : null}
-        activeSchemaGroupKey={schemaDiffGroupKey}
-        onSelectConn={(id) => {
-          selectConnection(id, tab);
-        }}
-        onOpenTable={(conn, t) => {
-          setSelectedId(conn.id);
-          setSelectedTable(t);
-          setEditing(null);
-          setSettingsOpen(false);
-          setSchemaDiffGroupKey(null);
-          setTab("data");
-        }}
-        onOpenSchemaDiff={(group) => {
-          setSelectedTable(null);
-          setEditing(null);
-          setSettingsOpen(false);
-          setSchemaDiffGroupKey(group.key);
-        }}
-        onEdit={(conn) => {
-          setEditing(conn);
-          setSettingsOpen(false);
-          setSchemaDiffGroupKey(null);
-        }}
-        onDeleted={async (id) => {
-          await refresh();
-          if (selectedId === id) {
-            setSelectedId(null);
-            setSelectedTable(null);
+      {area === "dashboard" && !settingsOpen && editing === null && !activeSchemaGroup ? (
+        <DashboardSidebar
+          workspaceHeader={
+            <WorkspaceSwitcher onNew={startNewConnection} onChanged={reloadWorkspaceScope} />
           }
-          if (schemaDiffGroupKey) setSchemaDiffGroupKey(null);
-          setEditing((current) => {
-            if (current && current !== "new" && current.id === id) return null;
-            return current;
-          });
-        }}
-        onConnectionUpdated={(updated) => {
-          setConns((current) =>
-            current.map((conn) => (conn.id === updated.id ? updated : conn)),
-          );
-          setEditing((current) => {
-            if (current && current !== "new" && current.id === updated.id) {
-              return updated;
+          connections={conns}
+          selectedId={selectedId}
+          focusId={dashboardFocusId}
+          onSelectConnection={(id) => selectConnection(id, "dashboard")}
+          onFocus={setDashboardFocusId}
+        />
+      ) : (
+        <DatabaseExplorer
+          workspaceHeader={
+            <WorkspaceSwitcher
+              onNew={startNewConnection}
+              onChanged={reloadWorkspaceScope}
+            />
+          }
+          connections={conns}
+          selectedId={selectedId}
+          selectedTableKey={selectedTable ? tableKey(selectedTable) : null}
+          activeSchemaGroupKey={schemaDiffGroupKey}
+          onSelectConn={(id) => selectConnection(id, "workspace")}
+          onOpenTable={openTableDocument}
+          onOpenSchemaDiff={(group) => {
+            setArea("workspace");
+            setEditing(null);
+            setSettingsOpen(false);
+            setSchemaDiffGroupKey(group.key);
+          }}
+          onEdit={(conn) => {
+            setEditing(conn);
+            setSettingsOpen(false);
+            setSchemaDiffGroupKey(null);
+          }}
+          onDeleted={async (id) => {
+            await refresh();
+            if (selectedId === id) {
+              initializedConnection.current = null;
+              setSelectedId(null);
+              setDocuments([]);
+              setActiveDocumentId(null);
             }
-            return current;
-          });
-        }}
-      />
+            if (schemaDiffGroupKey) setSchemaDiffGroupKey(null);
+            setEditing((current) => {
+              if (current && current !== "new" && current.id === id) return null;
+              return current;
+            });
+          }}
+          onConnectionUpdated={(updated) => {
+            setConns((current) =>
+              current.map((conn) => (conn.id === updated.id ? updated : conn)),
+            );
+            setEditing((current) => {
+              if (current && current !== "new" && current.id === updated.id) {
+                return updated;
+              }
+              return current;
+            });
+          }}
+        />
+      )}
       <div
         className="sidebar-resizer"
         title={t("app.dragResize")}
@@ -1035,7 +1183,18 @@ function Shell() {
             <strong>{t("tabs.agent")}</strong>
             <div className="ds-control-row">
               <button
-                ref={agentCloseRef}
+                ref={agentHistoryButtonRef}
+                type="button"
+                className={`btn small${agentHistoryOpen ? " active" : ""}`}
+                onClick={() => setAgentHistoryOpen((open) => !open)}
+                title={t("agentChat.toggleThreads")}
+                aria-label={t("agentChat.toggleThreads")}
+                aria-expanded={agentHistoryOpen}
+                aria-controls="agent-chat-history"
+              >
+                <Icon name="history" />
+              </button>
+              <button
                 type="button"
                 className="btn small"
                 onClick={() => setAgentLogOpen(true)}
@@ -1052,12 +1211,10 @@ function Shell() {
                 )}
               </button>
               <button
+                ref={agentCloseRef}
                 type="button"
                 className="btn small"
-                onClick={() => {
-                  localStorage.setItem("agentDockOpen", "0");
-                  setAgentDockOpen(false);
-                }}
+                onClick={closeAgentDock}
                 title={t("common.close")}
                 aria-label={t("common.close")}
               >
@@ -1068,6 +1225,15 @@ function Shell() {
           <div className="agent-dock-body">
             <AgentChat
               compact
+              historyOpen={agentHistoryOpen}
+              onHistoryOpenChange={(open) => {
+                setAgentHistoryOpen(open);
+                if (!open) {
+                  window.requestAnimationFrame(() =>
+                    agentHistoryButtonRef.current?.focus(),
+                  );
+                }
+              }}
               onOpenLogs={() => setAgentLogOpen(true)}
               onOpenMcpSettings={openMcpSettings}
               selectedConnection={selected}

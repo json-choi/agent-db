@@ -8,7 +8,7 @@ use sqlx::{AssertSqlSafe, MySqlPool, Row};
 
 use crate::error::{AppError, AppResult};
 
-use super::{Catalog, Column, ForeignKey, Index, Table};
+use super::{Catalog, Column, DatabaseObject, ForeignKey, Index, Table};
 
 const COLS_SQL: &str = r#"
 SELECT table_name, column_name, column_type, is_nullable, column_key
@@ -46,6 +46,26 @@ const EST_SQL: &str = r#"
 SELECT table_name, table_type, CAST(table_rows AS SIGNED) AS estimate
 FROM information_schema.tables
 WHERE table_schema = DATABASE()
+"#;
+
+const ROUTINES_SQL: &str = r#"
+SELECT routine_schema AS schema_name,
+       routine_name AS object_name,
+       LOWER(routine_type) AS object_kind,
+       NULLIF(data_type, '') AS object_detail
+FROM information_schema.routines
+WHERE routine_schema = DATABASE()
+ORDER BY routine_type, routine_name
+"#;
+
+const TRIGGERS_SQL: &str = r#"
+SELECT trigger_schema AS schema_name,
+       trigger_name AS object_name,
+       CONCAT(action_timing, ' ', event_manipulation) AS object_detail,
+       event_object_table AS parent_name
+FROM information_schema.triggers
+WHERE trigger_schema = DATABASE()
+ORDER BY trigger_name
 "#;
 
 pub async fn introspect(pool: &MySqlPool, skip_fk: bool) -> AppResult<Catalog> {
@@ -129,7 +149,30 @@ pub async fn introspect(pool: &MySqlPool, skip_fk: bool) -> AppResult<Catalog> {
         }
     }
 
-    Ok(Catalog { tables })
+    let mut objects = Vec::new();
+    for row in sqlx::query(ROUTINES_SQL).fetch_all(pool).await? {
+        objects.push(DatabaseObject {
+            schema: row.try_get("schema_name")?,
+            name: row.try_get("object_name")?,
+            kind: row.try_get("object_kind")?,
+            detail: row.try_get("object_detail")?,
+            parent: None,
+        });
+    }
+    for row in sqlx::query(TRIGGERS_SQL).fetch_all(pool).await? {
+        objects.push(DatabaseObject {
+            schema: row.try_get("schema_name")?,
+            name: row.try_get("object_name")?,
+            kind: "trigger".into(),
+            detail: row.try_get("object_detail")?,
+            parent: row.try_get("parent_name")?,
+        });
+    }
+    objects.sort_by(|a, b| {
+        (&a.schema, &a.kind, &a.name, &a.detail).cmp(&(&b.schema, &b.kind, &b.name, &b.detail))
+    });
+
+    Ok(Catalog { tables, objects })
 }
 
 async fn fetch_index_rows(pool: &MySqlPool) -> Result<(Vec<MySqlRow>, bool), sqlx::Error> {

@@ -15,6 +15,11 @@ pub fn detect(p: &ConnectionProfile) -> Provider {
         Provider::Neon
     } else if h.contains("psdb.cloud") {
         Provider::PlanetScale
+    } else if h.ends_with(".sql.goog")
+        || h.ends_with(".sql-psa.goog")
+        || h.ends_with(".sql-psc.goog")
+    {
+        Provider::GcpCloudSql
     } else {
         Provider::Generic
     }
@@ -37,7 +42,7 @@ pub fn skip_fk_metadata(p: &ConnectionProfile) -> bool {
 /// Pool acquire timeout. Neon scales to zero, so cold connects need slack.
 pub fn connect_timeout(p: &ConnectionProfile) -> Duration {
     match resolve(p) {
-        Provider::Neon => Duration::from_secs(30),
+        Provider::Neon | Provider::GcpCloudSql => Duration::from_secs(30),
         _ => Duration::from_secs(15),
     }
 }
@@ -56,6 +61,9 @@ pub fn apply_pg_tuning(p: &ConnectionProfile, mut opts: PgConnectOptions) -> PgC
     if let Some(ca) = p.extra_params.get("sslrootcert") {
         opts = opts.ssl_root_cert(ca);
     }
+    if let Some(ca) = p.extra_params.get("sslrootcert_pem") {
+        opts = opts.ssl_root_cert_from_pem(ca.as_bytes().to_vec());
+    }
     opts
 }
 
@@ -70,6 +78,17 @@ pub fn apply_mysql_tuning(
     }
     if let Some(ca) = p.extra_params.get("sslrootcert") {
         opts = opts.ssl_ca(ca);
+    }
+    if let Some(ca) = p.extra_params.get("sslrootcert_pem") {
+        opts = opts.ssl_ca_from_pem(ca.as_bytes().to_vec());
+    }
+    if resolve(p) == Provider::GcpCloudSql
+        && matches!(p.sslmode.as_str(), "verify-ca" | "verify-full")
+        && p.extra_params.contains_key("sslrootcert_pem")
+    {
+        // Cloud SQL IAM authentication uses mysql_clear_password only inside the
+        // CA-verified TLS tunnel assembled from the one-time lease response.
+        opts = opts.enable_cleartext_plugin(true);
     }
     opts
 }
@@ -113,6 +132,18 @@ mod tests {
         assert_eq!(
             detect(&profile("xyz.connect.psdb.cloud")),
             Provider::PlanetScale
+        );
+        assert_eq!(
+            detect(&profile("instance.project.region.sql.goog")),
+            Provider::GcpCloudSql
+        );
+        assert_eq!(
+            detect(&profile("instance.project.region.sql-psa.goog")),
+            Provider::GcpCloudSql
+        );
+        assert_eq!(
+            detect(&profile("instance.project.region.sql-psc.goog")),
+            Provider::GcpCloudSql
         );
         assert_eq!(detect(&profile("localhost")), Provider::Generic);
         let mut planetscale = profile("xyz.connect.psdb.cloud");

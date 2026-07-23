@@ -1,7 +1,7 @@
 // CodeMirror 6 SQL viewer/editor, shared by the Ask screen, ApprovalCard, and the SQL
 // screen. Read-only by default; when a `catalog` is passed it feeds schema-aware
 // autocomplete (table + column names), and `onRun` binds Mod-Enter to execute.
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { sql, type SQLNamespace } from "@codemirror/lang-sql";
 import { EditorView, keymap } from "@codemirror/view";
@@ -41,18 +41,6 @@ export default function SqlViewer({
   catalog,
   minHeight = "80px",
 }: SqlViewerProps) {
-  // Match CodeMirror's built-in theme to the OS scheme so it isn't a bright white
-  // slab inside dark panels. No new dependency — 'light'/'dark' ship with the lib.
-  const [dark, setDark] = useState(
-    () => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false,
-  );
-  useEffect(() => {
-    const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const onChange = (e: MediaQueryListEvent) => setDark(e.matches);
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
-  }, []);
-
   const extensions = useMemo(() => {
     const ext = [
       sql(catalog ? { schema: buildSchema(catalog) } : undefined),
@@ -80,7 +68,7 @@ export default function SqlViewer({
   return (
     <CodeMirror
       value={value}
-      theme={dark ? "dark" : "light"}
+      theme="dark"
       editable={editable}
       readOnly={!editable}
       onChange={onChange}

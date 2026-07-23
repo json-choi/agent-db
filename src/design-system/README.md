@@ -45,17 +45,21 @@ Vibe coding smell을 줄이기 위해 새 UI에서 아래 패턴은 피한다.
 - 버튼, 탭, 배지, 헤더 제목, 테이블 셀처럼 폭이 줄어드는 요소는 `min-width: 0`, `overflow: hidden`, `text-overflow: ellipsis`를 갖게 한다.
 - 사용자가 읽어야 하는 긴 오류/설명 문구는 `overflow-wrap: anywhere` 또는 `pre-wrap`처럼 의도적으로 줄바꿈한다.
 - 새 고정 치수는 가능한 4px 그리드에 맞춘다. 예외가 필요하면 해당 화면 CSS에 이유가 드러나야 한다.
+- macOS overlay title bar의 좌상단 제어영역은 `.platform-macos`에서만 활성화되는
+  `--ds-window-controls-safe-height`와 `[data-window-controls-safe-zone]` 슬롯으로
+  예약한다. rail이나 workspace header가 이 슬롯보다 앞에 컨트롤을 렌더링하지
+  않도록 하며 Windows/Linux에는 빈 상단 여백을 만들지 않는다.
 
 ## 컬러 팔레트
 
-아이콘에서 추출한 녹색을 primary hue로 삼고, chromatic color는 세 가지로 제한한다. 중립, 텍스트, border, glass alpha 값은 제외한다.
+GitHub Primer 계열의 익숙한 cool-neutral dark 관계를 기준으로 삼고, 색은 의미별로 분리한다. 데스크톱은 OS 설정과 무관하게 같은 다크 팔레트를 사용해 CodeMirror, 데이터 그리드, 팝오버가 서로 다른 테마로 튀지 않게 한다.
 
-- Primary Green: 브랜드, 선택 상태, focus, success, info, trust.
+- Interaction Blue: 선택, 링크, focus, primary action, 정보.
+- Success Green: 성공, 연결됨, trust.
 - Caution Amber: review, warning, medium risk.
-- Critical Coral: destructive, error, blocked, high risk.
+- Critical Red: destructive, error, blocked, high risk.
 
-새 UI에서 파랑, 청록, 보라 등 별도 hue를 추가하지 않는다. 기존 의미 토큰은 유지하되 `--ds-accent`, `--ds-info`, `--ds-success`, `--ds-source-blue`, `--ds-source-teal`, `--ds-source-green`은 모두 primary green으로 alias한다. 경고는 `--ds-caution`, 위험은 `--ds-critical` 계열로만 표현한다.
-Primary green은 배경 fill에는 `--ds-accent`, 링크/아이콘/강조 텍스트에는 `--ds-accent-text`를 사용한다.
+새 UI의 임의 색상은 추가하지 않는다. 상호작용에는 `--ds-accent*`, 성공에는 `--ds-success`/`--ds-trust-*`, 경고에는 `--ds-caution`/`--ds-risk-*`, 위험에는 `--ds-critical`/`--ds-danger-*`를 사용한다. 액센트 배경 fill에는 `--ds-accent`, 링크/아이콘/강조 텍스트에는 대비가 더 높은 `--ds-accent-text`를 사용한다.
 
 ## 글래스모피즘 표면
 

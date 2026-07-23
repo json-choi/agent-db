@@ -3,6 +3,8 @@
 import {
   bigint,
   boolean,
+  check,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -98,11 +100,21 @@ export const member = workspaceControl.table(
     }),
     userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
     role: text("role").notNull().default("viewer"),
+    revocationPendingAt: timestamp("revocation_pending_at", { withTimezone: true }),
+    revocationClaimedAt: timestamp("revocation_claimed_at", { withTimezone: true }),
+    revocationClaimId: uuid("revocation_claim_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     uniqueIndex("member_organization_user_idx").on(table.organizationId, table.userId),
     index("member_user_idx").on(table.userId),
+    check(
+      "member_revocation_claim_consistent",
+      sql`(${table.revocationClaimedAt} IS NULL AND ${table.revocationClaimId} IS NULL)
+        OR (${table.revocationClaimedAt} IS NOT NULL
+          AND ${table.revocationClaimId} IS NOT NULL
+          AND ${table.revocationPendingAt} IS NOT NULL)`,
+    ),
   ],
 );
 
@@ -203,6 +215,9 @@ export const workspaceProviderIntegration = workspaceControl.table(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    revocationPendingAt: timestamp("revocation_pending_at", { withTimezone: true }),
+    revocationClaimedAt: timestamp("revocation_claimed_at", { withTimezone: true }),
+    revocationClaimId: uuid("revocation_claim_id"),
   },
   (table) => [
     uniqueIndex("provider_integration_org_provider_account_idx").on(
@@ -210,9 +225,68 @@ export const workspaceProviderIntegration = workspaceControl.table(
       table.provider,
       table.externalAccountId,
     ),
+    uniqueIndex("provider_integration_org_id_idx").on(
+      table.organizationId,
+      table.id,
+    ),
     index("provider_integration_org_status_idx").on(
       table.organizationId,
       table.status,
+    ),
+    check(
+      "provider_integration_revocation_claim_consistent",
+      sql`(${table.revocationClaimedAt} IS NULL AND ${table.revocationClaimId} IS NULL)
+        OR (${table.revocationClaimedAt} IS NOT NULL
+          AND ${table.revocationClaimId} IS NOT NULL
+          AND ${table.revocationPendingAt} IS NOT NULL)`,
+    ),
+  ],
+);
+
+// GCP service-account ownership is a global, hash-only claim. A principal can
+// belong to exactly one integration so concurrent setup cannot reuse it elsewhere.
+export const workspaceProviderPrincipalClaim = workspaceControl.table(
+  "workspace_provider_principal_claim",
+  {
+    principalFingerprint: text("principal_fingerprint").primaryKey(),
+    organizationId: text("organization_id").notNull().references(
+      () => organization.id,
+      { onDelete: "cascade" },
+    ),
+    integrationId: uuid("integration_id").notNull(),
+    targetFingerprint: text("target_fingerprint").notNull(),
+    accessKind: text("access_kind").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("provider_principal_claim_integration_access_idx").on(
+      table.integrationId,
+      table.accessKind,
+    ),
+    uniqueIndex("provider_principal_claim_org_target_idx")
+      .on(table.organizationId, table.targetFingerprint)
+      .where(sql`"access_kind" = 'read'`),
+    index("provider_principal_claim_target_idx").on(table.targetFingerprint),
+    foreignKey({
+      columns: [table.organizationId, table.integrationId],
+      foreignColumns: [
+        workspaceProviderIntegration.organizationId,
+        workspaceProviderIntegration.id,
+      ],
+      name: "provider_principal_claim_org_integration_fk",
+    }).onDelete("cascade"),
+    check(
+      "provider_principal_claim_principal_hash",
+      sql`${table.principalFingerprint} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      "provider_principal_claim_target_hash",
+      sql`${table.targetFingerprint} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      "provider_principal_claim_access_kind",
+      sql`${table.accessKind} IN ('read', 'write')`,
     ),
   ],
 );
@@ -275,11 +349,33 @@ export const workspaceConnection = workspaceControl.table(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    revocationPendingAt: timestamp("revocation_pending_at", { withTimezone: true }),
+    revocationClaimedAt: timestamp("revocation_claimed_at", { withTimezone: true }),
+    revocationClaimId: uuid("revocation_claim_id"),
   },
   (table) => [
     index("workspace_connection_org_updated_idx").on(
       table.organizationId,
       table.updatedAt,
+    ),
+    uniqueIndex("workspace_connection_org_id_idx").on(
+      table.organizationId,
+      table.id,
+    ),
+    foreignKey({
+      columns: [table.organizationId, table.providerIntegrationId],
+      foreignColumns: [
+        workspaceProviderIntegration.organizationId,
+        workspaceProviderIntegration.id,
+      ],
+      name: "workspace_connection_org_provider_integration_fk",
+    }),
+    check(
+      "workspace_connection_revocation_claim_consistent",
+      sql`(${table.revocationClaimedAt} IS NULL AND ${table.revocationClaimId} IS NULL)
+        OR (${table.revocationClaimedAt} IS NOT NULL
+          AND ${table.revocationClaimId} IS NOT NULL
+          AND ${table.revocationPendingAt} IS NOT NULL)`,
     ),
   ],
 );
@@ -307,8 +403,16 @@ export const workspaceCredentialLease = workspaceControl.table(
     accessMode: text("access_mode").notNull(),
     externalCredentialId: text("external_credential_id").notNull(),
     externalCredentialKind: text("external_credential_kind").notNull(),
+    activeSlot: integer("active_slot"),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    // Cron workers claim cleanup atomically. Failed provider calls retain only
+    // retry scheduling metadata; provider error text is never persisted.
+    cleanupAttempts: integer("cleanup_attempts").notNull().default(0),
+    cleanupNextAttemptAt: timestamp("cleanup_next_attempt_at", {
+      withTimezone: true,
+    }),
+    cleanupClaimedAt: timestamp("cleanup_claimed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
@@ -321,6 +425,42 @@ export const workspaceCredentialLease = workspaceControl.table(
       table.connectionId,
       table.expiresAt,
     ),
+    index("credential_lease_expiry_idx").on(table.expiresAt),
+    uniqueIndex("credential_lease_active_slot_idx")
+      .on(
+        table.organizationId,
+        table.connectionId,
+        table.userId,
+        table.activeSlot,
+      )
+      .where(sql`"revoked_at" IS NULL`),
+    check(
+      "credential_lease_active_slot_range",
+      sql`${table.activeSlot} IS NULL OR ${table.activeSlot} BETWEEN 1 AND 5`,
+    ),
+    check(
+      "credential_lease_live_slot_required",
+      sql`${table.revokedAt} IS NOT NULL OR ${table.activeSlot} IS NOT NULL`,
+    ),
+    index("credential_lease_cleanup_ready_idx")
+      .on(table.cleanupAttempts, table.cleanupNextAttemptAt, table.expiresAt)
+      .where(sql`"revoked_at" IS NULL`),
+    foreignKey({
+      columns: [table.organizationId, table.connectionId],
+      foreignColumns: [
+        workspaceConnection.organizationId,
+        workspaceConnection.id,
+      ],
+      name: "credential_lease_org_connection_fk",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.organizationId, table.integrationId],
+      foreignColumns: [
+        workspaceProviderIntegration.organizationId,
+        workspaceProviderIntegration.id,
+      ],
+      name: "credential_lease_org_integration_fk",
+    }).onDelete("cascade"),
   ],
 );
 

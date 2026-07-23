@@ -178,6 +178,22 @@ table.grid th.sortable {
 table.grid th.sortable:hover {
   color: var(--ds-accent-text);
 }
+.grid-column-title {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-1);
+  vertical-align: middle;
+}
+.grid-column-title > .icon {
+  flex: 0 0 auto;
+  color: var(--ds-text-muted);
+  font-size: var(--ds-font-size-xs);
+}
+.grid-column-title > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .sort-arrow {
   color: var(--ds-accent-text);
   font-size: var(--ds-font-size-2xs);

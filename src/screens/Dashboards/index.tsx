@@ -1,16 +1,22 @@
-// Persistent dashboard library for one database connection. Selecting a saved
-// definition reruns its SQL through the existing read-only execution boundary.
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+// Connection-scoped dashboard canvas. Every saved Agent query becomes one live tile,
+// mirroring Chat2DB's at-a-glance report surface while retaining DopeDB's read-only
+// execution boundary and explicit per-tile refresh/delete controls.
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { deleteDashboard } from "../../ipc/commands";
-import type { ConnectionProfile, Dashboard, DashboardKind } from "../../ipc/types";
+import type {
+  ConnectionProfile,
+  Dashboard,
+  DashboardKind,
+  QueryResult,
+} from "../../ipc/types";
 import { errMessage } from "../../ipc/types";
 import ConfirmButton from "../../components/ConfirmButton";
 import DashboardVisualizationView from "../../components/DashboardVisualization";
 import { Icon } from "../../components/Icon";
 import Skeleton from "../../components/Skeleton";
 import { useToast } from "../../components/Toast";
-import { dashboardRunQuery, dashboardsQuery, qk } from "../../lib/queries";
+import { dashboardTileRunQueries, dashboardsQuery, qk } from "../../lib/queries";
 import { useI18n, type I18nKey } from "../../lib/i18n";
 import "./dashboards.css";
 
@@ -25,6 +31,190 @@ const KIND_LABELS: Record<DashboardKind, I18nKey> = {
 function displayTime(value: string) {
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+}
+
+export function DashboardSidebar({
+  connections,
+  selectedId,
+  focusId,
+  onSelectConnection,
+  onFocus,
+  workspaceAccount,
+  workspaceHeader,
+}: {
+  connections: ConnectionProfile[];
+  selectedId: string | null;
+  focusId: string | null;
+  onSelectConnection: (id: string) => void;
+  onFocus: (id: string) => void;
+  workspaceAccount?: ReactNode;
+  workspaceHeader?: ReactNode;
+}) {
+  const { t } = useI18n();
+  const selected = connections.find((connection) => connection.id === selectedId) ?? null;
+  const list = useQuery({
+    ...dashboardsQuery(selectedId ?? "__no_connection__"),
+    enabled: selectedId !== null,
+  });
+  const dashboards = list.data ?? [];
+
+  return (
+    <aside className="sidebar dashboard-sidebar">
+      {workspaceHeader}
+      <div className="dashboard-sidebar-body">
+        <label className="dashboard-connection-picker">
+          <span>{t("app.thisConnection")}</span>
+          <select
+            value={selectedId ?? ""}
+            onChange={(event) => onSelectConnection(event.target.value)}
+          >
+            <option value="" disabled>
+              {t("settings.selectConnectionTitle")}
+            </option>
+            {connections.map((connection) => (
+              <option key={connection.id} value={connection.id}>
+                {connection.name || t("app.unnamed")}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <div className="dashboard-sidebar-heading">
+          <strong>{t("dashboard.library")}</strong>
+          <span className="muted">{dashboards.length}</span>
+        </div>
+
+        <div className="dashboard-sidebar-list">
+          {!selected ? (
+            <p className="muted">{t("settings.selectConnectionTitle")}</p>
+          ) : list.isPending ? (
+            <Skeleton lines={4} />
+          ) : list.error ? (
+            <p className="error">{errMessage(list.error)}</p>
+          ) : dashboards.length === 0 ? (
+            <p className="muted">{t("dashboard.emptyTitle")}</p>
+          ) : (
+            dashboards.map((dashboard) => (
+              <button
+                type="button"
+                key={dashboard.id}
+                className={`dashboard-sidebar-item${focusId === dashboard.id ? " active" : ""}`}
+                onClick={() => onFocus(dashboard.id)}
+                title={dashboard.title}
+              >
+                <Icon name="chart" />
+                <span>
+                  <strong>{dashboard.title}</strong>
+                  <small>{t(KIND_LABELS[dashboard.visualization.kind])}</small>
+                </span>
+              </button>
+            ))
+          )}
+        </div>
+      </div>
+      {workspaceAccount ? (
+        <div className="sidebar-foot ds-control-row">{workspaceAccount}</div>
+      ) : null}
+    </aside>
+  );
+}
+
+function DashboardTile({
+  dashboard,
+  result,
+  running,
+  error,
+  deleting,
+  selected,
+  onRefresh,
+  onDelete,
+}: {
+  dashboard: Dashboard;
+  result: QueryResult | null;
+  running: boolean;
+  error: string | null;
+  deleting: boolean;
+  selected: boolean;
+  onRefresh: () => void;
+  onDelete: () => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <article
+      id={`dashboard-${dashboard.id}`}
+      className={`dashboard-tile kind-${dashboard.visualization.kind}${selected ? " active" : ""}`}
+      tabIndex={-1}
+    >
+      <header className="dashboard-tile-head">
+        <div className="dashboard-tile-copy">
+          <div className="ds-title-line">
+            <Icon name="chart" />
+            <strong>{dashboard.title}</strong>
+            <span className="badge kind">
+              {t(KIND_LABELS[dashboard.visualization.kind])}
+            </span>
+          </div>
+          {dashboard.description && <p className="muted">{dashboard.description}</p>}
+        </div>
+        <div className="ds-control-row">
+          <button
+            type="button"
+            className="btn small"
+            disabled={running || deleting}
+            onClick={onRefresh}
+            title={t(selected ? "dashboard.refresh" : "dashboard.clickToRun")}
+            aria-label={t(selected ? "dashboard.refresh" : "dashboard.clickToRun")}
+          >
+            <Icon name={selected ? "refresh" : "play"} />
+          </button>
+          <ConfirmButton
+            className="btn danger small"
+            disabled={running || deleting}
+            confirmLabel={t("dashboard.deleteConfirm")}
+            onConfirm={onDelete}
+          >
+            <Icon name="trash" />
+          </ConfirmButton>
+        </div>
+      </header>
+
+      <div className="dashboard-tile-meta muted">
+        <time dateTime={dashboard.updatedAt}>{displayTime(dashboard.updatedAt)}</time>
+        {result && (
+          <>
+            <span className="ds-meta-dot" />
+            <span>
+              {t("dashboard.resultMeta", {
+                count: result.rowCount,
+                duration: result.durationMs,
+              })}
+            </span>
+          </>
+        )}
+      </div>
+
+      {error ? (
+        <div className="error" role="alert">{error}</div>
+      ) : running && !result ? (
+        <div className="dashboard-tile-state" aria-busy="true">
+          <span className="loading">{t("dashboard.running")}</span>
+        </div>
+      ) : result ? (
+        <DashboardVisualizationView
+          compact
+          result={result}
+          visualization={dashboard.visualization}
+        />
+      ) : (
+        <div className="dashboard-tile-state muted">{t("dashboard.clickToRun")}</div>
+      )}
+
+      <details className="dashboard-query">
+        <summary>{t("dashboard.sql")}</summary>
+        <code>{dashboard.sql}</code>
+      </details>
+    </article>
+  );
 }
 
 export default function Dashboards({
@@ -46,13 +236,12 @@ export default function Dashboards({
 
   const list = useQuery(dashboardsQuery(connection.id));
   const dashboards = useMemo(() => list.data ?? [], [list.data]);
-  const selected = useMemo(
-    () => dashboards.find((dashboard) => dashboard.id === selectedId) ?? null,
-    [dashboards, selectedId],
-  );
-  // Selecting a dashboard runs it. The result is cached per dashboard, so leaving the tab
-  // and coming back repaints the chart instead of re-querying the database.
-  const run = useQuery(dashboardRunQuery(selected?.id ?? null));
+  const runs = useQueries({
+    queries: dashboardTileRunQueries(
+      dashboards.map((dashboard) => dashboard.id),
+      selectedId,
+    ),
+  });
 
   const remove = useMutation({
     mutationFn: deleteDashboard,
@@ -64,8 +253,6 @@ export default function Dashboards({
     },
   });
 
-  // Switching connections drops the selection; the focus effect below may immediately
-  // restore one when the app navigated here to show a specific dashboard.
   useEffect(() => {
     setSelectedId(null);
     appliedFocusId.current = null;
@@ -76,37 +263,43 @@ export default function Dashboards({
     if (!dashboards.some((dashboard) => dashboard.id === focusId)) return;
     appliedFocusId.current = focusId;
     onFocusConsumed();
+    if (selectedId && selectedId !== focusId) {
+      void queryClient.cancelQueries({ queryKey: qk.dashboardRun(selectedId) });
+    }
     setSelectedId(focusId);
-  }, [dashboards, focusId, onFocusConsumed]);
+    window.requestAnimationFrame(() => {
+      const tile = document.getElementById(`dashboard-${focusId}`);
+      tile?.scrollIntoView({ block: "center", behavior: "smooth" });
+      tile?.focus({ preventScroll: true });
+    });
+  }, [dashboards, focusId, onFocusConsumed, queryClient, selectedId]);
 
-  // Re-selecting the active dashboard is a rerun. Selecting a different one abandons the
-  // in-flight read: cancelQueries aborts the query signal, which cancels it server-side.
   function execute(dashboard: Dashboard) {
-    remove.reset(); // a failed delete must not keep reporting itself over the next run
+    remove.reset();
     if (dashboard.id === selectedId) {
       void queryClient.invalidateQueries({ queryKey: qk.dashboardRun(dashboard.id) });
       return;
     }
-    if (selectedId) void queryClient.cancelQueries({ queryKey: qk.dashboardRun(selectedId) });
+    if (selectedId) {
+      void queryClient.cancelQueries({ queryKey: qk.dashboardRun(selectedId) });
+    }
     setSelectedId(dashboard.id);
   }
 
   const loading = list.isPending;
   const loadError = list.error ? errMessage(list.error) : null;
-  const running = run.isFetching;
-  const deleting = remove.isPending;
-  const result = run.data ?? null;
-  const runError = remove.error
-    ? errMessage(remove.error)
-    : run.error
-      ? errMessage(run.error)
-      : null;
+  const deleteError = remove.error ? errMessage(remove.error) : null;
 
   return (
     <div className="dashboards-screen screen">
       {loadError && (
         <div className="dashboard-error error" role="alert">
           {t("dashboard.loadFailed", { error: loadError })}
+        </div>
+      )}
+      {deleteError && (
+        <div className="dashboard-error error" role="alert">
+          {deleteError}
         </div>
       )}
 
@@ -126,116 +319,33 @@ export default function Dashboards({
         </section>
       ) : (
         <>
-          <section className="dashboard-library" aria-label={t("dashboard.library")}>
-            <div className="dashboard-library-head">
-              <div>
-                <strong>{t("dashboard.library")}</strong>
-                <span className="muted">{t("dashboard.clickToRun")}</span>
-              </div>
+          <header className="dashboard-overview-head">
+            <div>
+              <strong>{t("dashboard.library")}</strong>
+              <span className="muted">{dashboards.length}</span>
             </div>
-            <ul className="dashboard-library-strip">
-              {dashboards.map((dashboard) => (
-                <li key={dashboard.id}>
-                  <button
-                    type="button"
-                    disabled={running || deleting}
-                    className={
-                      dashboard.id === selectedId
-                        ? "dashboard-library-card active"
-                        : "dashboard-library-card"
-                    }
-                    aria-pressed={dashboard.id === selectedId}
-                    onClick={() => void execute(dashboard)}
-                  >
-                    <span className="dashboard-library-title">
-                      <Icon name="chart" />
-                      <strong>{dashboard.title}</strong>
-                    </span>
-                    <span className="dashboard-library-meta">
-                      {t(KIND_LABELS[dashboard.visualization.kind])}
-                      <span className="ds-meta-dot" />
-                      <time dateTime={dashboard.updatedAt}>{displayTime(dashboard.updatedAt)}</time>
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </section>
-
-          <section className="dashboard-canvas">
-            {!selected ? (
-              <div className="dashboard-state dashboard-select-state">
-                <span className="dashboard-state-icon"><Icon name="dashboard" /></span>
-                <h3>{t("dashboard.selectTitle")}</h3>
-                <p className="muted">{t("dashboard.selectBody")}</p>
-              </div>
-            ) : (
-              <>
-                <header className="dashboard-canvas-head">
-                  <div className="dashboard-canvas-copy">
-                    <div className="ds-title-line">
-                      <h3>{selected.title}</h3>
-                      <span className="badge kind">
-                        {t(KIND_LABELS[selected.visualization.kind])}
-                      </span>
-                    </div>
-                    {selected.description && <p className="muted">{selected.description}</p>}
-                    <span className="dashboard-updated muted">
-                      {t("dashboard.updatedAt", { time: displayTime(selected.updatedAt) })}
-                    </span>
-                  </div>
-                  <div className="ds-command-group ds-control-row">
-                    <button
-                      className="btn small"
-                      disabled={running || deleting}
-                      onClick={() => void execute(selected)}
-                    >
-                      <Icon name="refresh" />
-                      {t("dashboard.refresh")}
-                    </button>
-                    <ConfirmButton
-                      className="btn danger small"
-                      disabled={running || deleting}
-                      confirmLabel={t("dashboard.deleteConfirm")}
-                      onConfirm={() => remove.mutate(selected.id)}
-                    >
-                      <Icon name="trash" />
-                      {t("common.delete")}
-                    </ConfirmButton>
-                  </div>
-                </header>
-
-                <details className="dashboard-query">
-                  <summary>{t("dashboard.sql")}</summary>
-                  <code>{selected.sql}</code>
-                </details>
-
-                {runError && <div className="error" role="alert">{runError}</div>}
-                {running && !result ? (
-                  <div className="dashboard-state dashboard-running" aria-busy="true">
-                    <span className="loading">{t("dashboard.running")}</span>
-                  </div>
-                ) : result ? (
-                  <div className="dashboard-result">
-                    <div className="dashboard-result-meta muted">
-                      {t("dashboard.resultMeta", {
-                        count: result.rowCount,
-                        duration: result.durationMs,
-                      })}
-                      {result.truncated ? ` · ${t("dashboard.truncated")}` : ""}
-                    </div>
-                    <DashboardVisualizationView
-                      result={result}
-                      visualization={selected.visualization}
-                    />
-                  </div>
-                ) : !runError ? (
-                  <div className="dashboard-state dashboard-running">
-                    <span className="muted">{t("dashboard.clickToRun")}</span>
-                  </div>
-                ) : null}
-              </>
-            )}
+            <button className="btn small" onClick={onOpenAgent}>
+              <Icon name="play" />
+              {t("dashboard.openAgent")}
+            </button>
+          </header>
+          <section className="dashboard-grid" aria-label={t("dashboard.library")}>
+            {dashboards.map((dashboard, index) => {
+              const run = runs[index];
+              return (
+                <DashboardTile
+                  key={dashboard.id}
+                  dashboard={dashboard}
+                  result={run?.data ?? null}
+                  running={run?.isFetching ?? false}
+                  error={run?.error ? errMessage(run.error) : null}
+                  deleting={remove.isPending && remove.variables === dashboard.id}
+                  selected={dashboard.id === selectedId}
+                  onRefresh={() => execute(dashboard)}
+                  onDelete={() => remove.mutate(dashboard.id)}
+                />
+              );
+            })}
           </section>
         </>
       )}

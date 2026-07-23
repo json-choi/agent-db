@@ -865,6 +865,7 @@ mod tests {
     fn cache_present_lists_tables_compactly() {
         let catalog = Catalog {
             tables: vec![table(Some("public"), "users", 4, Some(120))],
+            objects: Vec::new(),
         };
         let json = serde_json::to_string(&catalog).unwrap();
         let block = build_context_block(&profile(None), Some(&json));
@@ -875,6 +876,7 @@ mod tests {
     fn cache_present_without_a_row_estimate_says_so() {
         let catalog = Catalog {
             tables: vec![table(None, "events", 2, None)],
+            objects: Vec::new(),
         };
         let json = serde_json::to_string(&catalog).unwrap();
         let block = build_context_block(&profile(None), Some(&json));
@@ -886,7 +888,10 @@ mod tests {
         let tables: Vec<Table> = (0..(CONTEXT_MAX_TABLES + 10))
             .map(|i| table(None, &format!("t{i}"), 1, Some(1)))
             .collect();
-        let catalog = Catalog { tables };
+        let catalog = Catalog {
+            tables,
+            objects: Vec::new(),
+        };
         let json = serde_json::to_string(&catalog).unwrap();
         let block = build_context_block(&profile(None), Some(&json));
         assert!(block.contains("...and 10 more"));

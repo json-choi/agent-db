@@ -18,7 +18,9 @@ describe("provider credential envelope", () => {
     const key = randomBytes(32);
     const envelope = sealEnvelope(key, "oauth-token", "integration:a");
     const parts = envelope.split(".");
-    parts[2] = `${parts[2].slice(0, -1)}${parts[2].endsWith("A") ? "B" : "A"}`;
+    const ciphertext = Buffer.from(parts[2], "base64url");
+    ciphertext[0] ^= 0x01;
+    parts[2] = ciphertext.toString("base64url");
     expect(() => openEnvelope(key, parts.join("."), "integration:a")).toThrow();
     expect(() => sealEnvelope(randomBytes(16), "value", "context")).toThrow(
       /exactly 32 bytes/,
