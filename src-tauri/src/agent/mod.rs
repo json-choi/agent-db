@@ -336,6 +336,7 @@ pub async fn send_turn(
     thread_id: Uuid,
     message: String,
     turn_id: Uuid,
+    user_message_id: Uuid,
     model: Option<String>,
     effort: Option<String>,
 ) -> AppResult<()> {
@@ -352,7 +353,7 @@ pub async fn send_turn(
     // fails to start (bad binary, etc.). Kept as the user typed it — any context block
     // below is added only to the copy handed to the CLI.
     store
-        .insert_chat_message(thread_id, "user", &message, None)
+        .insert_chat_message_with_id(thread_id, user_message_id, "user", &message, None)
         .await?;
 
     // A connection-scoped thread's very first turn (no CLI session to resume yet) gets
@@ -503,7 +504,13 @@ pub async fn send_turn(
     };
 
     if let Err(e) = store
-        .insert_chat_message(thread_id, "assistant", &assembled_text, error.as_deref())
+        .insert_chat_message_with_id(
+            thread_id,
+            turn_id,
+            "assistant",
+            &assembled_text,
+            error.as_deref(),
+        )
         .await
     {
         tracing::error!("chat: failed to persist assistant message for thread {thread_id}: {e}");

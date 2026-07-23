@@ -16,7 +16,7 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
 import { cancelQuery, createChatThread, sendChatTurn } from "../ipc/commands";
-import type { AgentProvider, ChatThread } from "../ipc/types";
+import type { AgentProvider, ChatMessageRecord, ChatThread } from "../ipc/types";
 import { errMessage } from "../ipc/types";
 import { qk } from "./queries";
 
@@ -26,6 +26,7 @@ import { qk } from "./queries";
 export interface PendingTurn {
   threadId: string;
   turnId: string;
+  userMessageId: string;
   userText: string;
   assistantText: string;
   turnStartIso: string; // start bound for the agentFeed tool-call slice of this turn
@@ -65,6 +66,26 @@ type ProviderStrings = Record<AgentProvider, string>;
 
 export function connectionThreads(threads: ChatThread[], connectionId: string): ChatThread[] {
   return threads.filter((thread) => thread.connectionId === connectionId);
+}
+
+// The backend persists the optimistic user's UUID unchanged. Once a message refetch returns
+// that row, the UI must stop rendering its local echo or the same chat appears twice.
+export function shouldShowOptimisticUser(
+  messages: ChatMessageRecord[],
+  pending: PendingTurn,
+): boolean {
+  return !messages.some(
+    (message) => message.id === pending.userMessageId && message.role === "user",
+  );
+}
+
+export function shouldShowStreamingAssistant(
+  messages: ChatMessageRecord[],
+  pending: PendingTurn,
+): boolean {
+  return !messages.some(
+    (message) => message.id === pending.turnId && message.role === "assistant",
+  );
 }
 
 function providerStorageKey(kind: "model" | "effort", p: AgentProvider): string {
@@ -156,6 +177,7 @@ export function AgentChatProvider({ children }: { children: ReactNode }) {
       startInFlight.current = true;
       setStarting(true);
       const turnId = window.crypto.randomUUID();
+      const userMessageId = window.crypto.randomUUID();
       const turnStartIso = new Date().toISOString();
       // Captured once at call time: if the user navigates to a different thread while
       // createChatThread is still in flight below, this stays the draft's original value
@@ -176,12 +198,13 @@ export function AgentChatProvider({ children }: { children: ReactNode }) {
         setPendingTurn({
           threadId: tid,
           turnId,
+          userMessageId,
           userText: text,
           assistantText: "",
           turnStartIso,
           done: false,
         });
-        sendChatTurn(tid, text, turnId, model, effort).catch((e) => {
+        sendChatTurn(tid, text, turnId, userMessageId, model, effort).catch((e) => {
           setPendingTurn((p) =>
             p && p.turnId === turnId ? { ...p, done: true, error: errMessage(e) } : p,
           );

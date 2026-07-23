@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { ChatThread } from "../ipc/types";
-import { connectionThreads } from "./agentChat";
+import type { ChatMessageRecord, ChatThread } from "../ipc/types";
+import {
+  connectionThreads,
+  shouldShowOptimisticUser,
+  shouldShowStreamingAssistant,
+  type PendingTurn,
+} from "./agentChat";
 
 function thread(id: string, connectionId: string | null): ChatThread {
   return {
@@ -28,5 +33,50 @@ describe("connectionThreads", () => {
 
   it("does not expose legacy unscoped conversations", () => {
     expect(connectionThreads([thread("legacy", null)], "db-a")).toEqual([]);
+  });
+});
+
+function message(id: string, role: "user" | "assistant"): ChatMessageRecord {
+  return {
+    id,
+    threadId: "thread-1",
+    role,
+    text: "same prompt",
+    error: null,
+    createdAt: "2026-07-23T00:00:00.000Z",
+  };
+}
+
+const pending: PendingTurn = {
+  threadId: "thread-1",
+  turnId: "turn-1",
+  userMessageId: "user-1",
+  userText: "same prompt",
+  assistantText: "",
+  turnStartIso: "2026-07-23T00:00:00.000Z",
+  done: false,
+};
+
+describe("shouldShowOptimisticUser", () => {
+  it("hides the optimistic echo after its durable row is loaded", () => {
+    expect(shouldShowOptimisticUser([message("user-1", "user")], pending)).toBe(false);
+  });
+
+  it("keeps the echo when an identical earlier prompt has a different id", () => {
+    expect(shouldShowOptimisticUser([message("user-0", "user")], pending)).toBe(true);
+  });
+});
+
+describe("shouldShowStreamingAssistant", () => {
+  it("hides the streaming echo after the durable response is loaded", () => {
+    expect(shouldShowStreamingAssistant([message("turn-1", "assistant")], pending)).toBe(
+      false,
+    );
+  });
+
+  it("keeps the streaming response until its own durable row is loaded", () => {
+    expect(shouldShowStreamingAssistant([message("turn-0", "assistant")], pending)).toBe(
+      true,
+    );
   });
 });
