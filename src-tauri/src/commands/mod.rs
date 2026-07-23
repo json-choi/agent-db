@@ -18,7 +18,6 @@ use crate::audit::{self, RecordArgs};
 use crate::connection::{self, ConnectionAccess, ConnectionLease, DbPool};
 use crate::error::{AppError, AppResult};
 use crate::executor;
-use crate::introspect;
 use crate::model::{
     Classification, ConnectionProfile, Dashboard, DashboardDraft, DocumentPage, DocumentQuery,
     Engine, ExecOutcome, HistoryEntry, MonitoringStatus, PlatformFeatureFlags, PreviewMode,
@@ -28,6 +27,7 @@ use crate::model::{
 };
 use crate::monitoring;
 use crate::safety::{classify, decide, preview, GateDecision, PoolRef};
+use crate::services::CatalogReadPolicy;
 use crate::state::AppState;
 use crate::store::PinnedConnection;
 
@@ -733,7 +733,7 @@ pub fn install_driver(id: String) -> AppResult<crate::driver::DriverDescriptor> 
 
 #[tauri::command]
 pub async fn list_connections(state: State<'_, AppState>) -> AppResult<Vec<ConnectionProfile>> {
-    state.store.list_connections().await
+    state.services.connections.list_profiles().await
 }
 
 #[tauri::command]
@@ -1076,13 +1076,11 @@ pub async fn run_dashboard(
 
 #[tauri::command]
 pub async fn get_schema(state: State<'_, AppState>, id: Uuid) -> AppResult<String> {
-    let catalog = introspect::load_catalog(
-        &state.store,
-        &state.connections,
-        id,
-        introspect::CatalogReadMode::CacheFirst,
-    )
-    .await?;
+    let catalog = state
+        .services
+        .catalog
+        .load(id, CatalogReadPolicy::CacheFirst)
+        .await?;
     Ok(serde_json::to_string(&catalog)?)
 }
 
@@ -1090,14 +1088,26 @@ pub async fn get_schema(state: State<'_, AppState>, id: Uuid) -> AppResult<Strin
 /// when the table list is stale — the cache is otherwise written once and never expires.
 #[tauri::command]
 pub async fn refresh_schema(state: State<'_, AppState>, id: Uuid) -> AppResult<String> {
-    let catalog = introspect::load_catalog(
-        &state.store,
-        &state.connections,
-        id,
-        introspect::CatalogReadMode::Refresh,
-    )
-    .await?;
+    let catalog = state
+        .services
+        .catalog
+        .load(id, CatalogReadPolicy::Refresh)
+        .await?;
     Ok(serde_json::to_string(&catalog)?)
+}
+
+#[tauri::command]
+pub async fn get_table_ddl(
+    state: State<'_, AppState>,
+    id: Uuid,
+    schema: Option<String>,
+    table: String,
+) -> AppResult<String> {
+    state
+        .services
+        .catalog
+        .table_ddl(id, schema.as_deref(), &table)
+        .await
 }
 
 // ── safety pipeline (L1 / L3) ────────────────────────────────────────────────

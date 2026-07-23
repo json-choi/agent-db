@@ -10,11 +10,9 @@ mod sqlite;
 pub(crate) use catalog_v2::{load_cached_catalog, load_catalog, CatalogReadMode};
 
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
-use crate::connection::{ConnectionAccess, ConnectionLease, DbPool, Live};
+use crate::connection::{DbPool, Live};
 use crate::error::{AppError, AppResult};
-use crate::state::AppState;
 
 /// A relational column.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -114,30 +112,17 @@ pub async fn introspect(conn: &Live) -> AppResult<Catalog> {
     }
 }
 
-/// Acquire an online-authorized read lease pinned to the active workspace/account
-/// scope. The lease keeps that scope stable for the complete DDL operation.
-async fn live_for(state: &AppState, id: Uuid) -> AppResult<ConnectionLease> {
-    state.connections.acquire(id, ConnectionAccess::Read).await
-}
-
 /// The CREATE-TABLE DDL for one table, read through the read-only pool.
 ///
 /// - MySQL: `SHOW CREATE TABLE` (server-authoritative).
 /// - SQLite: the stored `sqlite_master.sql` for the table plus its indexes.
 /// - Postgres: synthesized from the catalog (NOT pg_dump-exact — see `pg::table_ddl`).
-#[tauri::command]
-pub async fn get_table_ddl(
-    state: tauri::State<'_, AppState>,
-    id: Uuid,
-    schema: Option<String>,
-    table: String,
-) -> AppResult<String> {
-    let live = live_for(&state, id).await?;
-    match live.live() {
+pub(crate) async fn table_ddl(live: &Live, schema: Option<&str>, table: &str) -> AppResult<String> {
+    match live {
         Live::Sql(live) => match live.ro() {
-            DbPool::Postgres(pool) => pg::table_ddl(pool, schema.as_deref(), &table).await,
-            DbPool::Mysql(pool) => mysql::table_ddl(pool, &table).await,
-            DbPool::Sqlite(pool) => sqlite::table_ddl(pool, &table).await,
+            DbPool::Postgres(pool) => pg::table_ddl(pool, schema, table).await,
+            DbPool::Mysql(pool) => mysql::table_ddl(pool, table).await,
+            DbPool::Sqlite(pool) => sqlite::table_ddl(pool, table).await,
         },
         Live::Mongo(_) => Err(AppError::Config(
             "MongoDB collections have no SQL DDL".into(),

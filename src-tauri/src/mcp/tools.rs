@@ -20,13 +20,15 @@ use chrono::Utc;
 use crate::audit::{self, RecordArgs};
 use crate::connection::{ConnectionAccess, ConnectionContext, ConnectionManager, DbPool};
 use crate::error::AppError;
-use crate::introspect;
 use crate::model::{
     ConnectionProfile, DashboardDraft, DashboardKind, DashboardVisualization, DocumentPage,
     DocumentQuery, Engine, HistoryEntry, QueryKind,
 };
 use crate::monitoring::{self, HealthSnapshot};
 use crate::safety::{self, PoolRef};
+use crate::services::{
+    AgentConnectionSummary, ApplicationServices, CatalogReadPolicy, LegacyConnectionResolutionError,
+};
 use crate::store::{AccountScope, PinnedConnection, Store};
 
 const QUERY_PLAN_TTL: Duration = Duration::from_secs(30);
@@ -84,6 +86,8 @@ pub(crate) struct DbTools {
     events: ToolEventSink,
     /// Scope-aware connection manager shared with the UI and other agent transports.
     conns: ConnectionManager,
+    /// Transport-neutral application services shared with the Tauri adapter.
+    services: ApplicationServices,
     plans: QueryPlanStore,
 }
 
@@ -194,15 +198,15 @@ struct CreateDashboardArgs {
 }
 
 // ── helpers (not tools) ──────────────────────────────────────────────────────────
-fn connection_list_payload(connections: &[ConnectionProfile]) -> serde_json::Value {
+fn connection_list_payload(connections: &[AgentConnectionSummary]) -> serde_json::Value {
     json!({
         "connections": connections.iter().map(|connection| json!({
             "id": connection.id,
             "name": connection.name,
             "engine": connection.engine,
             "database": connection.database,
-            "environment": connection.env,
-            "readonly": connection.readonly_default,
+            "environment": connection.environment,
+            "readonly": connection.readonly,
             "allowWrites": connection.allow_writes,
         })).collect::<Vec<_>>()
     })
@@ -215,10 +219,12 @@ impl DbTools {
         conns: ConnectionManager,
         plans: QueryPlanStore,
     ) -> Self {
+        let services = ApplicationServices::new(store.clone(), conns.clone());
         Self {
             store,
             events: ToolEventSink::tauri(app),
             conns,
+            services,
             plans,
         }
     }
@@ -230,11 +236,13 @@ impl DbTools {
         plans: QueryPlanStore,
     ) -> (Self, RecordedToolEvents) {
         let (events, recorded) = ToolEventSink::recording();
+        let services = ApplicationServices::new(store.clone(), conns.clone());
         (
             Self {
                 store,
                 events,
                 conns,
+                services,
                 plans,
             },
             recorded,
@@ -246,19 +254,20 @@ impl DbTools {
     }
 
     /// Resolve the target connection: explicit name/id, else the first configured one.
-    async fn resolve_conn(&self, arg: &Option<String>) -> Result<ConnectionProfile, McpError> {
-        let list = self.store.list_connections().await.map_err(err)?;
-        match arg {
-            Some(a) => list
-                .into_iter()
-                .find(|c| c.id.to_string() == *a || c.name == *a)
-                .ok_or_else(|| {
-                    McpError::invalid_params(format!("no connection matching '{a}'"), None)
-                }),
-            None => list.into_iter().next().ok_or_else(|| {
-                McpError::invalid_params("no connections configured in DopeDB", None)
-            }),
-        }
+    async fn resolve_conn(&self, arg: &Option<String>) -> Result<AgentConnectionSummary, McpError> {
+        self.services
+            .connections
+            .resolve_legacy_mcp(arg.as_deref())
+            .await
+            .map_err(err)?
+            .map_err(|error| match error {
+                LegacyConnectionResolutionError::NoConnections => {
+                    McpError::invalid_params("no connections configured in DopeDB", None)
+                }
+                LegacyConnectionResolutionError::NoMatch { selector } => {
+                    McpError::invalid_params(format!("no connection matching '{selector}'"), None)
+                }
+            })
     }
 
     /// Pin the active workspace/account authority without opening the target DB.
@@ -452,7 +461,12 @@ impl DbTools {
     )]
     async fn list_connections(&self) -> Result<CallToolResult, McpError> {
         self.emit("agent:tool_call", json!({ "tool": "list_connections" }));
-        let list = self.store.list_connections().await.map_err(err)?;
+        let list = self
+            .services
+            .connections
+            .list_agent_summaries()
+            .await
+            .map_err(err)?;
         let out = connection_list_payload(&list);
         self.emit(
             "agent:result",
@@ -480,14 +494,12 @@ impl DbTools {
             "agent:tool_call",
             json!({ "tool": "list_tables", "connection": resolved.name }),
         );
-        let catalog = introspect::load_catalog(
-            &self.store,
-            &self.conns,
-            resolved.id,
-            introspect::CatalogReadMode::LiveNoCache,
-        )
-        .await
-        .map_err(err)?;
+        let catalog = self
+            .services
+            .catalog
+            .load(resolved.id, CatalogReadPolicy::LiveNoCache)
+            .await
+            .map_err(err)?;
         let profile = resolved;
         self.audit(
             profile.id,
@@ -543,14 +555,12 @@ impl DbTools {
             "agent:tool_call",
             json!({ "tool": "describe_table", "connection": resolved.name, "table": args.table }),
         );
-        let catalog = introspect::load_catalog(
-            &self.store,
-            &self.conns,
-            resolved.id,
-            introspect::CatalogReadMode::CacheFirst,
-        )
-        .await
-        .map_err(err)?;
+        let catalog = self
+            .services
+            .catalog
+            .load(resolved.id, CatalogReadPolicy::CacheFirst)
+            .await
+            .map_err(err)?;
         let profile = resolved;
         let want = args.table.as_str();
         // Match "schema.table" or bare name exactly, else fall back to case-insensitive.
@@ -1494,7 +1504,7 @@ mod tests {
             .extra_params
             .insert("channel_binding".into(), "require".into());
 
-        let output = connection_list_payload(&[connection]);
+        let output = connection_list_payload(&[AgentConnectionSummary::from(&connection)]);
         let expected: serde_json::Value = serde_json::from_str(include_str!(
             "../../tests/fixtures/mcp/list-connections-success.json"
         ))

@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::connection::ConnectionManager;
 use crate::error::AppResult;
+use crate::services::ApplicationServices;
 use crate::store::Store;
 
 /// Live runtime status of the MCP listeners, set by `mcp::serve_*` on bind
@@ -25,6 +26,8 @@ pub struct AppState {
     pub store: Store,
     /// Scope-pinned, per-connection single-flight pool owner shared with every adapter.
     pub connections: ConnectionManager,
+    /// Transport-neutral application services shared by Tauri and future adapters.
+    pub services: ApplicationServices,
     /// Bearer token guarding the local MCP server (persisted in mcp.json).
     pub mcp_token: String,
     /// Live status of the MCP HTTP + bridge listeners.
@@ -39,9 +42,11 @@ impl AppState {
     pub async fn new() -> AppResult<Self> {
         let store = Store::open().await?;
         let connections = ConnectionManager::new(store.clone());
+        let services = ApplicationServices::new(store.clone(), connections.clone());
         Ok(Self {
             store,
             connections,
+            services,
             mcp_token: crate::mcp::load_or_create_token(),
             mcp_runtime: Arc::new(Mutex::new(McpRuntime::default())),
             chat: crate::agent::chat_state(),

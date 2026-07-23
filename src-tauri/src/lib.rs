@@ -17,6 +17,7 @@ mod mongo;
 mod monitoring;
 pub mod operations;
 mod safety;
+mod services;
 mod sql_script;
 mod state;
 mod store;
@@ -121,7 +122,7 @@ pub fn run() {
             commands::run_dashboard,
             commands::get_schema,
             commands::refresh_schema,
-            introspect::get_table_ddl,
+            commands::get_table_ddl,
             commands::classify_sql,
             commands::preview_sql,
             commands::run_sql,
