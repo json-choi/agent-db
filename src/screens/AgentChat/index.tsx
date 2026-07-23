@@ -377,14 +377,14 @@ export default function AgentChat({
     if (!text || busy) return;
     setSubmitError(null);
     try {
-      await send(
+      const accepted = await send(
         text,
         provider,
         selectedConnection.id,
         model || undefined,
         effort || undefined,
       );
-      setDraft("");
+      if (accepted) setDraft("");
     } catch (error) {
       const message = errMessage(error);
       setSubmitError(message);
@@ -480,6 +480,7 @@ export default function AgentChat({
                   <select
                     aria-label={t("agentChat.providerSwitchHint")}
                     value={provider}
+                    disabled={busy}
                     onChange={(event) => {
                       const nextProvider = event.target.value as AgentProvider;
                       // A thread's CLI session cannot change provider. Selecting another
