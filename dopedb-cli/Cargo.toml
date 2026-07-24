@@ -1,0 +1,38 @@
+[package]
+name = "dopedb-cli"
+version = "0.3.3"
+edition = "2021"
+rust-version = "1.94"
+description = "Local CLI client for the DopeDB Desktop runtime"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "dopedb"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+clap_complete = "4.6.7"
+dirs = "6"
+dopedb-protocol = { path = "../dopedb-protocol" }
+serde = "1"
+serde_json = "1"
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "time"] }
+uuid = { version = "1", features = ["v4"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+chrono = "0.4"
+tempfile = "3"

@@ -2,6 +2,9 @@
 //! current policy from the active scope; Tauri callers may provide only an operation
 //! id, the hash rendered to the user, and an optional human reason.
 
+use std::time::Duration;
+
+use dopedb_protocol::{OperationState, OperationSummary};
 use serde::Serialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -12,9 +15,11 @@ use crate::model::SafetySettings;
 use crate::operations::{
     canonical_hash, ExactApprovalRequest, LocalApprovalAuthority, OperationActor,
     OperationActorKind, OperationActorProvenance, OperationApprover, OperationRecord,
-    OperationRiskLevel, OperationRuntime, OperationState,
+    OperationRiskLevel, OperationRuntime,
 };
 use crate::store::{AccountScope, PinnedConnection, Store};
+
+use super::TerminalAuthority;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct OperationDecisionRequest {
@@ -80,6 +85,68 @@ impl OperationService {
             .map(OperationDecisionReceipt::from)
     }
 
+    pub(crate) async fn show_terminal(
+        &self,
+        scope: &TerminalAuthority,
+        operation_id: Uuid,
+    ) -> AppResult<OperationSummary> {
+        let record = self.runtime.get(operation_id).await?;
+        ensure_terminal_scope(&record, scope)?;
+        Ok(operation_summary(&record))
+    }
+
+    pub(crate) async fn wait_terminal(
+        &self,
+        scope: &TerminalAuthority,
+        operation_id: Uuid,
+        timeout: Duration,
+    ) -> AppResult<OperationSummary> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let summary = self.show_terminal(scope, operation_id).await?;
+            if summary.state.is_terminal() {
+                return Ok(summary);
+            }
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return Err(AppError::Safety("operation wait timed out".into()));
+            }
+            tokio::time::sleep(
+                deadline
+                    .saturating_duration_since(now)
+                    .min(Duration::from_millis(50)),
+            )
+            .await;
+        }
+    }
+
+    pub(crate) async fn cancel_terminal(
+        &self,
+        scope: &TerminalAuthority,
+        operation_id: Uuid,
+    ) -> AppResult<OperationSummary> {
+        let record = self.runtime.get(operation_id).await?;
+        ensure_terminal_scope(&record, scope)?;
+        if record.state.is_terminal() {
+            return Ok(operation_summary(&record));
+        }
+        if record.state == OperationState::Executing {
+            crate::executor::cancel::cancel(operation_id);
+            return Ok(operation_summary(&record));
+        }
+        let cancelled = self
+            .runtime
+            .cancel_before_execution(
+                operation_id,
+                &json!({
+                    "origin": "cli",
+                    "terminalSessionId": scope.terminal_session_id,
+                }),
+            )
+            .await?;
+        Ok(operation_summary(&cancelled))
+    }
+
     async fn exact_request(
         &self,
         request: OperationDecisionRequest,
@@ -111,6 +178,37 @@ impl OperationService {
             current_policy_revision: policy.revision,
             reason: request.reason,
         })
+    }
+}
+
+fn ensure_terminal_scope(record: &OperationRecord, scope: &TerminalAuthority) -> AppResult<()> {
+    let matches = record.terminal_session_id == Some(scope.terminal_session_id)
+        && record.workspace_id == scope.workspace_id
+        && record.account_scope == scope.account_scope
+        && record.connection_id == scope.connection_id
+        && record.connection_revision == scope.connection_revision;
+    if matches {
+        Ok(())
+    } else {
+        Err(AppError::Blocked {
+            reason: "operation belongs to a different Terminal or connection scope".into(),
+        })
+    }
+}
+
+fn operation_summary(record: &OperationRecord) -> OperationSummary {
+    OperationSummary {
+        operation_id: record.id,
+        connection_id: record.connection_id,
+        kind: record.kind,
+        state: record.state,
+        risk_level: record.risk_level,
+        payload_hash: record.payload_hash.clone(),
+        expires_at: record.expires_at,
+        started_at: record.started_at,
+        finished_at: record.finished_at,
+        created_at: record.created_at,
+        updated_at: record.updated_at,
     }
 }
 

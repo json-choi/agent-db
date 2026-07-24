@@ -3,7 +3,7 @@
   "requestId": "018f1111-2222-7333-8444-555566667777",
   "ok": true,
   "result": {
-    "appVersion": "0.3.2",
+    "appVersion": "0.3.3",
     "protocolMin": 1,
     "protocolMax": 1,
     "runtimeId": "018f0000-1111-7222-8333-444455556666"

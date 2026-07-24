@@ -19,6 +19,7 @@ use sqlx::{AssertSqlSafe, Executor, SqlSafeStr};
 use tokio::time::timeout;
 
 use crate::error::{AppError, AppResult};
+use crate::executor::cancel::{self, CancelHandle};
 use crate::executor::read::{describe_cols, mysql_value, pg_value, sqlite_value, stream_capped};
 use crate::model::{Engine, QueryResult};
 
@@ -30,6 +31,30 @@ use super::{PoolRef, STATEMENT_TIMEOUT_MS};
 /// per-engine mappers so this path and the desktop path render cells identically.
 /// Any write the model slipped through is rejected by the DB → [`AppError::Blocked`].
 pub async fn run_read_only(pool: PoolRef<'_>, sql: &str, max_rows: u64) -> AppResult<QueryResult> {
+    run_read_only_cancellable(pool, sql, max_rows, None).await
+}
+
+/// Run through the same DB-enforced read path while honoring a cancellation slot
+/// registered at operation-claim time.
+pub(crate) async fn run_read_only_cancellable(
+    pool: PoolRef<'_>,
+    sql: &str,
+    max_rows: u64,
+    cancellation: Option<&CancelHandle>,
+) -> AppResult<QueryResult> {
+    cancel::guard_registered(
+        cancellation,
+        cancel::QUERY_TIMEOUT,
+        run_read_only_inner(pool, sql, max_rows),
+    )
+    .await
+}
+
+async fn run_read_only_inner(
+    pool: PoolRef<'_>,
+    sql: &str,
+    max_rows: u64,
+) -> AppResult<QueryResult> {
     let max = max_rows as usize;
     let started = Instant::now();
     let engine = pool.engine();

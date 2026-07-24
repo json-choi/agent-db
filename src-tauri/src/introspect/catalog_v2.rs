@@ -68,6 +68,49 @@ pub(crate) async fn load_catalog(
     introspect_and_maybe_store(store, context, mode).await
 }
 
+/// Load the canonical Catalog V2 projection for broker/CLI consumers.
+///
+/// Unlike the legacy UI projection, Catalog V2 requires a non-empty database
+/// identity so fingerprints cannot silently move between unnamed targets.
+pub(crate) async fn load_catalog_snapshot(
+    store: &Store,
+    connections: &ConnectionManager,
+    connection_id: Uuid,
+    mode: CatalogReadMode,
+) -> AppResult<v2::CatalogSnapshot> {
+    let context = connections
+        .pin(connection_id, ConnectionAccess::Read)
+        .await?;
+
+    if mode == CatalogReadMode::CacheFirst {
+        if let Some(snapshot) = store.get_catalog_if_current(context.pin()).await? {
+            return Ok(snapshot);
+        }
+    } else if mode == CatalogReadMode::Refresh {
+        store.clear_schema_cache(connection_id).await?;
+    }
+
+    let lease = context.connect().await?;
+    if lease.pin().profile.database.trim().is_empty() {
+        return Err(AppError::Config(
+            "Catalog V2 requires an explicit database name".into(),
+        ));
+    }
+    let catalog = super::introspect(lease.live()).await?;
+    let snapshot = to_snapshot(&lease.pin().profile, &catalog)?;
+    if mode != CatalogReadMode::LiveNoCache {
+        match store.put_catalog_if_current(lease.pin(), &snapshot).await? {
+            CacheWriteOutcome::Stored | CacheWriteOutcome::NotPersisted => {}
+            CacheWriteOutcome::Stale => {
+                return Err(AppError::Blocked {
+                    reason: "workspace or connection access changed; retry schema loading".into(),
+                });
+            }
+        }
+    }
+    Ok(snapshot)
+}
+
 async fn introspect_and_maybe_store(
     store: &Store,
     context: ConnectionContext,

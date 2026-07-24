@@ -33,6 +33,42 @@ use crate::services::{
 };
 use crate::state::AppState;
 
+#[tauri::command]
+pub async fn cli_installation_status(
+    state: State<'_, AppState>,
+) -> AppResult<crate::cli_install::CliInstallationStatus> {
+    if !state
+        .features
+        .is_enabled(crate::features::FeatureFlag::CliV1)
+    {
+        return Err(AppError::Blocked {
+            reason: "the CLI feature is disabled for this app runtime".into(),
+        });
+    }
+    tokio::task::spawn_blocking(crate::cli_install::installation_status)
+        .await
+        .map_err(|_| AppError::Config("the CLI status worker stopped unexpectedly".into()))?
+}
+
+#[tauri::command]
+pub async fn install_cli(
+    state: State<'_, AppState>,
+    update_path: bool,
+    replace_existing: bool,
+) -> AppResult<crate::cli_install::CliInstallReceipt> {
+    if !state
+        .features
+        .is_enabled(crate::features::FeatureFlag::CliV1)
+    {
+        return Err(AppError::Blocked {
+            reason: "the CLI feature is disabled for this app runtime".into(),
+        });
+    }
+    tokio::task::spawn_blocking(move || crate::cli_install::install(update_path, replace_existing))
+        .await
+        .map_err(|_| AppError::Config("the CLI installer worker stopped unexpectedly".into()))?
+}
+
 // ── workspace context ────────────────────────────────────────────────────────
 
 #[tauri::command]

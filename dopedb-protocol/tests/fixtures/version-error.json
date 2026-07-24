@@ -1,0 +1,10 @@
+{
+  "protocolVersion": 1,
+  "requestId": "018f1111-2222-7333-8444-555566667777",
+  "ok": false,
+  "error": {
+    "code": "protocol_mismatch",
+    "message": "the client and runtime protocols are incompatible",
+    "retryable": false
+  }
+}

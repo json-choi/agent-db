@@ -1,16 +1,17 @@
-// Settings menu — houses everything that isn't a data view: the MCP server config and
-// per-connection safety. Moved out of the top tab bar so tabs stay data-focused.
+// Settings shell for command-line, MCP, safety, language, and update controls.
+// Kept outside the data tabs so navigation remains focused on the selected database.
 import { useEffect, useRef, useState } from "react";
 import type { Update } from "@tauri-apps/plugin-updater";
 import type { ConnectionProfile } from "../../ipc/types";
 import InfoTip from "../../components/InfoTip";
 import { useI18n } from "../../lib/i18n";
+import CliSettings from "./Cli";
 import Mcp from "./Mcp";
 import Safety from "./Safety";
 import Updates from "./Updates";
 import "./settings.css";
 
-type Section = "mcp" | "safety" | "updates" | "language";
+type Section = "cli" | "mcp" | "safety" | "updates" | "language";
 
 export default function Settings({
   connection,
@@ -71,6 +72,12 @@ export default function Settings({
           {t("mcp.server")}
         </button>
         <button
+          className={section === "cli" ? "snav active" : "snav"}
+          onClick={() => setSection("cli")}
+        >
+          {t("settings.cli")}
+        </button>
+        <button
           className={section === "safety" ? "snav active" : "snav"}
           onClick={() => setSection("safety")}
           disabled={!connection}
@@ -94,6 +101,7 @@ export default function Settings({
       </aside>
 
       <div className="settings-body">
+        {section === "cli" && <CliSettings />}
         {section === "mcp" && <Mcp />}
         {section === "updates" && (
           <Updates initialUpdate={availableUpdate} onChecked={onUpdateChecked} />

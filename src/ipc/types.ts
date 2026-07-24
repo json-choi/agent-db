@@ -44,6 +44,28 @@ export interface PlatformFeatureFlags {
   enabled: PlatformFeatureFlag[];
 }
 
+// Mirrors src-tauri/src/cli_install.rs.
+export interface CliInstallationStatus {
+  version: string;
+  bundledAvailable: boolean;
+  bundledPath: string | null;
+  inAppDirectory: string | null;
+  installPath: string;
+  installed: boolean;
+  current: boolean;
+  conflict: boolean;
+  pathConfigured: boolean;
+  pathChangeRequired: boolean;
+  pathChangeSupported: boolean;
+  pathChangePreview: string | null;
+}
+
+export interface CliInstallReceipt {
+  status: CliInstallationStatus;
+  binaryChanged: boolean;
+  pathChanged: boolean;
+}
+
 interface WorkspaceAuthUser {
   id: string;
   email: string;

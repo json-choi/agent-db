@@ -6,6 +6,7 @@ import { queryOptions } from "@tanstack/react-query";
 import {
   auditSnapshot,
   auditVerify,
+  cliInstallationStatus,
   workspaceAuthState,
   cancelQuery,
   detectAgentClis,
@@ -106,6 +107,7 @@ export const qk = {
   dashboards: (connectionId: string) => ["dashboards", connectionId] as const,
   dashboardRun: (dashboardId: string) => ["dashboardRun", dashboardId] as const,
   drivers: () => ["drivers"] as const,
+  cliInstallation: () => ["cliInstallation"] as const,
   platformFeatureFlags: () => ["platformFeatureFlags"] as const,
   mcpPlatforms: () => ["mcpPlatforms"] as const,
   mcpRuntimeStatus: () => ["mcpRuntimeStatus"] as const,
@@ -174,6 +176,15 @@ export function driversQuery() {
     queryKey: qk.drivers(),
     staleTime: Infinity,
     queryFn: listDrivers,
+  });
+}
+
+export function cliInstallationStatusQuery() {
+  return queryOptions({
+    queryKey: qk.cliInstallation(),
+    staleTime: 30_000,
+    retry: false,
+    queryFn: cliInstallationStatus,
   });
 }
 

@@ -10,6 +10,8 @@ import type {
   Catalog,
   ChatMessageRecord,
   ChatThread,
+  CliInstallReceipt,
+  CliInstallationStatus,
   CliInfo,
   Classification,
   ConnectionProfile,
@@ -45,6 +47,17 @@ export function workspaceFeatureState(): Promise<WorkspaceFeatureState> {
 
 export function platformFeatureFlags(): Promise<PlatformFeatureFlags> {
   return invoke("platform_feature_flags");
+}
+
+export function cliInstallationStatus(): Promise<CliInstallationStatus> {
+  return invoke("cli_installation_status");
+}
+
+export function installCli(
+  updatePath: boolean,
+  replaceExisting: boolean,
+): Promise<CliInstallReceipt> {
+  return invoke("install_cli", { updatePath, replaceExisting });
 }
 
 export function workspaceAuthState(): Promise<WorkspaceAuthState> {

@@ -11,9 +11,6 @@ pub mod read;
 pub mod write;
 
 pub use read::run_read;
-pub use write::run_write;
-
-use uuid::Uuid;
 
 use crate::connection::LiveConnection;
 use crate::error::{AppError, AppResult};
@@ -23,18 +20,22 @@ use crate::operations::ExecutionGrant;
 /// Single entry point the `run_sql` command calls. Reads run against the read-only
 /// pool; writes/DDL/privilege require an exact Operation grant and route through the
 /// guarded write path (which additionally enforces `allow_writes`).
-pub async fn execute(
+/// Execute with a cancellation slot minted before the caller's durable operation
+/// claim. This is the path used by the shared Operation Runtime.
+pub(crate) async fn execute(
     live: &LiveConnection,
     engine: Engine,
     classification: &Classification,
     sql: &str,
     settings: &SafetySettings,
     grant: Option<&ExecutionGrant>,
-    query_id: Option<Uuid>,
+    cancellation: Option<&cancel::CancelHandle>,
 ) -> AppResult<ExecOutcome> {
     match classification.kind {
         QueryKind::Read => {
-            let result = run_read(live, engine, sql, settings.max_rows, query_id).await?;
+            let result =
+                read::run_read_registered(live, engine, sql, settings.max_rows, cancellation)
+                    .await?;
             Ok(ExecOutcome {
                 result: Some(result),
                 affected: None,
@@ -45,7 +46,10 @@ pub async fn execute(
             let grant = grant.ok_or_else(|| AppError::Blocked {
                 reason: "this statement requires an exact approved operation grant".into(),
             })?;
-            run_write(live, engine, sql, settings, grant, query_id).await
+            let cancellation = cancellation.ok_or_else(|| AppError::Blocked {
+                reason: "write execution requires an operation cancellation scope".into(),
+            })?;
+            write::run_write(live, engine, sql, settings, grant, cancellation).await
         }
     }
 }

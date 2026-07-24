@@ -599,6 +599,12 @@ impl DbTools {
                     None,
                 ))
             }
+            Err(AgentQueryRunPrepareError::SessionMismatch) => {
+                return Err(McpError::invalid_params(
+                    "plan_id belongs to a different execution surface or Terminal session",
+                    None,
+                ))
+            }
             Err(AgentQueryRunPrepareError::AuthorityChanged) => {
                 return Err(McpError::invalid_params(
                     "workspace, account, or connection access changed; call plan_query again",

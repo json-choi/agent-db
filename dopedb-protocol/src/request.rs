@@ -55,6 +55,10 @@ pub enum CommandName {
     OperationWait,
     #[serde(rename = "operation.cancel")]
     OperationCancel,
+    /// Preserve envelope decodability long enough to return a stable schema/version
+    /// error to a newer client. Unknown command payloads are never dispatched.
+    #[serde(other)]
+    Unknown,
 }
 
 impl CommandName {
@@ -107,6 +111,7 @@ impl CommandName {
             Self::OperationShow => "operation.show",
             Self::OperationWait => "operation.wait",
             Self::OperationCancel => "operation.cancel",
+            Self::Unknown => "unknown",
         }
     }
 }

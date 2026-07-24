@@ -1,6 +1,6 @@
 # DopeDB CLI·Terminal Platform 구현 계획
 
-- 상태: 구현 진행 — Phase 2 Operation Runtime
+- 상태: 구현 진행 — Phase 3 Local Broker와 CLI
 - 최종 갱신: 2026-07-24
 - 적용 대상: DopeDB Desktop, `workspace-cloud`, 신규 `dopedb-cli`, 향후
   Plugin/Realtime 서비스

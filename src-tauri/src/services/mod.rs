@@ -13,6 +13,7 @@ mod operation_service;
 mod query_service;
 mod safety_service;
 mod script_service;
+mod terminal_authority;
 mod workspace_service;
 
 pub(crate) use activity_service::{
@@ -21,8 +22,8 @@ pub(crate) use activity_service::{
 pub(crate) use agent_service::{AgentService, ChatThreadCreateRequest};
 pub(crate) use catalog_service::{CatalogReadPolicy, CatalogService};
 pub(crate) use connection_service::{
-    AgentConnectionSummary, ConnectionProfileTestRequest, ConnectionService,
-    ConnectionUpsertRequest, LegacyConnectionResolutionError,
+    AgentConnectionSummary, CliConnectionResolutionError, ConnectionProfileTestRequest,
+    ConnectionService, ConnectionUpsertRequest, LegacyConnectionResolutionError,
 };
 pub(crate) use dashboard_service::{
     AgentDashboardCommitError, AgentDashboardPrepareError, AgentDashboardPresentation,
@@ -46,13 +47,14 @@ pub(crate) use query_service::{
     AgentQueryRunPrepareError, DesktopSqlClassificationReceipt, DesktopSqlClassificationRequest,
     DesktopSqlInspectionError, DesktopSqlPreviewReceipt, DesktopSqlPreviewRequest,
     DesktopSqlProposalReceipt, DesktopSqlProposalRequest, DesktopSqlRunError, DesktopSqlRunReceipt,
-    QueryService, QUERY_PLAN_TTL,
+    QueryService, TerminalQueryPlanRequest, TerminalSqlProposalRequest, QUERY_PLAN_TTL,
 };
 pub(crate) use safety_service::SafetyService;
 pub(crate) use script_service::{
     DesktopScriptProposalReceipt, DesktopScriptProposalRequest, DesktopScriptRunError,
     DesktopScriptRunReceipt, ScriptService,
 };
+pub(crate) use terminal_authority::TerminalAuthority;
 pub(crate) use workspace_service::{
     WorkspaceConnectionCopyRequest, WorkspaceCredentialBindingRequest, WorkspaceService,
 };

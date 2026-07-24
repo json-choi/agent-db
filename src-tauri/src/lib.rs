@@ -3,6 +3,8 @@
 
 mod agent;
 mod audit;
+mod broker;
+mod cli_install;
 mod commands;
 mod connection;
 mod dashboard;
@@ -50,6 +52,18 @@ pub fn run() {
             if !enabled_features.is_empty() {
                 tracing::info!(?enabled_features, "experimental platform features enabled");
             }
+            if app
+                .state::<state::AppState>()
+                .features
+                .is_enabled(features::FeatureFlag::LocalBrokerV1)
+            {
+                let state = app.state::<state::AppState>();
+                broker::start(
+                    state.broker.clone(),
+                    state.services.clone(),
+                    app.handle().clone(),
+                );
+            }
             // Start the local MCP server (Streamable HTTP on 127.0.0.1:7686). It shares
             // the app's Store + credential-store + safety pipeline via the tools in `mcp`.
             let st = app.state::<state::AppState>();
@@ -86,6 +100,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::workspace_feature_state,
             commands::platform_feature_flags,
+            commands::cli_installation_status,
+            commands::install_cli,
             commands::workspace_auth_state,
             commands::refresh_workspace_auth_state,
             commands::workspace_sign_out,
@@ -159,6 +175,8 @@ pub fn run() {
             // is torn down), so the child can be orphaned. Block here (bounded) until
             // the turn has actually wound down, so the child is reaped first.
             if let tauri::RunEvent::Exit = event {
+                let broker = app_handle.state::<state::AppState>().broker.clone();
+                tauri::async_runtime::block_on(broker.shutdown_and_wait(Duration::from_secs(2)));
                 let chat = app_handle.state::<state::AppState>().chat.clone();
                 if let Some(turn_id) = chat.active_turn() {
                     executor::cancel::cancel(turn_id);

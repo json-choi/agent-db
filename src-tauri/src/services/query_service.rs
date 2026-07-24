@@ -35,6 +35,7 @@ use super::operation_service::{
     actor_for_pin, agent_actor_for_pin, capture_policy, ensure_operation_scope,
     required_confirmation,
 };
+use super::TerminalAuthority;
 
 /// Lifetime of an agent query plan. A plan is valid at exactly this boundary and
 /// expired only when its monotonic age is greater than this value.
@@ -67,6 +68,13 @@ pub(crate) struct DesktopSqlProposalRequest {
     pub(crate) connection_id: Uuid,
     pub(crate) sql: String,
     pub(crate) origin: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TerminalSqlProposalRequest {
+    pub(crate) connection_id: Uuid,
+    pub(crate) sql: String,
+    pub(crate) authority: TerminalAuthority,
 }
 
 /// Exact immutable proposal rendered by the desktop before approval or execution.
@@ -235,8 +243,6 @@ impl DesktopSqlInspectionError {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum AgentQueryInvocationOrigin {
     Mcp,
-    // Constructed by the CLI adapter in the next Phase 1 slice.
-    #[allow(dead_code)]
     Cli,
 }
 
@@ -282,6 +288,16 @@ pub(crate) struct AgentQueryPlanRequest {
     pub(crate) origin: AgentQueryInvocationOrigin,
 }
 
+/// Broker-only read-plan input. The terminal/session identity is frozen into the
+/// immutable operation so another Terminal cannot claim this plan later.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TerminalQueryPlanRequest {
+    pub(crate) connection_id: Uuid,
+    pub(crate) sql: String,
+    pub(crate) max_rows: Option<u64>,
+    pub(crate) authority: TerminalAuthority,
+}
+
 /// Aggregate-only planning result. The allowlist deliberately excludes the full
 /// profile, network endpoint, username, credential reference, and binding details.
 #[derive(Debug, Clone)]
@@ -296,6 +312,7 @@ pub(crate) struct AgentQueryPlan {
     pub(crate) suggestions: Vec<String>,
     pub(crate) estimated_rows: Option<i64>,
     pub(crate) health: HealthSnapshot,
+    pub(crate) expires_at: chrono::DateTime<Utc>,
 }
 
 /// Guard-bearing successful planning receipt. Keeping this value alive while the
@@ -423,6 +440,7 @@ impl AgentQueryRunReceipt {
 pub(crate) enum AgentQueryRunPrepareError {
     UnknownOrAlreadyUsed,
     Expired,
+    SessionMismatch,
     AuthorityChanged,
     StoredPlanInvalid,
     Application(AppError),
@@ -505,6 +523,7 @@ pub(crate) struct PreparedAgentQueryRun {
     decision: String,
     max_rows: u64,
     origin: AgentQueryInvocationOrigin,
+    cancellation: executor::cancel::CancelHandle,
 }
 
 impl PreparedAgentQueryRun {
@@ -528,6 +547,7 @@ impl PreparedAgentQueryRun {
             decision,
             max_rows,
             origin,
+            cancellation,
         } = self;
         let operation_id = claimed.record().id;
         let engine = operation_pin.profile.engine;
@@ -583,20 +603,38 @@ impl PreparedAgentQueryRun {
                 }));
             }
         };
-        let result =
-            match safety::run_read_only(pool_ref(live.ro()), &event_context.sql, max_rows).await {
-                Ok(result) => result,
-                Err(error) => {
-                    record_run_failure(
-                        &store,
-                        &operation_pin,
-                        &event_context.sql,
-                        engine,
-                        origin,
-                        &error,
-                    )
-                    .await;
-                    let _ = operation
+        let result = match safety::run_read_only_cancellable(
+            pool_ref(live.ro()),
+            &event_context.sql,
+            max_rows,
+            Some(&cancellation),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                let cancelled = matches!(
+                    &error,
+                    AppError::Safety(reason) if reason == "query cancelled"
+                );
+                record_run_failure(
+                    &store,
+                    &operation_pin,
+                    &event_context.sql,
+                    engine,
+                    origin,
+                    &error,
+                )
+                .await;
+                let _ = if cancelled {
+                    operation
+                        .confirm_cancelled(
+                            operation_id,
+                            &serde_json::json!({"reason": "user_cancelled"}),
+                        )
+                        .await
+                } else {
+                    operation
                         .fail(
                             operation_id,
                             &serde_json::json!({
@@ -604,13 +642,14 @@ impl PreparedAgentQueryRun {
                                 "reason": "read_execution_failed",
                             }),
                         )
-                        .await;
-                    return Err(AgentQueryRunError::Execution(AgentQueryExecutionFailure {
-                        error,
-                        _lease: lease,
-                    }));
-                }
-            };
+                        .await
+                };
+                return Err(AgentQueryRunError::Execution(AgentQueryExecutionFailure {
+                    error,
+                    _lease: lease,
+                }));
+            }
+        };
 
         audit_best_effort(
             &store,
@@ -748,11 +787,24 @@ impl QueryService {
         &self,
         request: DesktopSqlPreviewRequest,
     ) -> Result<DesktopSqlPreviewReceipt, DesktopSqlInspectionError> {
+        self.preview_sql(request, None).await
+    }
+
+    async fn preview_sql(
+        &self,
+        request: DesktopSqlPreviewRequest,
+        terminal: Option<&TerminalAuthority>,
+    ) -> Result<DesktopSqlPreviewReceipt, DesktopSqlInspectionError> {
         let operation_scope = self.connections.begin_operation_scope().await;
         let pin = operation_scope
             .pin_connection_for_view(request.connection_id)
             .await
             .map_err(DesktopSqlInspectionError::Application)?;
+        if let Some(authority) = terminal {
+            authority
+                .ensure_pin(&pin)
+                .map_err(DesktopSqlInspectionError::Application)?;
+        }
         let settings = self
             .store
             .get_safety(pin.connection_id)
@@ -836,11 +888,37 @@ impl QueryService {
         &self,
         request: DesktopSqlProposalRequest,
     ) -> Result<DesktopSqlProposalReceipt, DesktopSqlInspectionError> {
-        let preview_receipt = self
-            .preview_desktop_sql(DesktopSqlPreviewRequest {
+        self.propose_sql(request, None).await
+    }
+
+    pub(crate) async fn propose_terminal_sql(
+        &self,
+        request: TerminalSqlProposalRequest,
+    ) -> Result<DesktopSqlProposalReceipt, DesktopSqlInspectionError> {
+        self.propose_sql(
+            DesktopSqlProposalRequest {
                 connection_id: request.connection_id,
-                sql: request.sql.clone(),
-            })
+                sql: request.sql,
+                origin: Some("cli".into()),
+            },
+            Some(request.authority),
+        )
+        .await
+    }
+
+    async fn propose_sql(
+        &self,
+        request: DesktopSqlProposalRequest,
+        terminal: Option<TerminalAuthority>,
+    ) -> Result<DesktopSqlProposalReceipt, DesktopSqlInspectionError> {
+        let preview_receipt = self
+            .preview_sql(
+                DesktopSqlPreviewRequest {
+                    connection_id: request.connection_id,
+                    sql: request.sql.clone(),
+                },
+                terminal.as_ref(),
+            )
             .await?;
         let pin = &preview_receipt.pin;
         let settings = self
@@ -885,6 +963,13 @@ impl QueryService {
         } else {
             OperationPlanDisposition::Ready
         };
+        let actor = if let Some(authority) = terminal.as_ref() {
+            let mut actor = agent_actor_for_pin(pin, "cli".into(), "cli".into());
+            actor.provenance.client_protocol_version = Some(authority.client_protocol_version);
+            actor
+        } else {
+            actor_for_pin(pin, history_origin)
+        };
         let operation = self
             .operation
             .plan(
@@ -894,8 +979,10 @@ impl QueryService {
                     account_scope: pin.scope.account_scope.storage_key().into(),
                     connection_id: pin.connection_id,
                     connection_revision: pin.connection_revision,
-                    terminal_session_id: None,
-                    actor: actor_for_pin(pin, history_origin),
+                    terminal_session_id: terminal
+                        .as_ref()
+                        .map(|authority| authority.terminal_session_id),
+                    actor,
                     kind: operation_kind(classification.kind),
                     payload_schema_version: 1,
                     payload,
@@ -1023,11 +1110,24 @@ impl QueryService {
             }));
         }
 
+        let cancellation = executor::cancel::register(operation_id);
         let claimed = self
             .operation
             .claim(operation_id)
             .await
             .map_err(DesktopSqlRunError::Application)?;
+        if cancellation.is_cancelled() {
+            self.operation
+                .confirm_cancelled(
+                    operation_id,
+                    &serde_json::json!({"reason": "user_cancelled_before_target_access"}),
+                )
+                .await
+                .map_err(DesktopSqlRunError::Application)?;
+            return Err(DesktopSqlRunError::Application(AppError::Safety(
+                "query cancelled".into(),
+            )));
+        }
 
         if is_write {
             if let Err(error) = audit::record(
@@ -1143,7 +1243,7 @@ impl QueryService {
             } else {
                 None
             },
-            Some(operation_id),
+            Some(&cancellation),
         )
         .await
         {
@@ -1288,6 +1388,31 @@ impl QueryService {
         &self,
         request: AgentQueryPlanRequest,
     ) -> Result<AgentQueryPlanReceipt, AgentQueryPlanError> {
+        self.plan_agent_read_scoped(request, None).await
+    }
+
+    pub(crate) async fn plan_terminal_read(
+        &self,
+        request: TerminalQueryPlanRequest,
+    ) -> Result<AgentQueryPlanReceipt, AgentQueryPlanError> {
+        let authority = request.authority;
+        self.plan_agent_read_scoped(
+            AgentQueryPlanRequest {
+                connection_id: request.connection_id,
+                sql: request.sql,
+                max_rows: request.max_rows,
+                origin: AgentQueryInvocationOrigin::Cli,
+            },
+            Some(authority),
+        )
+        .await
+    }
+
+    async fn plan_agent_read_scoped(
+        &self,
+        request: AgentQueryPlanRequest,
+        terminal: Option<TerminalAuthority>,
+    ) -> Result<AgentQueryPlanReceipt, AgentQueryPlanError> {
         let context = self
             .connections
             .pin(request.connection_id, ConnectionAccess::Read)
@@ -1322,6 +1447,11 @@ impl QueryService {
             .map_err(AgentQueryPlanError::Application)?;
         let max_rows = bounded_max_rows(request.max_rows, settings.max_rows);
         let operation_pin = context.pin().clone();
+        if let Some(authority) = terminal.as_ref() {
+            authority
+                .ensure_pin(&operation_pin)
+                .map_err(AgentQueryPlanError::Application)?;
+        }
         let policy =
             capture_agent_read_policy(&operation_pin).map_err(AgentQueryPlanError::Application)?;
         let lease = context
@@ -1369,6 +1499,14 @@ impl QueryService {
         let expires_at = Utc::now()
             + ChronoDuration::from_std(QUERY_PLAN_TTL)
                 .expect("agent query plan TTL is representable by chrono");
+        let mut actor = agent_actor_for_pin(
+            &operation_pin,
+            request.origin.as_str().into(),
+            request.origin.as_str().into(),
+        );
+        if let Some(authority) = terminal.as_ref() {
+            actor.provenance.client_protocol_version = Some(authority.client_protocol_version);
+        }
         self.operation
             .plan(
                 NewOperation {
@@ -1377,12 +1515,10 @@ impl QueryService {
                     account_scope: operation_pin.scope.account_scope.storage_key().into(),
                     connection_id: operation_pin.connection_id,
                     connection_revision: operation_pin.connection_revision,
-                    terminal_session_id: None,
-                    actor: agent_actor_for_pin(
-                        &operation_pin,
-                        request.origin.as_str().into(),
-                        request.origin.as_str().into(),
-                    ),
+                    terminal_session_id: terminal
+                        .as_ref()
+                        .map(|authority| authority.terminal_session_id),
+                    actor,
                     kind: OperationKind::ReadQuery,
                     payload_schema_version: 1,
                     payload,
@@ -1418,6 +1554,7 @@ impl QueryService {
                 suggestions,
                 estimated_rows: preview.estimated_rows,
                 health,
+                expires_at,
             },
             _lease: lease,
         })
@@ -1429,6 +1566,23 @@ impl QueryService {
     pub(crate) async fn prepare_agent_run(
         &self,
         plan_id: Uuid,
+    ) -> Result<PreparedAgentQueryRun, AgentQueryRunPrepareError> {
+        self.prepare_agent_run_scoped(plan_id, None).await
+    }
+
+    pub(crate) async fn prepare_terminal_run(
+        &self,
+        plan_id: Uuid,
+        authority: &TerminalAuthority,
+    ) -> Result<PreparedAgentQueryRun, AgentQueryRunPrepareError> {
+        self.prepare_agent_run_scoped(plan_id, Some(authority))
+            .await
+    }
+
+    async fn prepare_agent_run_scoped(
+        &self,
+        plan_id: Uuid,
+        terminal: Option<&TerminalAuthority>,
     ) -> Result<PreparedAgentQueryRun, AgentQueryRunPrepareError> {
         let planned = match self.operation.get(plan_id).await {
             Ok(planned) => planned,
@@ -1448,12 +1602,22 @@ impl QueryService {
         if planned.actor.id != payload.origin.as_str() {
             return Err(AgentQueryRunPrepareError::StoredPlanInvalid);
         }
+        let terminal_session_id = terminal.map(|authority| authority.terminal_session_id);
+        let expected_origin = if terminal.is_some() {
+            AgentQueryInvocationOrigin::Cli
+        } else {
+            AgentQueryInvocationOrigin::Mcp
+        };
+        if planned.terminal_session_id != terminal_session_id || payload.origin != expected_origin {
+            return Err(AgentQueryRunPrepareError::SessionMismatch);
+        }
         if planned.state == OperationState::Expired {
             return Err(AgentQueryRunPrepareError::UnknownOrAlreadyUsed);
         }
         let expired = planned
             .expires_at
             .is_some_and(|expires_at| expires_at <= Utc::now());
+        let cancellation = executor::cancel::register(plan_id);
         let claimed = match self.operation.claim(plan_id).await {
             Ok(claimed) => claimed,
             Err(_) if expired => {
@@ -1464,7 +1628,6 @@ impl QueryService {
             }
             Err(error) => return Err(AgentQueryRunPrepareError::Application(error)),
         };
-
         let context = match self
             .connections
             .pin(planned.connection_id, ConnectionAccess::Read)
@@ -1486,6 +1649,18 @@ impl QueryService {
             }
         };
         let pin = context.pin().clone();
+        if let Some(authority) = terminal {
+            if authority.ensure_pin(&pin).is_err() {
+                let _ = self
+                    .operation
+                    .fail(
+                        plan_id,
+                        &serde_json::json!({"reason": "terminal_authority_changed"}),
+                    )
+                    .await;
+                return Err(AgentQueryRunPrepareError::AuthorityChanged);
+            }
+        }
         if ensure_operation_scope(&planned, &pin).is_err() {
             let _ = self
                 .operation
@@ -1581,6 +1756,7 @@ impl QueryService {
             decision: payload.decision,
             max_rows: payload.max_rows.min(settings.max_rows).min(MAX_AGENT_ROWS),
             origin: payload.origin,
+            cancellation,
         })
     }
 
@@ -2140,6 +2316,23 @@ mod tests {
             directory
                 .close()
                 .expect("temporary SQLite directory must be removable after pool shutdown");
+        }
+
+        async fn terminal_authority(&self) -> TerminalAuthority {
+            let context = self
+                .connections
+                .pin(self.connection_id, ConnectionAccess::Read)
+                .await
+                .unwrap();
+            let pin = context.pin();
+            TerminalAuthority {
+                terminal_session_id: Uuid::new_v4(),
+                workspace_id: pin.scope.workspace_id,
+                account_scope: pin.scope.account_scope.storage_key().to_owned(),
+                connection_id: pin.connection_id,
+                connection_revision: pin.connection_revision,
+                client_protocol_version: dopedb_protocol::PROTOCOL_MAX,
+            }
         }
 
         async fn propose(
@@ -3309,13 +3502,14 @@ mod tests {
     #[tokio::test]
     async fn cli_origin_separates_audit_but_keeps_dashboard_eligible_history() {
         let harness = SqliteHarness::new().await;
+        let authority = harness.terminal_authority().await;
         let plan_receipt = harness
             .service
-            .plan_agent_read(AgentQueryPlanRequest {
+            .plan_terminal_read(TerminalQueryPlanRequest {
                 connection_id: harness.connection_id,
                 sql: "SELECT id FROM users ORDER BY id".into(),
                 max_rows: Some(1),
-                origin: AgentQueryInvocationOrigin::Cli,
+                authority: authority.clone(),
             })
             .await
             .unwrap();
@@ -3323,7 +3517,7 @@ mod tests {
         drop(plan_receipt);
         let run_receipt = harness
             .service
-            .prepare_agent_run(plan_id)
+            .prepare_terminal_run(plan_id, &authority)
             .await
             .unwrap()
             .execute()
@@ -3355,6 +3549,85 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["cli:plan_query", "cli:run_query"]
         );
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn terminal_sql_preview_rejects_changed_authority_before_target_access() {
+        let harness = SqliteHarness::new().await;
+        let mut authority = harness.terminal_authority().await;
+        authority.workspace_id = Uuid::new_v4();
+
+        let error = match harness
+            .service
+            .preview_sql(
+                DesktopSqlPreviewRequest {
+                    connection_id: harness.connection_id,
+                    sql: "SELECT id FROM users".into(),
+                },
+                Some(&authority),
+            )
+            .await
+        {
+            Err(error) => error.into_error(),
+            Ok(_) => panic!("a stale Terminal authority must fail before target preview"),
+        };
+        assert!(matches!(
+            error,
+            AppError::Blocked { ref reason }
+                if reason == "Terminal connection authority is no longer current"
+        ));
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn terminal_cancel_registered_at_claim_is_not_lost_before_execution() {
+        let harness = SqliteHarness::new().await;
+        let authority = harness.terminal_authority().await;
+        let plan_receipt = harness
+            .service
+            .plan_terminal_read(TerminalQueryPlanRequest {
+                connection_id: harness.connection_id,
+                sql: "SELECT id FROM users ORDER BY id".into(),
+                max_rows: Some(1),
+                authority: authority.clone(),
+            })
+            .await
+            .unwrap();
+        let plan_id = plan_receipt.plan().plan_id;
+        drop(plan_receipt);
+
+        let prepared = harness
+            .service
+            .prepare_terminal_run(plan_id, &authority)
+            .await
+            .unwrap();
+        let signalled = harness
+            .operation_service
+            .cancel_terminal(&authority, plan_id)
+            .await
+            .unwrap();
+        assert_eq!(signalled.state, OperationState::Executing);
+
+        let error = match prepared.execute().await {
+            Err(error) => error,
+            Ok(_) => panic!("a pre-signalled Terminal query must not reach a successful result"),
+        };
+        assert!(matches!(
+            error,
+            AgentQueryRunError::Execution(ref failure)
+                if matches!(
+                    failure.error(),
+                    AppError::Safety(reason) if reason == "query cancelled"
+                )
+        ));
+        drop(error);
+        let summary = harness
+            .operation_service
+            .show_terminal(&authority, plan_id)
+            .await
+            .unwrap();
+        assert_eq!(summary.state, OperationState::Cancelled);
         harness.close().await;
     }
 

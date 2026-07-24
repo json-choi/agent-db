@@ -1,0 +1,181 @@
+[
+  {
+    "command": "connection.list",
+    "arguments": {},
+    "result": {
+      "connections": [
+        {
+          "id": "00000000-0000-0000-0000-000000000001",
+          "name": "Production",
+          "engine": "postgres",
+          "database": "app",
+          "environment": "prod",
+          "readonly": true,
+          "allowWrites": false
+        }
+      ]
+    }
+  },
+  {
+    "command": "connection.show",
+    "arguments": {
+      "connection": "id:00000000-0000-0000-0000-000000000001"
+    },
+    "result": {
+      "id": "00000000-0000-0000-0000-000000000001",
+      "name": "Production",
+      "engine": "postgres",
+      "database": "app",
+      "environment": "prod",
+      "readonly": true,
+      "allowWrites": false
+    }
+  },
+  {
+    "command": "connection.test",
+    "arguments": {
+      "connection": "name:Production"
+    },
+    "result": {
+      "connection": {
+        "id": "00000000-0000-0000-0000-000000000001",
+        "name": "Production",
+        "engine": "postgres",
+        "database": "app",
+        "environment": "prod",
+        "readonly": true,
+        "allowWrites": false
+      },
+      "reachable": true
+    }
+  },
+  {
+    "command": "catalog.show",
+    "arguments": {
+      "connection": "current"
+    },
+    "resultFixture": "catalog-snapshot-v2"
+  },
+  {
+    "command": "schema.list",
+    "arguments": {
+      "connection": "id:00000000-0000-0000-0000-000000000001"
+    },
+    "result": {
+      "connectionId": "00000000-0000-0000-0000-000000000001",
+      "schemas": [
+        {
+          "name": "public",
+          "relationCount": 1,
+          "routineCount": 0,
+          "objectCount": 0
+        }
+      ]
+    }
+  },
+  {
+    "command": "table.describe",
+    "arguments": {
+      "connection": "id:00000000-0000-0000-0000-000000000001",
+      "table": "public.users"
+    },
+    "resultFixture": "catalog-relation-0"
+  },
+  {
+    "command": "query.plan",
+    "arguments": {
+      "connection": "id:00000000-0000-0000-0000-000000000001",
+      "sql": "SELECT id, email FROM public.users",
+      "maxRows": 100
+    },
+    "result": {
+      "connectionId": "00000000-0000-0000-0000-000000000001",
+      "connectionName": "Production",
+      "environment": "prod",
+      "planId": "00000000-0000-0000-0000-000000000002",
+      "decision": "allow",
+      "notices": [],
+      "suggestions": [],
+      "estimatedRows": 42,
+      "health": {
+        "level": "healthy",
+        "coverage": "full",
+        "totalConnections": 4,
+        "maxConnections": 100,
+        "connectionUsagePercent": 4.0,
+        "activeQueries": 1,
+        "longRunningQueries": 0,
+        "lockWaits": 0,
+        "replicationLagSeconds": 0.0,
+        "reasons": [],
+        "capturedAt": "2026-07-24T00:00:00Z"
+      },
+      "expiresAt": "2026-07-24T00:05:00Z"
+    }
+  },
+  {
+    "command": "query.run",
+    "arguments": {
+      "planId": "00000000-0000-0000-0000-000000000002"
+    },
+    "result": {
+      "connectionId": "00000000-0000-0000-0000-000000000001",
+      "connectionName": "Production",
+      "planId": "00000000-0000-0000-0000-000000000002",
+      "queryRunId": "00000000-0000-0000-0000-000000000004",
+      "planningDecision": "allow",
+      "result": {
+        "columns": [
+          "id",
+          "email"
+        ],
+        "rows": [
+          [
+            1,
+            "reader@example.test"
+          ]
+        ],
+        "rowCount": 1,
+        "truncated": false,
+        "durationMs": 3
+      }
+    }
+  },
+  {
+    "command": "query.cancel",
+    "arguments": {
+      "operationId": "00000000-0000-0000-0000-000000000003"
+    },
+    "resultFixture": "operation-summary"
+  },
+  {
+    "command": "sql.propose",
+    "arguments": {
+      "connection": "id:00000000-0000-0000-0000-000000000001",
+      "sql": "UPDATE public.users SET email = 'new@example.test' WHERE id = 1"
+    },
+    "resultFixture": "operation-summary"
+  },
+  {
+    "command": "operation.show",
+    "arguments": {
+      "operationId": "00000000-0000-0000-0000-000000000003"
+    },
+    "resultFixture": "operation-summary"
+  },
+  {
+    "command": "operation.wait",
+    "arguments": {
+      "operationId": "00000000-0000-0000-0000-000000000003",
+      "timeoutMs": 30000
+    },
+    "resultFixture": "operation-summary"
+  },
+  {
+    "command": "operation.cancel",
+    "arguments": {
+      "operationId": "00000000-0000-0000-0000-000000000003"
+    },
+    "resultFixture": "operation-summary"
+  }
+]

@@ -6,6 +6,9 @@ use crate::connection::{ConnectionAccess, ConnectionManager};
 use crate::error::AppResult;
 use crate::introspect::{self, Catalog, CatalogReadMode};
 use crate::store::Store;
+use dopedb_protocol::CatalogSnapshot;
+
+use super::TerminalAuthority;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CatalogReadPolicy {
@@ -41,6 +44,33 @@ impl CatalogService {
         policy: CatalogReadPolicy,
     ) -> AppResult<Catalog> {
         introspect::load_catalog(&self.store, &self.connections, connection_id, policy.into()).await
+    }
+
+    pub(crate) async fn load_snapshot(
+        &self,
+        connection_id: Uuid,
+        policy: CatalogReadPolicy,
+    ) -> AppResult<CatalogSnapshot> {
+        introspect::load_catalog_snapshot(
+            &self.store,
+            &self.connections,
+            connection_id,
+            policy.into(),
+        )
+        .await
+    }
+
+    pub(crate) async fn load_terminal_snapshot(
+        &self,
+        authority: &TerminalAuthority,
+        policy: CatalogReadPolicy,
+    ) -> AppResult<CatalogSnapshot> {
+        let authority_context = self
+            .connections
+            .pin(authority.connection_id, ConnectionAccess::Read)
+            .await?;
+        authority.ensure_pin(authority_context.pin())?;
+        self.load_snapshot(authority.connection_id, policy).await
     }
 
     pub(crate) async fn table_ddl(

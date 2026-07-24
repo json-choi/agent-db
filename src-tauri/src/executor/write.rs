@@ -3,7 +3,6 @@
 //! pool and reports exactly how many rows committed.
 
 use sqlx::AssertSqlSafe;
-use uuid::Uuid;
 
 use crate::connection::{LiveConnection, Pool};
 use crate::error::{AppError, AppResult};
@@ -16,15 +15,17 @@ use crate::operations::ExecutionGrant;
 /// Hard guard: returns `AppError::Blocked` unless `settings.allow_writes`. On any
 /// error the `?` short-circuits before COMMIT and the dropped transaction rolls back,
 /// so a failed statement leaves the DB unchanged.
-pub async fn run_write(
+/// Execute an approved write with the cancellation slot created by the Operation
+/// Runtime caller before its durable claim.
+pub(crate) async fn run_write(
     live: &LiveConnection,
     _engine: Engine, // pool enum is self-describing; kept to honor the executor contract
     sql: &str,
     settings: &SafetySettings,
     grant: &ExecutionGrant,
-    query_id: Option<Uuid>,
+    cancellation: &cancel::CancelHandle,
 ) -> AppResult<ExecOutcome> {
-    if query_id != Some(grant.operation_id()) {
+    if cancellation.id() != grant.operation_id() {
         return Err(AppError::Blocked {
             reason: "write cancellation scope does not match its approved operation".into(),
         });
@@ -83,7 +84,8 @@ pub async fn run_write(
         Ok::<u64, AppError>(affected)
     };
 
-    let affected = cancel::guard(query_id, cancel::QUERY_TIMEOUT, inner).await?;
+    let affected =
+        cancel::guard_registered(Some(cancellation), cancel::QUERY_TIMEOUT, inner).await?;
 
     Ok(ExecOutcome {
         result: None,

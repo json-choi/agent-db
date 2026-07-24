@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "runtimeId": "018f0000-1111-7222-8333-444455556666",
+  "pid": 4242,
+  "appVersion": "0.3.3",
+  "protocolMin": 1,
+  "protocolMax": 1,
+  "endpoint": "/Users/fixture/Library/Application Support/dopedb/runtime/broker-018f000011117222.sock",
+  "startedAt": "2026-07-24T00:00:00Z"
+}

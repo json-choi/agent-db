@@ -4,6 +4,7 @@
 use std::fmt;
 use std::sync::Arc;
 
+use dopedb_protocol::ConnectionSelector;
 use serde::Serialize;
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -15,6 +16,7 @@ use crate::model::{ConnectionProfile, Engine, WorkspaceConnectionAccess, Workspa
 use crate::store::Store;
 
 use super::connection_credentials::{ConnectionCredentialVault, MAX_CONNECTION_CREDENTIAL_BYTES};
+use super::TerminalAuthority;
 
 pub(crate) struct ConnectionUpsertRequest {
     pub(crate) profile: ConnectionProfile,
@@ -63,6 +65,27 @@ pub(crate) enum LegacyConnectionResolutionError {
     NoConnections,
     NoMatch { selector: String },
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CliConnectionResolutionError {
+    NoMatch,
+    Ambiguous {
+        candidates: Vec<AgentConnectionSummary>,
+    },
+}
+
+impl fmt::Display for CliConnectionResolutionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoMatch => formatter.write_str("no connection matches the exact selector"),
+            Self::Ambiguous { .. } => {
+                formatter.write_str("the exact connection name matches more than one connection")
+            }
+        }
+    }
+}
+
+impl std::error::Error for CliConnectionResolutionError {}
 
 impl fmt::Display for LegacyConnectionResolutionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -331,6 +354,42 @@ impl ConnectionService {
             .collect())
     }
 
+    pub(crate) async fn terminal_summary(
+        &self,
+        authority: &TerminalAuthority,
+    ) -> AppResult<AgentConnectionSummary> {
+        let context = self
+            .connections
+            .pin(authority.connection_id, ConnectionAccess::Read)
+            .await?;
+        authority.ensure_pin(context.pin())?;
+        Ok(AgentConnectionSummary::from(&context.pin().profile))
+    }
+
+    /// Return only the connection pinned to this Terminal capability. A Terminal
+    /// session is not a workspace-wide metadata grant, so listing must not disclose
+    /// sibling connection names merely because the desktop user can see them.
+    pub(crate) async fn list_terminal_summaries(
+        &self,
+        authority: &TerminalAuthority,
+    ) -> AppResult<Vec<AgentConnectionSummary>> {
+        let context = self
+            .connections
+            .pin(authority.connection_id, ConnectionAccess::Read)
+            .await?;
+        authority.ensure_pin(context.pin())?;
+        Ok(vec![AgentConnectionSummary::from(&context.pin().profile)])
+    }
+
+    pub(crate) async fn test_terminal(&self, authority: &TerminalAuthority) -> AppResult<()> {
+        let context = self
+            .connections
+            .pin(authority.connection_id, ConnectionAccess::Read)
+            .await?;
+        authority.ensure_pin(context.pin())?;
+        context.test_fresh().await
+    }
+
     /// Preserve the legacy MCP selector exactly: profiles are already name-ordered by
     /// [`Store::list_connections`]; `None` chooses the first, while `Some` finds the
     /// first exact UUID string or exact case-sensitive name.
@@ -343,6 +402,26 @@ impl ConnectionService {
     ) -> AppResult<LegacyConnectionResolution> {
         let profiles = self.list_profiles().await?;
         Ok(resolve_legacy_profiles(&profiles, selector))
+    }
+
+    /// Resolve an exact CLI selector under the same immutable scope that owns the
+    /// Terminal session. The returned summary remains secret-free.
+    pub(crate) async fn resolve_terminal_cli(
+        &self,
+        authority: &TerminalAuthority,
+        selector: &ConnectionSelector,
+    ) -> AppResult<Result<AgentConnectionSummary, CliConnectionResolutionError>> {
+        let context = self
+            .connections
+            .pin(authority.connection_id, ConnectionAccess::Read)
+            .await?;
+        authority.ensure_pin(context.pin())?;
+        let summaries = self.list_agent_summaries().await?;
+        Ok(resolve_cli_summaries(
+            &summaries,
+            selector,
+            authority.connection_id,
+        ))
     }
 }
 
@@ -392,6 +471,38 @@ fn resolve_legacy_profiles(
             .first()
             .map(AgentConnectionSummary::from)
             .ok_or(LegacyConnectionResolutionError::NoConnections),
+    }
+}
+
+fn resolve_cli_summaries(
+    summaries: &[AgentConnectionSummary],
+    selector: &ConnectionSelector,
+    current_connection_id: Uuid,
+) -> Result<AgentConnectionSummary, CliConnectionResolutionError> {
+    match selector {
+        ConnectionSelector::Id(id) => summaries
+            .iter()
+            .find(|summary| summary.id == *id)
+            .cloned()
+            .ok_or(CliConnectionResolutionError::NoMatch),
+        ConnectionSelector::Current => summaries
+            .iter()
+            .find(|summary| summary.id == current_connection_id)
+            .cloned()
+            .ok_or(CliConnectionResolutionError::NoMatch),
+        ConnectionSelector::Name(name) => {
+            let mut candidates = summaries
+                .iter()
+                .filter(|summary| summary.name == *name)
+                .cloned()
+                .collect::<Vec<_>>();
+            candidates.sort_by_key(|summary| summary.id);
+            match candidates.as_slice() {
+                [only] => Ok(only.clone()),
+                [] => Err(CliConnectionResolutionError::NoMatch),
+                _ => Err(CliConnectionResolutionError::Ambiguous { candidates }),
+            }
+        }
     }
 }
 
@@ -628,6 +739,81 @@ mod tests {
                 selector: "missing".into(),
             })
         );
+    }
+
+    #[test]
+    fn cli_selector_never_picks_the_first_duplicate_name() {
+        let alpha = AgentConnectionSummary::from(&profile(ALPHA_ID, "duplicate"));
+        let beta = AgentConnectionSummary::from(&profile(BETA_ID, "duplicate"));
+        let summaries = vec![beta.clone(), alpha.clone()];
+
+        assert_eq!(
+            resolve_cli_summaries(
+                &summaries,
+                &ConnectionSelector::Current,
+                Uuid::parse_str(ALPHA_ID).unwrap(),
+            ),
+            Ok(alpha.clone())
+        );
+        assert_eq!(
+            resolve_cli_summaries(
+                &summaries,
+                &ConnectionSelector::Id(beta.id),
+                Uuid::parse_str(ALPHA_ID).unwrap(),
+            ),
+            Ok(beta)
+        );
+        assert_eq!(
+            resolve_cli_summaries(
+                &summaries,
+                &ConnectionSelector::Name("duplicate".into()),
+                Uuid::parse_str(ALPHA_ID).unwrap(),
+            ),
+            Err(CliConnectionResolutionError::Ambiguous {
+                candidates: vec![
+                    AgentConnectionSummary::from(&profile(ALPHA_ID, "duplicate")),
+                    AgentConnectionSummary::from(&profile(BETA_ID, "duplicate")),
+                ],
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn terminal_list_does_not_disclose_sibling_connections() {
+        let (service, _store, _credentials) = harness().await;
+        let pinned_id = Uuid::new_v4();
+        let sibling_id = Uuid::new_v4();
+        for profile in [
+            local_profile(pinned_id, "pinned", Engine::Sqlite),
+            local_profile(sibling_id, "sibling", Engine::Sqlite),
+        ] {
+            service
+                .upsert(ConnectionUpsertRequest {
+                    profile,
+                    password: None,
+                })
+                .await
+                .unwrap();
+        }
+        let context = service
+            .connections
+            .pin(pinned_id, ConnectionAccess::Read)
+            .await
+            .unwrap();
+        let pin = context.pin();
+        let authority = TerminalAuthority {
+            terminal_session_id: Uuid::new_v4(),
+            workspace_id: pin.scope.workspace_id,
+            account_scope: pin.scope.account_scope.storage_key().into(),
+            connection_id: pin.connection_id,
+            connection_revision: pin.connection_revision,
+            client_protocol_version: dopedb_protocol::PROTOCOL_MAX,
+        };
+
+        let listed = service.list_terminal_summaries(&authority).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, pinned_id);
+        assert!(listed.iter().all(|summary| summary.id != sibling_id));
     }
 
     #[tokio::test]

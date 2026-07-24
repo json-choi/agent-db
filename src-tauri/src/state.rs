@@ -2,6 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
+use crate::broker::BrokerRuntime;
 use crate::connection::ConnectionManager;
 use crate::error::AppResult;
 use crate::features::{FeatureFlag, FeatureFlags};
@@ -36,6 +37,8 @@ pub struct AppState {
     pub mcp_runtime: Arc<Mutex<McpRuntime>>,
     /// In-app agent chat memory (resumable CLI session id + active-turn tracking).
     pub chat: crate::agent::ChatState,
+    /// Owner-local CLI broker. Session capabilities live only inside this runtime.
+    pub(crate) broker: BrokerRuntime,
     /// Safety-sensitive rollout gates captured once for this app runtime.
     pub features: crate::features::FeatureFlags,
     /// Desktop-only approval capability. MCP/CLI/Agent adapters receive only the
@@ -45,10 +48,15 @@ pub struct AppState {
 
 impl AppState {
     pub async fn new() -> AppResult<Self> {
-        let features = FeatureFlags::new([FeatureFlag::OperationRuntimeV1]);
+        let features = FeatureFlags::new([
+            FeatureFlag::OperationRuntimeV1,
+            FeatureFlag::LocalBrokerV1,
+            FeatureFlag::CliV1,
+        ]);
         let store = Store::open().await?;
         let connections = ConnectionManager::new(store.clone());
         let (operation, local_operation_approval) = OperationRuntime::new(&store);
+        let broker = BrokerRuntime::new(operation.runtime_id());
         let services = ApplicationServices::new(store.clone(), connections.clone(), operation);
         if features.is_enabled(FeatureFlag::OperationRuntimeV1) {
             services.operation.recover_previous_runtimes().await?;
@@ -60,6 +68,7 @@ impl AppState {
             mcp_token: crate::mcp::load_or_create_token(),
             mcp_runtime: Arc::new(Mutex::new(McpRuntime::default())),
             chat: crate::agent::chat_state(),
+            broker,
             features,
             local_operation_approval,
         })

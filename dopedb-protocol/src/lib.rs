@@ -3,19 +3,38 @@
 //! dependencies so adapters cannot accidentally become a second execution path.
 
 pub mod catalog;
+pub mod catalog_command;
+pub mod command;
+pub mod connection;
+pub mod discovery;
 pub mod error;
 pub mod frame;
 pub mod operation;
+pub mod operation_command;
+pub mod query_command;
 pub mod request;
 pub mod response;
 pub mod version;
 
 pub use catalog::*;
+pub use catalog_command::*;
+pub use command::{
+    decode_arguments, AppOpenArguments, AppOpenCommand, AppOpenResult, AuthenticationRequirement,
+    CommandPayloadError, CommandSpec, EmptyArguments, StatusCommand, StatusResult, VersionCommand,
+    VersionResult,
+};
+pub use connection::*;
+pub use discovery::{
+    RuntimeDiscovery, RuntimeDiscoveryError, RUNTIME_DIRECTORY_NAME, RUNTIME_FILE_NAME,
+    RUNTIME_SCHEMA_VERSION,
+};
 pub use error::{ErrorCode, ProtocolError};
 pub use frame::{decode_frame, encode_frame, parse_frame_length, FrameError, FramePayload};
 pub use operation::{
     OperationActorKind, OperationEventKind, OperationKind, OperationRiskLevel, OperationState,
 };
+pub use operation_command::*;
+pub use query_command::*;
 pub use request::{CommandName, RequestEnvelope, SessionAuthentication};
 pub use response::ResponseEnvelope;
 pub use version::{

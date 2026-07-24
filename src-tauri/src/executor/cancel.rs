@@ -9,6 +9,7 @@
 //! connection dropped mid-statement to the pool, it closes it — so no corrupted
 //! connection leaks back.
 
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
@@ -23,7 +24,12 @@ pub const QUERY_TIMEOUT: Duration = Duration::from_secs(300);
 
 // ponytail: one global lock over a small map keyed by unique v4 UUIDs. Contention
 // is a non-issue at desktop scale; shard only if that ever changes.
-static REGISTRY: LazyLock<Mutex<HashMap<Uuid, watch::Sender<bool>>>> =
+struct CancelSlot {
+    sender: watch::Sender<bool>,
+    handles: usize,
+}
+
+static REGISTRY: LazyLock<Mutex<HashMap<Uuid, CancelSlot>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// A live cancellation slot. Unregisters itself on drop (query finished/aborted).
@@ -33,6 +39,16 @@ pub struct CancelHandle {
 }
 
 impl CancelHandle {
+    /// Exact operation/query identity that owns this cancellation slot.
+    pub const fn id(&self) -> Uuid {
+        self.id
+    }
+
+    /// Return the currently stored signal without waiting.
+    pub fn is_cancelled(&self) -> bool {
+        *self.rx.borrow()
+    }
+
     /// Resolves once the query is cancelled. `watch` stores the flag, so a cancel
     /// that races ahead of this await is never lost.
     pub async fn cancelled(&self) {
@@ -42,25 +58,43 @@ impl CancelHandle {
 }
 
 impl Drop for CancelHandle {
-    // ponytail: unique ids mean the entry we remove is always our own; if a caller
-    // ever reuses an id, last-writer-wins and the older handle drops the shared slot.
     fn drop(&mut self) {
-        REGISTRY.lock().unwrap().remove(&self.id);
+        let mut registry = REGISTRY.lock().unwrap();
+        let Entry::Occupied(mut entry) = registry.entry(self.id) else {
+            return;
+        };
+        if entry.get().handles > 1 {
+            entry.get_mut().handles -= 1;
+        } else {
+            entry.remove();
+        }
     }
 }
 
-/// Register a cancellation slot for `id`. Drop the returned handle to unregister.
+/// Register or join the cancellation slot for `id`. Concurrent claim attempts for
+/// one immutable operation share the same signal, and the slot remains registered
+/// until every handle has dropped.
 pub fn register(id: Uuid) -> CancelHandle {
-    let (tx, rx) = watch::channel(false);
-    REGISTRY.lock().unwrap().insert(id, tx);
+    let mut registry = REGISTRY.lock().unwrap();
+    let rx = match registry.entry(id) {
+        Entry::Occupied(mut entry) => {
+            entry.get_mut().handles += 1;
+            entry.get().sender.subscribe()
+        }
+        Entry::Vacant(entry) => {
+            let (sender, receiver) = watch::channel(false);
+            entry.insert(CancelSlot { sender, handles: 1 });
+            receiver
+        }
+    };
     CancelHandle { id, rx }
 }
 
 /// Signal cancellation for `id`. Returns `true` iff a query was registered under it.
 pub fn cancel(id: Uuid) -> bool {
     match REGISTRY.lock().unwrap().get(&id) {
-        Some(tx) => {
-            let _ = tx.send(true);
+        Some(slot) => {
+            let _ = slot.sender.send(true);
             true
         }
         None => false,
@@ -75,10 +109,24 @@ where
     F: std::future::Future<Output = AppResult<T>>,
 {
     let handle = query_id.map(register); // dropped at fn end → unregister
+    guard_registered(handle.as_ref(), wall, fut).await
+}
+
+/// Run under a cancellation slot that was registered before an async preparation
+/// boundary. This keeps a cancel signal sent immediately after an operation claim
+/// from being lost before target execution begins.
+pub async fn guard_registered<T, F>(
+    handle: Option<&CancelHandle>,
+    wall: Duration,
+    fut: F,
+) -> AppResult<T>
+where
+    F: std::future::Future<Output = AppResult<T>>,
+{
     tokio::select! {
         biased;
         _ = async {
-            match &handle {
+            match handle {
                 Some(h) => h.cancelled().await,
                 None => std::future::pending::<()>().await,
             }
@@ -108,9 +156,28 @@ mod tests {
         let id = Uuid::new_v4();
         assert!(!cancel(id), "nothing registered yet");
         let handle = register(id);
+        assert!(!handle.is_cancelled());
         assert!(cancel(id), "registered → cancellable");
+        assert!(handle.is_cancelled());
         drop(handle);
         assert!(!cancel(id), "dropped → auto-unregistered");
+    }
+
+    #[test]
+    fn duplicate_handles_share_one_signal_and_do_not_unregister_each_other() {
+        let id = Uuid::new_v4();
+        let first = register(id);
+        let second = register(id);
+
+        drop(second);
+        assert!(
+            cancel(id),
+            "the surviving execution handle must remain cancellable"
+        );
+        assert!(first.is_cancelled());
+
+        drop(first);
+        assert!(!cancel(id), "the final handle removes the shared slot");
     }
 
     #[tokio::test]

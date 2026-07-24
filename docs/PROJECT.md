@@ -12,6 +12,7 @@ Current scope:
 - Landing site: Next.js under `site/`, hosted at https://dopedb.dev
 - Databases: PostgreSQL, MySQL/MariaDB, SQLite
 - MCP: local Streamable HTTP endpoint plus stdio bridge
+- CLI transition: owner-local UDS/named-pipe Broker plus the bundled `dopedb` sidecar
 - Distribution: GitHub Releases and Tauri updater metadata
 
 Planned team collaboration, workspace-scoped provider integrations, shared
@@ -27,11 +28,24 @@ The Rust core owns the trust boundary:
 - `safety/`: SQL classification, read-only enforcement, preview, and approval policy
 - `executor/`: read execution and gated write execution
 - `audit/`: query history and hash-chained audit records
+- `services/`: transport-neutral connection, catalog, query, dashboard, and operation behavior
+- `operations/`: immutable exact-payload plans, approvals, claims, and lifecycle receipts
+- `broker/`: owner-local, versioned UDS/named-pipe control messages for the CLI
+- `cli_install.rs`: bundled in-app resolver and explicit per-user CLI/PATH installation
 - `mcp/`: local MCP server, stdio bridge listener, tool handlers, and client config helpers
 - `store/`: local SQLite app store under the platform app data directory, including
   connection-scoped saved dashboard definitions
 
-The frontend renders database state and approval decisions. It does not own the safety decision. Writes and DDL require the Rust path to see both explicit approval and `allow_writes = true`.
+The frontend renders database state and approval decisions. It does not own the safety decision.
+Writes and DDL require an immutable Operation proposal, an exact stored approval, and
+`allow_writes = true`; transports cannot approve a replacement SQL payload.
+
+The Local Broker is the transition path for the bundled `dopedb` CLI. Public
+`version`, `status`, and `app open` calls do not carry a reusable secret. Database
+commands require an ephemeral in-memory Terminal capability pinned to one
+workspace/account/connection revision. The global discovery file contains only
+runtime metadata. MCP remains enabled only during the documented parity and
+cutover period.
 
 ## MCP Behavior
 
@@ -93,11 +107,14 @@ pnpm install
 pnpm tauri dev
 pnpm build
 pnpm site:build
-pnpm build:bridge
+pnpm build:sidecars
 cargo check --workspace
 ```
 
-The bridge sidecar must exist before Tauri build scripts validate `bundle.externalBin`. `pnpm build:bridge` stages the host binary into `src-tauri/binaries/`.
+The CLI and transition-period MCP bridge sidecars must exist before Tauri validates
+`bundle.externalBin`. `pnpm build:sidecars` builds both host binaries and stages their
+target-qualified artifacts into `src-tauri/binaries/`. `pnpm build:bridge` remains a
+compatibility alias and stages the same complete set.
 
 ## Landing Site
 
@@ -126,7 +143,7 @@ CI runs on pull requests and `main` pushes:
 - install root and site dependencies
 - build desktop frontend
 - build landing site
-- stage MCP bridge sidecar
+- stage CLI and MCP bridge sidecars
 - run `cargo check --workspace`
 
 Stable release runs only on an owner-created `app-v*` tag whose commit is already in `main` and whose version matches `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and `Cargo.lock`. The `stable-release` environment requires approval from `@json-choi` before the signing key and write token are available:

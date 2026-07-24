@@ -214,6 +214,17 @@ impl OperationRuntime {
             .await
     }
 
+    /// Cancel a plan that has not been claimed for execution. Callers must signal
+    /// the executor instead when the current state is `executing`.
+    pub(crate) async fn cancel_before_execution(
+        &self,
+        operation_id: Uuid,
+        details: &Value,
+    ) -> AppResult<OperationRecord> {
+        self.finish(operation_id, OperationState::Cancelled, details)
+            .await
+    }
+
     pub(crate) async fn mark_outcome_unknown(
         &self,
         operation_id: Uuid,

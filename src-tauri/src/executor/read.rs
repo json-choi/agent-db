@@ -42,6 +42,19 @@ pub async fn run_read(
     max_rows: u64,
     query_id: Option<Uuid>,
 ) -> AppResult<QueryResult> {
+    let cancellation = query_id.map(cancel::register);
+    run_read_registered(live, _engine, sql, max_rows, cancellation.as_ref()).await
+}
+
+/// Execute through a cancellation slot registered before the caller's durable
+/// operation claim, so an immediate cancel cannot be replaced by a second slot.
+pub(crate) async fn run_read_registered(
+    live: &LiveConnection,
+    _engine: Engine,
+    sql: &str,
+    max_rows: u64,
+    cancellation: Option<&cancel::CancelHandle>,
+) -> AppResult<QueryResult> {
     let started = Instant::now();
     let max = max_rows as usize;
 
@@ -82,7 +95,7 @@ pub async fn run_read(
         })
     };
 
-    let mut result = cancel::guard(query_id, cancel::QUERY_TIMEOUT, inner).await?;
+    let mut result = cancel::guard_registered(cancellation, cancel::QUERY_TIMEOUT, inner).await?;
     result.duration_ms = started.elapsed().as_millis() as u64;
     Ok(result)
 }

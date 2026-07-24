@@ -1,0 +1,49 @@
+.cli-settings {
+  max-width: 760px;
+}
+
+.cli-status-list {
+  display: grid;
+  gap: var(--ds-space-2);
+  margin-top: var(--ds-space-4);
+  padding-block: var(--ds-space-3);
+  border-block: var(--ds-border-width) solid var(--ds-border-subtle);
+}
+
+.cli-status-list > div {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.35fr) minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--ds-space-3);
+}
+
+.cli-status-list code {
+  overflow-wrap: anywhere;
+}
+
+.cli-path-change {
+  margin-top: var(--ds-space-4);
+}
+
+.cli-path-change p {
+  margin-block: var(--ds-space-1) var(--ds-space-2);
+}
+
+.cli-path-change pre {
+  max-height: 220px;
+  overflow: auto;
+  margin: 0;
+  padding: var(--ds-space-3);
+  border: var(--ds-border-width) solid var(--ds-border-subtle);
+  border-radius: var(--ds-radius-sm);
+  background: var(--ds-surface-1);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 620px) {
+  .cli-status-list > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--ds-space-1);
+  }
+}

@@ -7,7 +7,9 @@ mod mysql;
 mod pg;
 mod sqlite;
 
-pub(crate) use catalog_v2::{load_cached_catalog, load_catalog, CatalogReadMode};
+pub(crate) use catalog_v2::{
+    load_cached_catalog, load_catalog, load_catalog_snapshot, CatalogReadMode,
+};
 
 use serde::{Deserialize, Serialize};
 

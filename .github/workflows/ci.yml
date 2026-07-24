@@ -73,8 +73,8 @@ jobs:
           GOOGLE_CLIENT_ID: ci-placeholder.apps.googleusercontent.com
           GOOGLE_CLIENT_SECRET: ci-only-placeholder
 
-      - name: Stage MCP bridge sidecar
-        run: pnpm build:bridge
+      - name: Stage sidecars
+        run: pnpm build:sidecars
 
       - name: Check Rust workspace
         run: cargo check --workspace
@@ -128,8 +128,8 @@ jobs:
       - name: Test desktop frontend
         run: pnpm test
 
-      - name: Stage Windows MCP bridge sidecar
-        run: pnpm build:bridge
+      - name: Stage Windows sidecars
+        run: pnpm build:sidecars
 
       - name: Check Rust workspace
         run: cargo check --workspace

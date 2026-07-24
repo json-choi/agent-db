@@ -1,0 +1,10 @@
+{
+  "protocolVersion": 1,
+  "requestId": "018f1111-2222-7333-8444-555566667777",
+  "ok": false,
+  "error": {
+    "code": "runtime_unavailable",
+    "message": "the DopeDB runtime is unavailable",
+    "retryable": true
+  }
+}
