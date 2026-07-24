@@ -12,13 +12,11 @@ use tauri::State;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-use crate::connection::{self, ConnectionAccess};
 use crate::error::{AppError, AppResult};
 use crate::model::{
     ConnectionProfile, Dashboard, DashboardDraft, DocumentQuery, HistoryEntry,
-    PlatformFeatureFlags, SafetySettings, Workspace, WorkspaceAuthState, WorkspaceAuthUser,
-    WorkspaceConnectionAccess, WorkspaceCredentialMode, WorkspaceDeviceAuthorization,
-    WorkspaceFeatureState, WorkspaceKind, WorkspaceLoginPoll,
+    PlatformFeatureFlags, SafetySettings, Workspace, WorkspaceAuthState,
+    WorkspaceDeviceAuthorization, WorkspaceFeatureState, WorkspaceLoginPoll,
 };
 use crate::services::{
     AuditSnapshotReceipt, AuditVerdict, CatalogReadPolicy, ConnectionProfileTestRequest,
@@ -28,32 +26,15 @@ use crate::services::{
     DesktopSqlClassificationRequest, DesktopSqlInspectionError, DesktopSqlPreviewReceipt,
     DesktopSqlPreviewRequest, DesktopSqlRunError, DesktopSqlRunReceipt, DesktopSqlRunRequest,
     DocumentReadReceipt, MonitoringChangeRequest, MonitoringServiceError, MonitoringStatusReceipt,
+    WorkspaceConnectionCopyRequest, WorkspaceCredentialBindingRequest,
 };
 use crate::state::AppState;
-
-// ── helpers ──────────────────────────────────────────────────────────────────
-
-const MAX_CONNECTION_CREDENTIAL_BYTES: usize = 1 << 16;
-
-fn delete_secret_best_effort(id: Uuid, action: &'static str) {
-    if let Err(error) = connection::delete_secret(&id) {
-        tracing::warn!(credential_id = %id, %error, action, "credential cleanup deferred");
-    }
-}
 
 // ── workspace context ────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub fn workspace_feature_state() -> WorkspaceFeatureState {
-    let enabled = std::env::var("DOPEDB_WORKSPACES_ENABLED")
-        .map(|value| {
-            !matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "0" | "false" | "off"
-            )
-        })
-        .unwrap_or(true);
-    WorkspaceFeatureState { enabled }
+pub fn workspace_feature_state(state: State<'_, AppState>) -> WorkspaceFeatureState {
+    state.services.workspace.feature_state()
 }
 
 #[tauri::command]
@@ -70,8 +51,7 @@ pub fn platform_feature_flags(state: State<'_, AppState>) -> PlatformFeatureFlag
 
 #[tauri::command]
 pub async fn workspace_auth_state(state: State<'_, AppState>) -> AppResult<WorkspaceAuthState> {
-    ensure_active_workspace_account(&state).await?;
-    workspace_auth_state_from_store(&state).await
+    state.services.workspace.auth_state().await
 }
 
 /// Revalidate the active hosted session and memberships without making initial UI
@@ -81,38 +61,7 @@ pub async fn workspace_auth_state(state: State<'_, AppState>) -> AppResult<Works
 pub async fn refresh_workspace_auth_state(
     state: State<'_, AppState>,
 ) -> AppResult<WorkspaceAuthState> {
-    if state.store.workspace_accounts().await?.is_empty() {
-        if let Some(user) = crate::workspace_auth::migrate_legacy_session().await? {
-            if let Err(error) = sync_account_memberships(&state, &user).await {
-                tracing::warn!(%error, "legacy workspace membership sync deferred");
-            }
-            state
-                .connections
-                .activate_workspace_account(&user.id)
-                .await?;
-        }
-    }
-
-    ensure_active_workspace_account(&state).await?;
-    if let Some(user_id) = state.store.active_workspace_account_id().await? {
-        match crate::workspace_auth::auth_user(&user_id).await {
-            Ok(Some(user)) => {
-                if let Err(error) = sync_account_memberships(&state, &user).await {
-                    tracing::warn!(%error, "workspace membership sync deferred after session validation");
-                }
-            }
-            Ok(None) => {
-                state.connections.remove_workspace_account(&user_id).await?;
-                ensure_active_workspace_account(&state).await?;
-            }
-            Err(error) => {
-                // Keep the last verified identity visible during an outage. Every
-                // shared-resource action still performs its own online authorization.
-                tracing::warn!(%error, "workspace session validation deferred");
-            }
-        }
-    }
-    workspace_auth_state_from_store(&state).await
+    state.services.workspace.refresh_auth_state().await
 }
 
 #[tauri::command]
@@ -120,46 +69,19 @@ pub async fn workspace_sign_out(
     state: State<'_, AppState>,
     user_id: Option<String>,
 ) -> AppResult<WorkspaceAuthState> {
-    let user_id = match user_id {
-        Some(user_id) => user_id,
-        None => state
-            .store
-            .active_workspace_account_id()
-            .await?
-            .ok_or_else(|| AppError::Config("no workspace account is signed in".into()))?,
-    };
-    state.connections.remove_workspace_account(&user_id).await?;
-    // Pool retirement releases managed provider credentials while the Better Auth
-    // token is still available; session revocation and local token deletion follow.
-    crate::workspace_auth::sign_out(&user_id).await?;
-    workspace_auth_state_from_store(&state).await
+    state.services.workspace.sign_out(user_id).await
 }
 
 #[tauri::command]
 pub async fn workspace_sign_out_all(state: State<'_, AppState>) -> AppResult<WorkspaceAuthState> {
-    let accounts = state.store.workspace_accounts().await?;
-    let mut first_error = None;
-    for account in accounts {
-        if let Err(error) = state
-            .connections
-            .remove_workspace_account(&account.user.id)
-            .await
-        {
-            first_error.get_or_insert(error);
-        }
-        if let Err(error) = crate::workspace_auth::sign_out(&account.user.id).await {
-            first_error.get_or_insert(error);
-        }
-    }
-    if let Some(error) = first_error {
-        return Err(error);
-    }
-    workspace_auth_state_from_store(&state).await
+    state.services.workspace.sign_out_all().await
 }
 
 #[tauri::command]
-pub async fn begin_workspace_login() -> AppResult<WorkspaceDeviceAuthorization> {
-    crate::workspace_auth::begin_login().await
+pub async fn begin_workspace_login(
+    state: State<'_, AppState>,
+) -> AppResult<WorkspaceDeviceAuthorization> {
+    state.services.workspace.begin_login().await
 }
 
 #[tauri::command]
@@ -167,139 +89,20 @@ pub async fn poll_workspace_login(
     state: State<'_, AppState>,
     device_code: String,
 ) -> AppResult<WorkspaceLoginPoll> {
-    let result = crate::workspace_auth::poll_login(&device_code).await?;
-    if result.status == crate::model::WorkspaceLoginPollStatus::SignedIn {
-        let user = result
-            .user
-            .as_ref()
-            .ok_or_else(|| AppError::Network("workspace login did not return an account".into()))?;
-        if let Err(error) = sync_account_memberships(&state, user).await {
-            // The session token is already validated and stored. Do not report a
-            // successful login as failed merely because the first membership refresh
-            // encountered a transient control-plane or local-cache error.
-            tracing::warn!(%error, "workspace membership sync deferred after sign-in");
-        }
-        state
-            .connections
-            .activate_workspace_account(&user.id)
-            .await?;
-    }
-    Ok(result)
+    state.services.workspace.poll_login(&device_code).await
 }
 
 #[tauri::command]
-pub fn workspace_console_url(workspace_id: Option<Uuid>) -> AppResult<String> {
-    crate::workspace_auth::console_url(workspace_id)
-}
-
-async fn workspace_auth_state_from_store(state: &AppState) -> AppResult<WorkspaceAuthState> {
-    let accounts = state.store.workspace_accounts().await?;
-    let active_account_id = state.store.active_workspace_account_id().await?;
-    let user = active_account_id.and_then(|active_id| {
-        accounts
-            .iter()
-            .find(|account| account.user.id == active_id)
-            .map(|account| account.user.clone())
-    });
-    Ok(WorkspaceAuthState {
-        authenticated: user.is_some(),
-        user,
-        accounts,
-    })
-}
-
-async fn ensure_active_workspace_account(state: &AppState) -> AppResult<()> {
-    let active_account_id = state.store.active_workspace_account_id().await?;
-    let accounts = state.store.workspace_accounts().await?;
-    if active_account_id
-        .as_ref()
-        .is_some_and(|active_id| accounts.iter().any(|account| account.user.id == *active_id))
-    {
-        return Ok(());
-    }
-    if let Some(stale_id) = active_account_id {
-        state
-            .connections
-            .remove_workspace_account(&stale_id)
-            .await?;
-    } else if let Some(account) = accounts.first() {
-        state
-            .connections
-            .activate_workspace_account(&account.user.id)
-            .await?;
-    }
-    Ok(())
-}
-
-async fn validated_workspace_user(state: &AppState, user_id: &str) -> AppResult<WorkspaceAuthUser> {
-    match crate::workspace_auth::auth_user(user_id).await? {
-        Some(user) => Ok(user),
-        None => {
-            state.connections.remove_workspace_account(user_id).await?;
-            ensure_active_workspace_account(state).await?;
-            Err(AppError::Network(
-                "workspace session is no longer active".into(),
-            ))
-        }
-    }
-}
-
-async fn sync_account_memberships(state: &AppState, user: &WorkspaceAuthUser) -> AppResult<()> {
-    state.store.remember_workspace_account(user).await?;
-    let remote = crate::workspace_auth::remote_workspaces(&user.id).await?;
-    let workspaces = remote
-        .into_iter()
-        .map(|workspace| (workspace.id, workspace.name, workspace.role))
-        .collect::<Vec<_>>();
-    state
-        .connections
-        .sync_account_workspaces(user, &workspaces)
-        .await?;
-    let active = state.store.active_workspace().await?;
-    if active.kind == WorkspaceKind::Team
-        && state.store.active_workspace_account_id().await?.as_deref() == Some(user.id.as_str())
-    {
-        sync_workspace_connections(state, &user.id, active.id).await?;
-    }
-    Ok(())
-}
-
-async fn sync_workspace_connections(
-    state: &AppState,
-    account_user_id: &str,
-    workspace_id: Uuid,
-) -> AppResult<()> {
-    match crate::workspace_auth::remote_connections(account_user_id, workspace_id).await {
-        Ok(Some(connections)) => {
-            let removed_credential_ids = state
-                .connections
-                .sync_remote_connections(workspace_id, account_user_id, &connections)
-                .await?;
-            for credential_id in removed_credential_ids {
-                delete_secret_best_effort(credential_id, "remove_remote_connection");
-            }
-            Ok(())
-        }
-        Ok(None) => {
-            tracing::info!(
-                %workspace_id,
-                "shared connection API is not deployed yet; keeping the local workspace cache"
-            );
-            Ok(())
-        }
-        Err(error) => {
-            // Switching is local and remains usable during a control-plane outage.
-            // Shared execution still requires a fresh online authorization, so this
-            // stale cache cannot broaden database access.
-            tracing::warn!(%workspace_id, %error, "workspace connection sync deferred");
-            Ok(())
-        }
-    }
+pub fn workspace_console_url(
+    state: State<'_, AppState>,
+    workspace_id: Option<Uuid>,
+) -> AppResult<String> {
+    state.services.workspace.console_url(workspace_id)
 }
 
 #[tauri::command]
 pub async fn list_workspaces(state: State<'_, AppState>) -> AppResult<Vec<Workspace>> {
-    state.store.list_workspaces().await
+    state.services.workspace.list().await
 }
 
 /// Explicitly refresh hosted memberships without changing the cached authentication
@@ -308,30 +111,12 @@ pub async fn list_workspaces(state: State<'_, AppState>) -> AppResult<Vec<Worksp
 pub async fn refresh_workspace_memberships(
     state: State<'_, AppState>,
 ) -> AppResult<Vec<Workspace>> {
-    let accounts = state.store.workspace_accounts().await?;
-    for account in accounts {
-        match crate::workspace_auth::auth_user(&account.user.id).await {
-            Ok(Some(user)) => sync_account_memberships(&state, &user).await?,
-            Ok(None) => {
-                state
-                    .connections
-                    .remove_workspace_account(&account.user.id)
-                    .await?;
-            }
-            Err(error) => tracing::warn!(
-                user_id = %account.user.id,
-                %error,
-                "workspace account refresh deferred"
-            ),
-        }
-    }
-    ensure_active_workspace_account(&state).await?;
-    state.store.list_workspaces().await
+    state.services.workspace.refresh_memberships().await
 }
 
 #[tauri::command]
 pub async fn get_active_workspace(state: State<'_, AppState>) -> AppResult<Workspace> {
-    state.store.active_workspace().await
+    state.services.workspace.active().await
 }
 
 #[tauri::command]
@@ -340,34 +125,7 @@ pub async fn set_active_workspace(
     id: Uuid,
     account_user_id: Option<String>,
 ) -> AppResult<Workspace> {
-    let target = state
-        .store
-        .list_workspaces()
-        .await?
-        .into_iter()
-        .find(|workspace| workspace.id == id)
-        .ok_or_else(|| AppError::NotFound(format!("workspace {id}")))?;
-    if target.kind == WorkspaceKind::Team {
-        let user_id = account_user_id.as_deref().ok_or_else(|| {
-            AppError::Config("team workspace selection requires an account".into())
-        })?;
-        let user = validated_workspace_user(&state, user_id).await?;
-        sync_account_memberships(&state, &user).await?;
-    }
-    let workspace = state
-        .connections
-        .activate_workspace(id, account_user_id.as_deref())
-        .await?;
-    if workspace.kind == WorkspaceKind::Team {
-        let account_user_id = account_user_id.ok_or_else(|| {
-            AppError::Config("team workspace selection requires an account".into())
-        })?;
-        if let Err(error) = sync_workspace_connections(&state, &account_user_id, workspace.id).await
-        {
-            tracing::warn!(workspace_id = %workspace.id, %error, "workspace connection sync deferred after switch");
-        }
-    }
-    Ok(workspace)
+    state.services.workspace.activate(id, account_user_id).await
 }
 
 #[tauri::command]
@@ -375,18 +133,7 @@ pub async fn set_active_workspace_account(
     state: State<'_, AppState>,
     user_id: String,
 ) -> AppResult<Workspace> {
-    let user = validated_workspace_user(&state, &user_id).await?;
-    sync_account_memberships(&state, &user).await?;
-    let workspace = state
-        .connections
-        .activate_workspace_account(&user_id)
-        .await?;
-    if workspace.kind == WorkspaceKind::Team {
-        if let Err(error) = sync_workspace_connections(&state, &user_id, workspace.id).await {
-            tracing::warn!(workspace_id = %workspace.id, %error, "workspace connection sync deferred after account switch");
-        }
-    }
-    Ok(workspace)
+    state.services.workspace.activate_account(user_id).await
 }
 
 /// Copy a local connection into a team workspace. Only its redacted template crosses
@@ -398,130 +145,15 @@ pub async fn copy_connection_to_workspace(
     workspace_id: Uuid,
     account_user_id: String,
 ) -> AppResult<ConnectionProfile> {
-    let source = state.store.get_connection(connection_id).await?;
-    if source.workspace_access != WorkspaceConnectionAccess::Local {
-        return Err(AppError::Config(
-            "only a local connection can be copied into a workspace".into(),
-        ));
-    }
-    let target = state
-        .store
-        .list_workspaces()
-        .await?
-        .into_iter()
-        .find(|workspace| workspace.id == workspace_id && workspace.kind == WorkspaceKind::Team)
-        .ok_or_else(|| AppError::NotFound(format!("team workspace {workspace_id}")))?;
-    let current_account = state.store.active_workspace_account_id().await?;
-    if target.id == state.store.active_workspace_id().await?
-        && current_account.as_deref() == Some(account_user_id.as_str())
-    {
-        return Err(AppError::Config("choose a different team workspace".into()));
-    }
-    let account = state
-        .store
-        .workspace_accounts()
-        .await?
-        .into_iter()
-        .find(|account| {
-            account.user.id == account_user_id
-                && account
-                    .memberships
-                    .iter()
-                    .any(|membership| membership.workspace_id == workspace_id)
+    state
+        .services
+        .workspace
+        .copy_connection(WorkspaceConnectionCopyRequest {
+            connection_id,
+            workspace_id,
+            account_user_id,
         })
-        .ok_or_else(|| {
-            AppError::NotFound(format!(
-                "workspace {workspace_id} for account {account_user_id}"
-            ))
-        })?;
-
-    // Resolve every local prerequisite and snapshot the current remote collection
-    // before creating the server resource. This avoids a remote template being left
-    // behind merely because a later credential read or collection fetch failed.
-    let copied_secret = if source.secret_ref.is_some() {
-        Some(Zeroizing::new(connection::fetch_profile_secret(&source)?))
-    } else {
-        None
-    };
-    let mut remote = crate::workspace_auth::remote_connections(&account.user.id, workspace_id)
-        .await?
-        .ok_or_else(|| {
-            AppError::Network(
-                "the workspace service has not deployed shared connections yet".into(),
-            )
-        })?;
-    let credential_id = copied_secret.as_ref().map(|_| Uuid::new_v4());
-    if let (Some(credential_id), Some(secret)) = (credential_id, copied_secret.as_deref()) {
-        connection::store_secret(&credential_id, secret)?;
-    }
-    let shared =
-        crate::workspace_auth::share_connection(&account.user.id, workspace_id, &source).await;
-    let (created, revision) = match shared {
-        Ok(created) => created,
-        Err(error) => {
-            if let Some(credential_id) = credential_id {
-                delete_secret_best_effort(credential_id, "share_connection");
-            }
-            return Err(error);
-        }
-    };
-    remote.push((created.clone(), revision));
-    let credential_ref = credential_id.map(|id| id.to_string());
-    let local_result = async {
-        let removed_credential_ids = state
-            .connections
-            .sync_remote_connections(workspace_id, &account.user.id, &remote)
-            .await?;
-        for credential_id in removed_credential_ids {
-            delete_secret_best_effort(credential_id, "remove_remote_connection");
-        }
-        state
-            .store
-            .bind_connection_credentials(
-                created.id,
-                &account.user.id,
-                &source.username,
-                &source.extra_params,
-                credential_ref.as_deref(),
-            )
-            .await
-    }
-    .await;
-    match local_result {
-        Ok(profile) => Ok(profile),
-        Err(error) => {
-            if let Some(credential_id) = credential_id {
-                delete_secret_best_effort(credential_id, "persist_shared_connection");
-            }
-            match crate::workspace_auth::delete_connection(
-                &account.user.id,
-                workspace_id,
-                created.id,
-            )
-            .await
-            {
-                Ok(()) => {
-                    if let Err(cache_error) = state
-                        .store
-                        .purge_remote_connection_cache(workspace_id, created.id)
-                        .await
-                    {
-                        tracing::warn!(
-                            connection_id = %created.id,
-                            %cache_error,
-                            "rolled-back shared connection cache cleanup deferred"
-                        );
-                    }
-                }
-                Err(rollback_error) => tracing::warn!(
-                    connection_id = %created.id,
-                    %rollback_error,
-                    "shared connection rollback deferred"
-                ),
-            }
-            Err(error)
-        }
-    }
+        .await
 }
 
 /// Bind this member's own DB credential to a shared template. It is stored only in
@@ -533,79 +165,15 @@ pub async fn bind_workspace_connection_credentials(
     username: String,
     password: String,
 ) -> AppResult<ConnectionProfile> {
-    let username = username.trim();
-    if username.len() > 320 || username.chars().any(char::is_control) {
-        return Err(AppError::Config("username is invalid".into()));
-    }
-    if password.is_empty() || password.len() > MAX_CONNECTION_CREDENTIAL_BYTES {
-        return Err(AppError::Config(
-            "connection credential is empty or exceeds the size limit".into(),
-        ));
-    }
-    let password = Zeroizing::new(password);
-    let mutation = state
-        .connections
-        .begin_connection_mutation(id, ConnectionAccess::Read)
-        .await?;
-    let profile = mutation.pin().profile.clone();
-    if profile.workspace_access == WorkspaceConnectionAccess::Local {
-        return Err(AppError::Config(
-            "connection is not a shared workspace template".into(),
-        ));
-    }
-    if profile.credential_mode != WorkspaceCredentialMode::MemberLocal {
-        return Err(AppError::Blocked {
-            reason: "this shared connection uses automatically managed credentials".into(),
-        });
-    }
-    if !profile.workspace_access.can_read() {
-        return Err(AppError::Blocked {
-            reason: "your workspace role cannot execute this connection".into(),
-        });
-    }
-    let account_user_id = mutation
-        .pin()
-        .scope
-        .selected_account_id
-        .clone()
-        .ok_or_else(|| AppError::Config("no active workspace account".into()))?;
-    let previous_credential_id = profile
-        .secret_ref
-        .as_deref()
-        .map(Uuid::parse_str)
-        .transpose()
-        .map_err(|_| AppError::Config("connection secret reference is invalid".into()))?;
-    // Copy-on-write prevents a password-only rotation from mutating credential
-    // material behind an unchanged binding revision.
-    let credential_id = Uuid::new_v4();
-    connection::store_secret(&credential_id, password.as_str())?;
-    let credential_ref = credential_id.to_string();
-    match state
-        .store
-        .bind_connection_credentials(
-            id,
-            &account_user_id,
+    state
+        .services
+        .workspace
+        .bind_connection_credentials(WorkspaceCredentialBindingRequest {
+            connection_id: id,
             username,
-            &profile.extra_params,
-            Some(&credential_ref),
-        )
+            password: Zeroizing::new(password),
+        })
         .await
-    {
-        Ok(profile) => {
-            mutation.retire_connection(id).await;
-            if let Some(previous_credential_id) = previous_credential_id {
-                delete_secret_best_effort(
-                    previous_credential_id,
-                    "replace_workspace_connection_credentials",
-                );
-            }
-            Ok(profile)
-        }
-        Err(error) => {
-            delete_secret_best_effort(credential_id, "bind_connection_credentials");
-            Err(error)
-        }
-    }
 }
 
 // ── connection CRUD ──────────────────────────────────────────────────────────

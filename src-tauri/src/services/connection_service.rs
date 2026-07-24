@@ -14,24 +14,7 @@ use crate::error::{AppError, AppResult};
 use crate::model::{ConnectionProfile, Engine, WorkspaceConnectionAccess, WorkspaceCredentialMode};
 use crate::store::Store;
 
-const MAX_CONNECTION_CREDENTIAL_BYTES: usize = 1 << 16;
-
-trait ConnectionCredentialStore: Send + Sync {
-    fn store(&self, id: &Uuid, secret: &str) -> AppResult<()>;
-    fn delete(&self, id: &Uuid) -> AppResult<()>;
-}
-
-struct SystemConnectionCredentialStore;
-
-impl ConnectionCredentialStore for SystemConnectionCredentialStore {
-    fn store(&self, id: &Uuid, secret: &str) -> AppResult<()> {
-        connection::store_secret(id, secret)
-    }
-
-    fn delete(&self, id: &Uuid) -> AppResult<()> {
-        connection::delete_secret(id)
-    }
-}
+use super::connection_credentials::{ConnectionCredentialVault, MAX_CONNECTION_CREDENTIAL_BYTES};
 
 pub(crate) struct ConnectionUpsertRequest {
     pub(crate) profile: ConnectionProfile,
@@ -103,23 +86,14 @@ pub(crate) type LegacyConnectionResolution =
 pub(crate) struct ConnectionService {
     store: Store,
     connections: ConnectionManager,
-    credentials: Arc<dyn ConnectionCredentialStore>,
+    credentials: Arc<dyn ConnectionCredentialVault>,
 }
 
 impl ConnectionService {
-    pub(super) fn new(store: Store, connections: ConnectionManager) -> Self {
-        Self {
-            store,
-            connections,
-            credentials: Arc::new(SystemConnectionCredentialStore),
-        }
-    }
-
-    #[cfg(test)]
-    fn with_credentials(
+    pub(super) fn new(
         store: Store,
         connections: ConnectionManager,
-        credentials: Arc<dyn ConnectionCredentialStore>,
+        credentials: Arc<dyn ConnectionCredentialVault>,
     ) -> Self {
         Self {
             store,
@@ -448,7 +422,23 @@ mod tests {
         }
     }
 
-    impl ConnectionCredentialStore for MemoryCredentials {
+    impl ConnectionCredentialVault for MemoryCredentials {
+        fn fetch_profile(&self, profile: &ConnectionProfile) -> AppResult<Zeroizing<String>> {
+            let secret_ref = profile
+                .secret_ref
+                .as_deref()
+                .ok_or_else(|| AppError::NotFound("missing test credential reference".into()))?;
+            let id = Uuid::parse_str(secret_ref)
+                .map_err(|_| AppError::Config("invalid test credential reference".into()))?;
+            self.items
+                .lock()
+                .unwrap()
+                .get(&id)
+                .cloned()
+                .map(Zeroizing::new)
+                .ok_or_else(|| AppError::NotFound(format!("test credential {id}")))
+        }
+
         fn store(&self, id: &Uuid, secret: &str) -> AppResult<()> {
             self.items.lock().unwrap().insert(*id, secret.to_string());
             Ok(())
@@ -473,8 +463,7 @@ mod tests {
         let store = Store::from_pool_for_test(pool);
         let connections = ConnectionManager::new(store.clone());
         let credentials = Arc::new(MemoryCredentials::default());
-        let service =
-            ConnectionService::with_credentials(store.clone(), connections, credentials.clone());
+        let service = ConnectionService::new(store.clone(), connections, credentials.clone());
         (service, store, credentials)
     }
 

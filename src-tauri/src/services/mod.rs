@@ -3,6 +3,7 @@
 
 mod activity_service;
 mod catalog_service;
+mod connection_credentials;
 mod connection_service;
 mod dashboard_service;
 mod document_service;
@@ -10,6 +11,7 @@ mod monitoring_service;
 mod query_service;
 mod safety_service;
 mod script_service;
+mod workspace_service;
 
 pub(crate) use activity_service::{ActivityService, AuditSnapshotReceipt, AuditVerdict};
 pub(crate) use catalog_service::{CatalogReadPolicy, CatalogService};
@@ -40,6 +42,9 @@ pub(crate) use safety_service::SafetyService;
 pub(crate) use script_service::{
     DesktopScriptRunError, DesktopScriptRunReceipt, DesktopScriptRunRequest, ScriptService,
 };
+pub(crate) use workspace_service::{
+    WorkspaceConnectionCopyRequest, WorkspaceCredentialBindingRequest, WorkspaceService,
+};
 
 use crate::connection::ConnectionManager;
 use crate::store::Store;
@@ -57,20 +62,27 @@ pub(crate) struct ApplicationServices {
     pub(crate) query: QueryService,
     pub(crate) safety: SafetyService,
     pub(crate) script: ScriptService,
+    pub(crate) workspace: WorkspaceService,
 }
 
 impl ApplicationServices {
     pub(crate) fn new(store: Store, connections: ConnectionManager) -> Self {
+        let connection_credentials = connection_credentials::system_connection_credentials();
         Self {
             activity: ActivityService::new(store.clone()),
-            connections: ConnectionService::new(store.clone(), connections.clone()),
+            connections: ConnectionService::new(
+                store.clone(),
+                connections.clone(),
+                connection_credentials.clone(),
+            ),
             catalog: CatalogService::new(store.clone(), connections.clone()),
             dashboard: DashboardService::new(store.clone(), connections.clone()),
             document: DocumentService::new(store.clone(), connections.clone()),
             monitoring: MonitoringService::new(store.clone(), connections.clone()),
             query: QueryService::new(store.clone(), connections.clone()),
             safety: SafetyService::new(store.clone(), connections.clone()),
-            script: ScriptService::new(store, connections),
+            script: ScriptService::new(store.clone(), connections.clone()),
+            workspace: WorkspaceService::new(store, connections, connection_credentials),
         }
     }
 }
