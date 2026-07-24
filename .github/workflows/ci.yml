@@ -137,5 +137,15 @@ jobs:
       - name: Lint Rust workspace
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      - name: Build Rust workspace tests
+        run: cargo test --workspace --no-run
+
       - name: Test Rust workspace
-        run: cargo test --workspace
+        shell: pwsh
+        run: |
+          cargo test --workspace
+          $testExit = $LASTEXITCODE
+          if ($testExit -ne 0) {
+            ./scripts/windows-test-import-audit.ps1
+            exit $testExit
+          }
