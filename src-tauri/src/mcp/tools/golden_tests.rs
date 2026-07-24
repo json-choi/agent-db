@@ -93,8 +93,12 @@ impl SqliteHarness {
         );
         store.upsert_connection(&profile).await.unwrap();
         let connections = ConnectionManager::new(store.clone());
-        let services =
-            crate::services::ApplicationServices::new(store.clone(), connections.clone());
+        let (operation, _) = crate::operations::OperationRuntime::new(&store);
+        let services = crate::services::ApplicationServices::new(
+            store.clone(),
+            connections.clone(),
+            operation,
+        );
         let (tools, events) = DbTools::new_for_test(services);
 
         Self {

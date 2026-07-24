@@ -1017,7 +1017,8 @@ mod tests {
             .unwrap();
 
         let connections = ConnectionManager::new(store.clone());
-        let services = ApplicationServices::new(store.clone(), connections.clone());
+        let (operation, _) = crate::operations::OperationRuntime::new(&store);
+        let services = ApplicationServices::new(store.clone(), connections.clone(), operation);
         let (tools, events) = DbTools::new_for_test(services);
         (tools, events, store, connection_id, query_run_id)
     }

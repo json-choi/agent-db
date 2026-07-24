@@ -14,10 +14,11 @@ use uuid::Uuid;
 
 use super::canonicalize::{canonical_json, CanonicalJson};
 use super::model::{
-    actor_kind_str, event_kind_str, operation_kind_str, parse_actor_kind, parse_event_kind,
-    parse_operation_kind, parse_risk_level, parse_state, risk_level_str, state_str, NewOperation,
-    OperationActor, OperationActorProvenance, OperationEventRecord, OperationRecord,
-    RestartRecoveryReport,
+    actor_kind_str, approval_decision_str, event_kind_str, operation_kind_str, parse_actor_kind,
+    parse_approval_decision, parse_event_kind, parse_operation_kind, parse_risk_level, parse_state,
+    risk_level_str, state_str, NewOperation, OperationActor, OperationActorProvenance,
+    OperationApprovalCommand, OperationApprovalDecision, OperationApprovalRecord,
+    OperationApprover, OperationEventRecord, OperationRecord, RestartRecoveryReport,
 };
 use super::{ensure_transition, restart_recovery, RestartRecovery};
 use crate::error::{AppError, AppResult};
@@ -49,9 +50,10 @@ impl OperationRepository {
     /// its hash itself, so an adapter cannot pair one payload with another digest.
     pub(crate) async fn insert_planned(
         &self,
+        runtime_id: Uuid,
         operation: NewOperation,
     ) -> AppResult<OperationRecord> {
-        let prepared = PreparedOperation::new(operation)?;
+        let prepared = PreparedOperation::new(runtime_id, operation)?;
         let _guard = self.write_lock.lock().await;
         let mut tx = self.pool.begin().await?;
 
@@ -97,7 +99,7 @@ impl OperationRepository {
              )",
         )
         .bind(prepared.operation.id.to_string())
-        .bind(prepared.operation.runtime_id.to_string())
+        .bind(prepared.runtime_id.to_string())
         .bind(prepared.operation.workspace_id.to_string())
         .bind(&prepared.operation.account_scope)
         .bind(prepared.operation.connection_id.to_string())
@@ -189,24 +191,23 @@ impl OperationRepository {
         &self,
         operation_id: Uuid,
         runtime_id: Uuid,
-        expected_payload_hash: &str,
         now: DateTime<Utc>,
     ) -> AppResult<OperationRecord> {
         let _guard = self.write_lock.lock().await;
         let mut tx = self.pool.begin().await?;
         let current = fetch_operation_tx(&mut tx, operation_id).await?;
         ensure_runtime(&current, runtime_id)?;
-        if current.payload_hash != expected_payload_hash {
-            return Err(operation_conflict(
-                "the operation payload hash no longer matches the reviewed payload",
-            ));
-        }
         if !matches!(
             current.state,
             OperationState::Ready | OperationState::Approved
         ) {
             return Err(operation_conflict(
                 "the operation is not in an executable state",
+            ));
+        }
+        if current.state == OperationState::Ready && current.kind.may_mutate_target() {
+            return Err(operation_conflict(
+                "a target-mutating operation cannot execute without exact approval",
             ));
         }
         if current
@@ -224,18 +225,161 @@ impl OperationRepository {
             tx.commit().await?;
             return Err(operation_conflict("the operation has expired"));
         }
+        if current.state == OperationState::Approved {
+            let has_exact_approval: bool = sqlx::query_scalar(
+                "SELECT EXISTS(
+                    SELECT 1 FROM operation_approvals
+                    WHERE operation_id = ?1
+                      AND payload_hash = ?2
+                      AND decision = 'approved'
+                      AND policy_revision = ?3
+                      AND (expires_at IS NULL OR expires_at > ?4)
+                )",
+            )
+            .bind(current.id.to_string())
+            .bind(&current.payload_hash)
+            .bind(&current.policy_revision)
+            .bind(timestamp(now))
+            .fetch_one(&mut *tx)
+            .await?;
+            if !has_exact_approval {
+                return Err(operation_conflict(
+                    "the operation has no current exact approval",
+                ));
+            }
+        }
 
         let updated = self
             .transition_tx(
                 &mut tx,
                 &current,
                 OperationState::Executing,
-                &json!({"payloadHash": expected_payload_hash}),
+                &json!({"payloadHash": &current.payload_hash}),
                 now,
             )
             .await?;
         tx.commit().await?;
         Ok(updated)
+    }
+
+    /// Append one exact local/workspace decision and its projection transition in
+    /// the same SQLite transaction. Agent, Plugin, and System actors are rejected
+    /// before any approval row is written.
+    pub(crate) async fn decide_approval(
+        &self,
+        command: OperationApprovalCommand,
+    ) -> AppResult<OperationRecord> {
+        if !matches!(
+            command.approver.kind,
+            dopedb_protocol::OperationActorKind::LocalUser
+                | dopedb_protocol::OperationActorKind::WorkspaceUser
+        ) || command.approver.id.trim().is_empty()
+        {
+            return Err(operation_conflict(
+                "only an identified local or workspace user can approve an operation",
+            ));
+        }
+        if command
+            .reason
+            .as_ref()
+            .is_some_and(|reason| reason.len() > MAX_REQUEST_BYTES)
+        {
+            return Err(AppError::Config(
+                "operation approval reason exceeds the local control-message limit".into(),
+            ));
+        }
+
+        let _guard = self.write_lock.lock().await;
+        let mut tx = self.pool.begin().await?;
+        let current = fetch_operation_tx(&mut tx, command.operation_id).await?;
+        ensure_runtime(&current, command.runtime_id)?;
+        if current.state != OperationState::PendingApproval {
+            return Err(operation_conflict(
+                "the operation is not awaiting an approval decision",
+            ));
+        }
+        if current.payload_hash != command.expected_payload_hash {
+            return Err(operation_conflict(
+                "the reviewed payload hash does not match the stored operation",
+            ));
+        }
+        if current.policy_revision != command.current_policy_revision {
+            return Err(operation_conflict(
+                "the active safety policy changed after the operation was planned",
+            ));
+        }
+        if current
+            .expires_at
+            .is_some_and(|expires_at| expires_at <= command.now)
+        {
+            self.transition_tx(
+                &mut tx,
+                &current,
+                OperationState::Expired,
+                &json!({"reason": "approval_expired"}),
+                command.now,
+            )
+            .await?;
+            tx.commit().await?;
+            return Err(operation_conflict("the operation has expired"));
+        }
+
+        let approval_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO operation_approvals (
+                id, operation_id, payload_hash, approver_kind, approver_id,
+                decision, reason, policy_revision, created_at, expires_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        )
+        .bind(approval_id.to_string())
+        .bind(current.id.to_string())
+        .bind(&current.payload_hash)
+        .bind(actor_kind_str(command.approver.kind))
+        .bind(&command.approver.id)
+        .bind(approval_decision_str(command.decision))
+        .bind(&command.reason)
+        .bind(&current.policy_revision)
+        .bind(timestamp(command.now))
+        .bind(current.expires_at.map(timestamp))
+        .execute(&mut *tx)
+        .await?;
+
+        let target = match command.decision {
+            OperationApprovalDecision::Approved => OperationState::Approved,
+            OperationApprovalDecision::Rejected => OperationState::Rejected,
+        };
+        let updated = self
+            .transition_tx(
+                &mut tx,
+                &current,
+                target,
+                &json!({
+                    "approvalId": approval_id,
+                    "approverId": &command.approver.id,
+                    "approverKind": actor_kind_str(command.approver.kind),
+                    "payloadHash": &current.payload_hash,
+                    "policyRevision": &current.policy_revision,
+                }),
+                command.now,
+            )
+            .await?;
+        tx.commit().await?;
+        Ok(updated)
+    }
+
+    pub(crate) async fn approvals(
+        &self,
+        operation_id: Uuid,
+    ) -> AppResult<Vec<OperationApprovalRecord>> {
+        let rows = sqlx::query(
+            "SELECT * FROM operation_approvals
+             WHERE operation_id = ?1
+             ORDER BY created_at ASC, id ASC",
+        )
+        .bind(operation_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(row_to_approval).collect()
     }
 
     /// Record bounded progress without changing the current projection state.
@@ -406,13 +550,17 @@ impl OperationRepository {
                  updated_at = ?2,
                  started_at = CASE WHEN ?1 = 'executing' THEN ?2 ELSE started_at END,
                  finished_at = CASE WHEN ?3 THEN ?2 ELSE finished_at END
-             WHERE id = ?4 AND state = ?5",
+             WHERE id = ?4
+               AND state = ?5
+               AND payload_hash = ?6
+               AND (?1 <> 'executing' OR expires_at IS NULL OR expires_at > ?2)",
         )
         .bind(state_str(target))
         .bind(&now_text)
         .bind(terminal)
         .bind(current.id.to_string())
         .bind(state_str(current.state))
+        .bind(&current.payload_hash)
         .execute(&mut **tx)
         .await?;
         if result.rows_affected() != 1 {
@@ -510,6 +658,7 @@ impl OperationRepository {
 }
 
 struct PreparedOperation {
+    runtime_id: Uuid,
     operation: NewOperation,
     payload: CanonicalJson,
     actor_provenance_json: String,
@@ -518,7 +667,7 @@ struct PreparedOperation {
 }
 
 impl PreparedOperation {
-    fn new(operation: NewOperation) -> AppResult<Self> {
+    fn new(runtime_id: Uuid, operation: NewOperation) -> AppResult<Self> {
         validate_new_operation(&operation)?;
         let payload = CanonicalJson::from_value(&operation.payload)?;
         if payload.json().len() > MAX_REQUEST_BYTES {
@@ -540,6 +689,7 @@ impl PreparedOperation {
             ));
         }
         Ok(Self {
+            runtime_id,
             operation,
             payload,
             actor_provenance_json,
@@ -549,7 +699,7 @@ impl PreparedOperation {
     }
 
     fn matches(&self, existing: &OperationRecord) -> bool {
-        existing.runtime_id == self.operation.runtime_id
+        existing.runtime_id == self.runtime_id
             && existing.workspace_id == self.operation.workspace_id
             && existing.account_scope == self.operation.account_scope
             && existing.connection_id == self.operation.connection_id
@@ -675,6 +825,31 @@ fn row_to_operation(row: &sqlx::sqlite::SqliteRow) -> AppResult<OperationRecord>
         finished_at: parse_optional_timestamp(row.try_get("finished_at")?, "operation finish")?,
         created_at: parse_timestamp(row.try_get("created_at")?, "operation creation")?,
         updated_at: parse_timestamp(row.try_get("updated_at")?, "operation update")?,
+    })
+}
+
+fn row_to_approval(row: &sqlx::sqlite::SqliteRow) -> AppResult<OperationApprovalRecord> {
+    Ok(OperationApprovalRecord {
+        id: parse_uuid(row.try_get("id")?, "operation approval id")?,
+        operation_id: parse_uuid(
+            row.try_get("operation_id")?,
+            "operation approval operation id",
+        )?,
+        payload_hash: row.try_get("payload_hash")?,
+        approver: OperationApprover {
+            kind: parse_actor_kind(row.try_get::<String, _>("approver_kind")?.as_str())
+                .ok_or_else(|| AppError::Config("invalid stored operation approver kind".into()))?,
+            id: row.try_get("approver_id")?,
+        },
+        decision: parse_approval_decision(row.try_get::<String, _>("decision")?.as_str())
+            .ok_or_else(|| AppError::Config("invalid stored operation approval decision".into()))?,
+        reason: row.try_get("reason")?,
+        policy_revision: row.try_get("policy_revision")?,
+        created_at: parse_timestamp(row.try_get("created_at")?, "operation approval creation")?,
+        expires_at: parse_optional_timestamp(
+            row.try_get("expires_at")?,
+            "operation approval expiry",
+        )?,
     })
 }
 
@@ -828,10 +1003,9 @@ mod tests {
         (OperationRepository::from_pool(pool.clone()), pool)
     }
 
-    fn operation(kind: OperationKind, runtime_id: Uuid, idempotency_key: &str) -> NewOperation {
+    fn operation(kind: OperationKind, _runtime_id: Uuid, idempotency_key: &str) -> NewOperation {
         NewOperation {
             id: Uuid::new_v4(),
-            runtime_id,
             workspace_id: Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap(),
             account_scope: "personal".into(),
             connection_id: Uuid::new_v4(),
@@ -860,6 +1034,27 @@ mod tests {
         }
     }
 
+    fn approval_command(
+        record: &OperationRecord,
+        runtime_id: Uuid,
+        approver_kind: OperationActorKind,
+        decision: OperationApprovalDecision,
+    ) -> OperationApprovalCommand {
+        OperationApprovalCommand {
+            operation_id: record.id,
+            runtime_id,
+            expected_payload_hash: record.payload_hash.clone(),
+            approver: OperationApprover {
+                kind: approver_kind,
+                id: "local-owner".into(),
+            },
+            decision,
+            reason: None,
+            current_policy_revision: record.policy_revision.clone(),
+            now: Utc::now(),
+        }
+    }
+
     #[tokio::test]
     async fn schema_is_idempotent_and_contains_all_operation_tables() {
         let (_, pool) = repository().await;
@@ -883,11 +1078,10 @@ mod tests {
         let (repository, _) = repository().await;
         let runtime_id = Uuid::new_v4();
         let record = repository
-            .insert_planned(operation(
-                OperationKind::ReadQuery,
+            .insert_planned(
                 runtime_id,
-                "insert-once",
-            ))
+                operation(OperationKind::ReadQuery, runtime_id, "insert-once"),
+            )
             .await
             .unwrap();
         assert_eq!(record.state, OperationState::Planned);
@@ -909,12 +1103,12 @@ mod tests {
         let runtime_id = Uuid::new_v4();
         let first_request = operation(OperationKind::ReadQuery, runtime_id, "same-request");
         let first = repository
-            .insert_planned(first_request.clone())
+            .insert_planned(runtime_id, first_request.clone())
             .await
             .unwrap();
         let mut retry = first_request;
         retry.id = Uuid::new_v4();
-        let replay = repository.insert_planned(retry).await.unwrap();
+        let replay = repository.insert_planned(runtime_id, retry).await.unwrap();
         assert_eq!(replay.id, first.id);
         assert_eq!(repository.events(first.id).await.unwrap().len(), 1);
 
@@ -922,7 +1116,7 @@ mod tests {
         conflicting.connection_id = first.connection_id;
         conflicting.payload = json!({"sql": "SELECT 2", "parameters": []});
         assert!(matches!(
-            repository.insert_planned(conflicting).await,
+            repository.insert_planned(runtime_id, conflicting).await,
             Err(AppError::Blocked { .. })
         ));
     }
@@ -930,12 +1124,12 @@ mod tests {
     #[tokio::test]
     async fn immutable_projection_and_append_only_ledgers_reject_direct_updates() {
         let (repository, pool) = repository().await;
+        let runtime_id = Uuid::new_v4();
         let record = repository
-            .insert_planned(operation(
-                OperationKind::ReadQuery,
-                Uuid::new_v4(),
-                "immutable",
-            ))
+            .insert_planned(
+                runtime_id,
+                operation(OperationKind::ReadQuery, runtime_id, "immutable"),
+            )
             .await
             .unwrap();
         assert!(
@@ -994,11 +1188,8 @@ mod tests {
     #[tokio::test]
     async fn connection_deletion_cannot_delete_operation_provenance() {
         let (repository, pool) = repository().await;
-        let request = operation(
-            OperationKind::ReadQuery,
-            Uuid::new_v4(),
-            "connection-delete",
-        );
+        let runtime_id = Uuid::new_v4();
+        let request = operation(OperationKind::ReadQuery, runtime_id, "connection-delete");
         sqlx::query(
             "INSERT INTO connections (
                 id, name, engine, host, port, db_name, username, sslmode,
@@ -1011,7 +1202,10 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let record = repository.insert_planned(request.clone()).await.unwrap();
+        let record = repository
+            .insert_planned(runtime_id, request.clone())
+            .await
+            .unwrap();
         sqlx::query("DELETE FROM connections WHERE id = ?1")
             .bind(request.connection_id.to_string())
             .execute(&pool)
@@ -1026,11 +1220,10 @@ mod tests {
         let (repository, _) = repository().await;
         let runtime_id = Uuid::new_v4();
         let planned = repository
-            .insert_planned(operation(
-                OperationKind::ReadQuery,
+            .insert_planned(
                 runtime_id,
-                "single-claim",
-            ))
+                operation(OperationKind::ReadQuery, runtime_id, "single-claim"),
+            )
             .await
             .unwrap();
         let ready = repository
@@ -1038,18 +1231,12 @@ mod tests {
             .await
             .unwrap();
         assert!(repository
-            .claim_execution(ready.id, Uuid::new_v4(), &ready.payload_hash, Utc::now())
-            .await
-            .is_err());
-        assert!(repository
-            .claim_execution(ready.id, runtime_id, &"0".repeat(64), Utc::now())
+            .claim_execution(ready.id, Uuid::new_v4(), Utc::now())
             .await
             .is_err());
 
-        let first =
-            repository.claim_execution(ready.id, runtime_id, &ready.payload_hash, Utc::now());
-        let second =
-            repository.claim_execution(ready.id, runtime_id, &ready.payload_hash, Utc::now());
+        let first = repository.claim_execution(ready.id, runtime_id, Utc::now());
+        let second = repository.claim_execution(ready.id, runtime_id, Utc::now());
         let (first, second) = tokio::join!(first, second);
         assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
         assert_eq!(
@@ -1059,13 +1246,16 @@ mod tests {
 
         let mut expired_request = operation(OperationKind::ReadQuery, runtime_id, "expired-claim");
         expired_request.expires_at = Some(Utc::now() - Duration::seconds(1));
-        let expired = repository.insert_planned(expired_request).await.unwrap();
+        let expired = repository
+            .insert_planned(runtime_id, expired_request)
+            .await
+            .unwrap();
         let expired = repository
             .transition(expired.id, runtime_id, OperationState::Ready, &json!({}))
             .await
             .unwrap();
         assert!(repository
-            .claim_execution(expired.id, runtime_id, &expired.payload_hash, Utc::now())
+            .claim_execution(expired.id, runtime_id, Utc::now())
             .await
             .is_err());
         assert_eq!(
@@ -1075,26 +1265,193 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn exact_approval_is_hash_policy_actor_and_state_bound() {
+        let (repository, _) = repository().await;
+        let runtime_id = Uuid::new_v4();
+        let operation = repository
+            .insert_planned(
+                runtime_id,
+                operation(OperationKind::WriteSql, runtime_id, "exact-approval"),
+            )
+            .await
+            .unwrap();
+        let pending = repository
+            .transition(
+                operation.id,
+                runtime_id,
+                OperationState::PendingApproval,
+                &json!({}),
+            )
+            .await
+            .unwrap();
+
+        let mut wrong_hash = approval_command(
+            &pending,
+            runtime_id,
+            OperationActorKind::LocalUser,
+            OperationApprovalDecision::Approved,
+        );
+        wrong_hash.expected_payload_hash = "0".repeat(64);
+        assert!(repository.decide_approval(wrong_hash).await.is_err());
+
+        let agent = approval_command(
+            &pending,
+            runtime_id,
+            OperationActorKind::Agent,
+            OperationApprovalDecision::Approved,
+        );
+        assert!(repository.decide_approval(agent).await.is_err());
+
+        let mut stale_policy = approval_command(
+            &pending,
+            runtime_id,
+            OperationActorKind::LocalUser,
+            OperationApprovalDecision::Approved,
+        );
+        stale_policy.current_policy_revision = "changed-policy".into();
+        assert!(repository.decide_approval(stale_policy).await.is_err());
+        assert!(repository.approvals(pending.id).await.unwrap().is_empty());
+
+        let approved = repository
+            .decide_approval(approval_command(
+                &pending,
+                runtime_id,
+                OperationActorKind::LocalUser,
+                OperationApprovalDecision::Approved,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(approved.state, OperationState::Approved);
+        let approvals = repository.approvals(approved.id).await.unwrap();
+        assert_eq!(approvals.len(), 1);
+        assert_eq!(approvals[0].payload_hash, approved.payload_hash);
+        assert_eq!(approvals[0].decision, OperationApprovalDecision::Approved);
+        assert!(repository.verify_event_chain(approved.id).await.unwrap());
+        assert!(repository
+            .decide_approval(approval_command(
+                &approved,
+                runtime_id,
+                OperationActorKind::LocalUser,
+                OperationApprovalDecision::Approved,
+            ))
+            .await
+            .is_err());
+        assert_eq!(repository.approvals(approved.id).await.unwrap().len(), 1);
+
+        let executing = repository
+            .claim_execution(approved.id, runtime_id, Utc::now())
+            .await
+            .unwrap();
+        assert_eq!(executing.state, OperationState::Executing);
+    }
+
+    #[tokio::test]
+    async fn approval_insert_rolls_back_when_projection_transition_fails() {
+        let (repository, pool) = repository().await;
+        let runtime_id = Uuid::new_v4();
+        let operation = repository
+            .insert_planned(
+                runtime_id,
+                operation(OperationKind::WriteSql, runtime_id, "approval-rollback"),
+            )
+            .await
+            .unwrap();
+        let pending = repository
+            .transition(
+                operation.id,
+                runtime_id,
+                OperationState::PendingApproval,
+                &json!({}),
+            )
+            .await
+            .unwrap();
+        sqlx::raw_sql(
+            "CREATE TRIGGER fixture_block_operation_state
+             BEFORE UPDATE OF state ON operations
+             BEGIN
+                 SELECT RAISE(ABORT, 'fixture transition failure');
+             END;",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert!(repository
+            .decide_approval(approval_command(
+                &pending,
+                runtime_id,
+                OperationActorKind::LocalUser,
+                OperationApprovalDecision::Approved,
+            ))
+            .await
+            .is_err());
+        assert!(repository.approvals(pending.id).await.unwrap().is_empty());
+        assert_eq!(
+            repository.get(pending.id).await.unwrap().state,
+            OperationState::PendingApproval
+        );
+    }
+
+    #[tokio::test]
+    async fn rejection_is_a_terminal_append_only_decision() {
+        let (repository, _) = repository().await;
+        let runtime_id = Uuid::new_v4();
+        let operation = repository
+            .insert_planned(
+                runtime_id,
+                operation(OperationKind::Ddl, runtime_id, "reject"),
+            )
+            .await
+            .unwrap();
+        let pending = repository
+            .transition(
+                operation.id,
+                runtime_id,
+                OperationState::PendingApproval,
+                &json!({}),
+            )
+            .await
+            .unwrap();
+        let rejected = repository
+            .decide_approval(approval_command(
+                &pending,
+                runtime_id,
+                OperationActorKind::WorkspaceUser,
+                OperationApprovalDecision::Rejected,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(rejected.state, OperationState::Rejected);
+        assert_eq!(repository.approvals(rejected.id).await.unwrap().len(), 1);
+        assert!(repository
+            .claim_execution(rejected.id, runtime_id, Utc::now())
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
     async fn restart_recovery_never_retries_an_uncertain_mutation() {
         let (repository, _) = repository().await;
         let previous_runtime = Uuid::new_v4();
         let current_runtime = Uuid::new_v4();
 
         let stale_plan = repository
-            .insert_planned(operation(
-                OperationKind::ReadQuery,
+            .insert_planned(
                 previous_runtime,
-                "stale-plan",
-            ))
+                operation(OperationKind::ReadQuery, previous_runtime, "stale-plan"),
+            )
             .await
             .unwrap();
 
         let read = repository
-            .insert_planned(operation(
-                OperationKind::ReadQuery,
+            .insert_planned(
                 previous_runtime,
-                "interrupted-read",
-            ))
+                operation(
+                    OperationKind::ReadQuery,
+                    previous_runtime,
+                    "interrupted-read",
+                ),
+            )
             .await
             .unwrap();
         let read = repository
@@ -1102,56 +1459,75 @@ mod tests {
             .await
             .unwrap();
         repository
-            .claim_execution(read.id, previous_runtime, &read.payload_hash, Utc::now())
+            .claim_execution(read.id, previous_runtime, Utc::now())
             .await
             .unwrap();
 
         let write = repository
-            .insert_planned(operation(
-                OperationKind::WriteSql,
+            .insert_planned(
                 previous_runtime,
-                "interrupted-write",
-            ))
+                operation(
+                    OperationKind::WriteSql,
+                    previous_runtime,
+                    "interrupted-write",
+                ),
+            )
             .await
             .unwrap();
         let write = repository
             .transition(
                 write.id,
                 previous_runtime,
-                OperationState::Ready,
+                OperationState::PendingApproval,
                 &json!({}),
             )
             .await
             .unwrap();
+        let write = repository
+            .decide_approval(approval_command(
+                &write,
+                previous_runtime,
+                OperationActorKind::LocalUser,
+                OperationApprovalDecision::Approved,
+            ))
+            .await
+            .unwrap();
         repository
-            .claim_execution(write.id, previous_runtime, &write.payload_hash, Utc::now())
+            .claim_execution(write.id, previous_runtime, Utc::now())
             .await
             .unwrap();
 
         let import = repository
-            .insert_planned(operation(
-                OperationKind::Import,
+            .insert_planned(
                 previous_runtime,
-                "interrupted-import",
-            ))
+                operation(
+                    OperationKind::Import,
+                    previous_runtime,
+                    "interrupted-import",
+                ),
+            )
             .await
             .unwrap();
         let import = repository
             .transition(
                 import.id,
                 previous_runtime,
-                OperationState::Ready,
+                OperationState::PendingApproval,
                 &json!({}),
             )
             .await
             .unwrap();
-        repository
-            .claim_execution(
-                import.id,
+        let import = repository
+            .decide_approval(approval_command(
+                &import,
                 previous_runtime,
-                &import.payload_hash,
-                Utc::now(),
-            )
+                OperationActorKind::LocalUser,
+                OperationApprovalDecision::Approved,
+            ))
+            .await
+            .unwrap();
+        repository
+            .claim_execution(import.id, previous_runtime, Utc::now())
             .await
             .unwrap();
 
@@ -1173,7 +1549,7 @@ mod tests {
         );
         assert!(repository.verify_event_chain(write.id).await.unwrap());
         assert!(repository
-            .claim_execution(write.id, current_runtime, &write.payload_hash, Utc::now())
+            .claim_execution(write.id, current_runtime, Utc::now())
             .await
             .is_err());
     }
@@ -1181,12 +1557,12 @@ mod tests {
     #[tokio::test]
     async fn hash_chain_and_payload_loader_detect_out_of_band_tampering() {
         let (repository, pool) = repository().await;
+        let runtime_id = Uuid::new_v4();
         let record = repository
-            .insert_planned(operation(
-                OperationKind::ReadQuery,
-                Uuid::new_v4(),
-                "tamper",
-            ))
+            .insert_planned(
+                runtime_id,
+                operation(OperationKind::ReadQuery, runtime_id, "tamper"),
+            )
             .await
             .unwrap();
         sqlx::query("DROP TRIGGER operation_events_reject_update")
@@ -1220,7 +1596,10 @@ mod tests {
         let (repository, _) = repository().await;
         let runtime_id = Uuid::new_v4();
         let operation = repository
-            .insert_planned(operation(OperationKind::Export, runtime_id, "progress"))
+            .insert_planned(
+                runtime_id,
+                operation(OperationKind::Export, runtime_id, "progress"),
+            )
             .await
             .unwrap();
         let operation = repository
@@ -1228,12 +1607,7 @@ mod tests {
             .await
             .unwrap();
         let operation = repository
-            .claim_execution(
-                operation.id,
-                runtime_id,
-                &operation.payload_hash,
-                Utc::now(),
-            )
+            .claim_execution(operation.id, runtime_id, Utc::now())
             .await
             .unwrap();
         let event = repository

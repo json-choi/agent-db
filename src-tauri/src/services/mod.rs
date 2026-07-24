@@ -51,6 +51,7 @@ pub(crate) use workspace_service::{
 };
 
 use crate::connection::ConnectionManager;
+use crate::operations::OperationRuntime;
 use crate::store::Store;
 
 /// Cloneable application-service facade. Every clone retains the same local store and
@@ -64,6 +65,7 @@ pub(crate) struct ApplicationServices {
     pub(crate) dashboard: DashboardService,
     pub(crate) document: DocumentService,
     pub(crate) monitoring: MonitoringService,
+    pub(crate) operation: OperationRuntime,
     pub(crate) query: QueryService,
     pub(crate) safety: SafetyService,
     pub(crate) script: ScriptService,
@@ -71,7 +73,11 @@ pub(crate) struct ApplicationServices {
 }
 
 impl ApplicationServices {
-    pub(crate) fn new(store: Store, connections: ConnectionManager) -> Self {
+    pub(crate) fn new(
+        store: Store,
+        connections: ConnectionManager,
+        operation: OperationRuntime,
+    ) -> Self {
         let connection_credentials = connection_credentials::system_connection_credentials();
         Self {
             activity: ActivityService::new(store.clone()),
@@ -85,6 +91,7 @@ impl ApplicationServices {
             dashboard: DashboardService::new(store.clone(), connections.clone()),
             document: DocumentService::new(store.clone(), connections.clone()),
             monitoring: MonitoringService::new(store.clone(), connections.clone()),
+            operation,
             query: QueryService::new(store.clone(), connections.clone()),
             safety: SafetyService::new(store.clone(), connections.clone()),
             script: ScriptService::new(store.clone(), connections.clone()),

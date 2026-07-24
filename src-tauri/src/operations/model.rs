@@ -43,7 +43,6 @@ pub(crate) struct OperationActor {
 #[derive(Clone)]
 pub(crate) struct NewOperation {
     pub id: Uuid,
-    pub runtime_id: Uuid,
     pub workspace_id: Uuid,
     pub account_scope: String,
     pub connection_id: Uuid,
@@ -60,6 +59,42 @@ pub(crate) struct NewOperation {
     pub policy_revision: String,
     pub single_use: bool,
     pub idempotency_key: String,
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OperationApprovalDecision {
+    Approved,
+    Rejected,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct OperationApprover {
+    pub kind: OperationActorKind,
+    pub id: String,
+}
+
+pub(crate) struct OperationApprovalCommand {
+    pub operation_id: Uuid,
+    pub runtime_id: Uuid,
+    pub expected_payload_hash: String,
+    pub approver: OperationApprover,
+    pub decision: OperationApprovalDecision,
+    pub reason: Option<String>,
+    pub current_policy_revision: String,
+    pub now: DateTime<Utc>,
+}
+
+#[derive(Clone)]
+pub(crate) struct OperationApprovalRecord {
+    pub id: Uuid,
+    pub operation_id: Uuid,
+    pub payload_hash: String,
+    pub approver: OperationApprover,
+    pub decision: OperationApprovalDecision,
+    pub reason: Option<String>,
+    pub policy_revision: String,
+    pub created_at: DateTime<Utc>,
     pub expires_at: Option<DateTime<Utc>>,
 }
 
@@ -132,6 +167,21 @@ pub(super) fn parse_actor_kind(value: &str) -> Option<OperationActorKind> {
         "agent" => Some(OperationActorKind::Agent),
         "plugin" => Some(OperationActorKind::Plugin),
         "system" => Some(OperationActorKind::System),
+        _ => None,
+    }
+}
+
+pub(super) const fn approval_decision_str(value: OperationApprovalDecision) -> &'static str {
+    match value {
+        OperationApprovalDecision::Approved => "approved",
+        OperationApprovalDecision::Rejected => "rejected",
+    }
+}
+
+pub(super) fn parse_approval_decision(value: &str) -> Option<OperationApprovalDecision> {
+    match value {
+        "approved" => Some(OperationApprovalDecision::Approved),
+        "rejected" => Some(OperationApprovalDecision::Rejected),
         _ => None,
     }
 }

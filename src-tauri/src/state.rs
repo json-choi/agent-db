@@ -4,6 +4,8 @@ use std::sync::{Arc, Mutex};
 
 use crate::connection::ConnectionManager;
 use crate::error::AppResult;
+use crate::features::{FeatureFlag, FeatureFlags};
+use crate::operations::{LocalApprovalAuthority, OperationRuntime};
 use crate::services::ApplicationServices;
 use crate::store::Store;
 
@@ -36,13 +38,25 @@ pub struct AppState {
     pub chat: crate::agent::ChatState,
     /// Safety-sensitive rollout gates captured once for this app runtime.
     pub features: crate::features::FeatureFlags,
+    /// Desktop-only approval capability. MCP/CLI/Agent adapters receive only the
+    /// ApplicationServices facade and therefore cannot obtain this value.
+    #[allow(
+        dead_code,
+        reason = "consumed by exact approval Tauri commands in the next FND-04 slice"
+    )]
+    pub(crate) local_operation_approval: LocalApprovalAuthority,
 }
 
 impl AppState {
     pub async fn new() -> AppResult<Self> {
+        let features = FeatureFlags::default();
         let store = Store::open().await?;
         let connections = ConnectionManager::new(store.clone());
-        let services = ApplicationServices::new(store.clone(), connections.clone());
+        let (operation, local_operation_approval) = OperationRuntime::new(&store);
+        let services = ApplicationServices::new(store.clone(), connections.clone(), operation);
+        if features.is_enabled(FeatureFlag::OperationRuntimeV1) {
+            services.operation.recover_previous_runtimes().await?;
+        }
         Ok(Self {
             store,
             connections,
@@ -50,7 +64,8 @@ impl AppState {
             mcp_token: crate::mcp::load_or_create_token(),
             mcp_runtime: Arc::new(Mutex::new(McpRuntime::default())),
             chat: crate::agent::chat_state(),
-            features: crate::features::FeatureFlags::default(),
+            features,
+            local_operation_approval,
         })
     }
 }
