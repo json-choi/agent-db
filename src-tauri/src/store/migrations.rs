@@ -166,6 +166,178 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_conn ON audit_log(connection_id, ts);
 
+-- Durable Operation Runtime projection. Target connection/workspace rows are
+-- intentionally not foreign keys: deleting or archiving a resource must not erase
+-- the provenance of an already planned or executed operation.
+CREATE TABLE IF NOT EXISTS operations (
+    id                       TEXT PRIMARY KEY,
+    runtime_id               TEXT NOT NULL,
+    workspace_id             TEXT NOT NULL,
+    account_scope            TEXT NOT NULL,
+    connection_id            TEXT NOT NULL,
+    connection_revision      INTEGER NOT NULL,
+    terminal_session_id      TEXT,
+    actor_kind               TEXT NOT NULL
+                             CHECK(actor_kind IN (
+                                 'local_user', 'workspace_user', 'agent', 'plugin', 'system'
+                             )),
+    actor_id                 TEXT NOT NULL CHECK(actor_id <> ''),
+    actor_provenance_json    TEXT NOT NULL CHECK(json_valid(actor_provenance_json)),
+    operation_kind           TEXT NOT NULL
+                             CHECK(operation_kind IN (
+                                 'read_query', 'document_read', 'write_sql', 'ddl',
+                                 'privilege', 'sql_script', 'table_data_change',
+                                 'schema_change', 'import', 'export', 'migration',
+                                 'dashboard_create', 'plugin_action', 'provider_action'
+                             )),
+    payload_schema_version   INTEGER NOT NULL CHECK(payload_schema_version > 0),
+    payload_json             TEXT NOT NULL CHECK(json_valid(payload_json)),
+    payload_hash             TEXT NOT NULL
+                             CHECK(length(payload_hash) = 64
+                               AND payload_hash NOT GLOB '*[^0-9a-f]*'),
+    schema_fingerprint       TEXT
+                             CHECK(schema_fingerprint IS NULL OR (
+                                 length(schema_fingerprint) = 64
+                                 AND schema_fingerprint NOT GLOB '*[^0-9a-f]*'
+                             )),
+    risk_level               TEXT NOT NULL
+                             CHECK(risk_level IN ('low', 'medium', 'high', 'critical')),
+    preview_json             TEXT NOT NULL CHECK(json_valid(preview_json)),
+    policy_snapshot_json     TEXT NOT NULL CHECK(json_valid(policy_snapshot_json)),
+    policy_revision          TEXT NOT NULL CHECK(policy_revision <> ''),
+    state                    TEXT NOT NULL
+                             CHECK(state IN (
+                                 'planned', 'pending_approval', 'ready', 'approved',
+                                 'rejected', 'expired', 'cancelled', 'executing',
+                                 'succeeded', 'failed', 'outcome_unknown'
+                             )),
+    single_use               INTEGER NOT NULL CHECK(single_use IN (0, 1)),
+    idempotency_key          TEXT NOT NULL CHECK(idempotency_key <> ''),
+    expires_at               TEXT,
+    started_at               TEXT,
+    finished_at              TEXT,
+    created_at               TEXT NOT NULL,
+    updated_at               TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_operations_idempotency
+    ON operations(workspace_id, actor_kind, actor_id, idempotency_key);
+CREATE INDEX IF NOT EXISTS idx_operations_state_expiry
+    ON operations(state, expires_at);
+CREATE INDEX IF NOT EXISTS idx_operations_connection_created
+    ON operations(connection_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_operations_runtime_state
+    ON operations(runtime_id, state);
+
+-- Every field that gives an operation its meaning is immutable. The projection may
+-- update only lifecycle timestamps and state through the Rust state machine.
+CREATE TRIGGER IF NOT EXISTS operations_reject_immutable_update
+BEFORE UPDATE ON operations
+WHEN OLD.runtime_id IS NOT NEW.runtime_id
+  OR OLD.workspace_id IS NOT NEW.workspace_id
+  OR OLD.account_scope IS NOT NEW.account_scope
+  OR OLD.connection_id IS NOT NEW.connection_id
+  OR OLD.connection_revision IS NOT NEW.connection_revision
+  OR OLD.terminal_session_id IS NOT NEW.terminal_session_id
+  OR OLD.actor_kind IS NOT NEW.actor_kind
+  OR OLD.actor_id IS NOT NEW.actor_id
+  OR OLD.actor_provenance_json IS NOT NEW.actor_provenance_json
+  OR OLD.operation_kind IS NOT NEW.operation_kind
+  OR OLD.payload_schema_version IS NOT NEW.payload_schema_version
+  OR OLD.payload_json IS NOT NEW.payload_json
+  OR OLD.payload_hash IS NOT NEW.payload_hash
+  OR OLD.schema_fingerprint IS NOT NEW.schema_fingerprint
+  OR OLD.risk_level IS NOT NEW.risk_level
+  OR OLD.preview_json IS NOT NEW.preview_json
+  OR OLD.policy_snapshot_json IS NOT NEW.policy_snapshot_json
+  OR OLD.policy_revision IS NOT NEW.policy_revision
+  OR OLD.single_use IS NOT NEW.single_use
+  OR OLD.idempotency_key IS NOT NEW.idempotency_key
+  OR OLD.expires_at IS NOT NEW.expires_at
+  OR OLD.created_at IS NOT NEW.created_at
+BEGIN
+    SELECT RAISE(ABORT, 'operation immutable fields cannot be changed');
+END;
+
+CREATE TRIGGER IF NOT EXISTS operations_reject_delete
+BEFORE DELETE ON operations
+BEGIN
+    SELECT RAISE(ABORT, 'operation provenance cannot be deleted');
+END;
+
+CREATE TABLE IF NOT EXISTS operation_approvals (
+    id                TEXT PRIMARY KEY,
+    operation_id      TEXT NOT NULL REFERENCES operations(id),
+    payload_hash      TEXT NOT NULL
+                      CHECK(length(payload_hash) = 64
+                        AND payload_hash NOT GLOB '*[^0-9a-f]*'),
+    approver_kind     TEXT NOT NULL CHECK(approver_kind IN ('local_user', 'workspace_user')),
+    approver_id       TEXT NOT NULL CHECK(approver_id <> ''),
+    decision          TEXT NOT NULL CHECK(decision IN ('approved', 'rejected')),
+    reason            TEXT,
+    policy_revision   TEXT NOT NULL CHECK(policy_revision <> ''),
+    created_at        TEXT NOT NULL,
+    expires_at        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_operation_approvals_operation_created
+    ON operation_approvals(operation_id, created_at);
+
+CREATE TRIGGER IF NOT EXISTS operation_approvals_reject_update
+BEFORE UPDATE ON operation_approvals
+BEGIN
+    SELECT RAISE(ABORT, 'operation approvals are append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS operation_approvals_reject_delete
+BEFORE DELETE ON operation_approvals
+BEGIN
+    SELECT RAISE(ABORT, 'operation approvals are append-only');
+END;
+
+-- Per-operation append-only lifecycle ledger. `sequence` and `prev_hash` make a
+-- missing/reordered row detectable without changing the existing compliance chain.
+CREATE TABLE IF NOT EXISTS operation_events (
+    id             TEXT PRIMARY KEY,
+    operation_id   TEXT NOT NULL REFERENCES operations(id),
+    sequence       INTEGER NOT NULL CHECK(sequence > 0),
+    event_kind     TEXT NOT NULL
+                   CHECK(event_kind IN (
+                       'proposed', 'planned', 'approval_requested', 'approved',
+                       'rejected', 'execution_started', 'progress', 'succeeded',
+                       'failed', 'cancelled', 'outcome_unknown', 'expired'
+                   )),
+    state          TEXT NOT NULL
+                   CHECK(state IN (
+                       'planned', 'pending_approval', 'ready', 'approved',
+                       'rejected', 'expired', 'cancelled', 'executing',
+                       'succeeded', 'failed', 'outcome_unknown'
+                   )),
+    event_json     TEXT NOT NULL CHECK(json_valid(event_json)),
+    created_at     TEXT NOT NULL,
+    prev_hash      TEXT
+                   CHECK(prev_hash IS NULL OR (
+                       length(prev_hash) = 64
+                       AND prev_hash NOT GLOB '*[^0-9a-f]*'
+                   )),
+    hash           TEXT NOT NULL
+                   CHECK(length(hash) = 64
+                     AND hash NOT GLOB '*[^0-9a-f]*'),
+    UNIQUE(operation_id, sequence)
+);
+CREATE INDEX IF NOT EXISTS idx_operation_events_operation_sequence
+    ON operation_events(operation_id, sequence);
+
+CREATE TRIGGER IF NOT EXISTS operation_events_reject_update
+BEFORE UPDATE ON operation_events
+BEGIN
+    SELECT RAISE(ABORT, 'operation events are append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS operation_events_reject_delete
+BEFORE DELETE ON operation_events
+BEGIN
+    SELECT RAISE(ABORT, 'operation events are append-only');
+END;
+
 CREATE TABLE IF NOT EXISTS snippets (
     id            TEXT PRIMARY KEY,
     connection_id TEXT REFERENCES connections(id) ON DELETE CASCADE,
