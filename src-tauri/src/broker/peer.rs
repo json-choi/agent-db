@@ -240,7 +240,7 @@ mod windows_tests {
     #[tokio::test]
     async fn owner_local_named_pipe_accepts_the_current_process() {
         let endpoint = format!(r"\\.\pipe\dopedb-peer-test-{}", Uuid::new_v4());
-        let mut server = create_named_pipe(&endpoint, true).unwrap();
+        let server = create_named_pipe(&endpoint, true).unwrap();
         let client = ClientOptions::new().open(&endpoint).unwrap();
         server.connect().await.unwrap();
         verify_named_pipe_peer(&server).unwrap();

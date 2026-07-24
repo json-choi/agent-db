@@ -16,8 +16,11 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 
+#[cfg(not(windows))]
 const MANAGED_PATH_BEGIN: &str = "# >>> DopeDB CLI >>>";
+#[cfg(not(windows))]
 const MANAGED_PATH_END: &str = "# <<< DopeDB CLI <<<";
+#[cfg(not(windows))]
 const MAX_PROFILE_BYTES: u64 = 1024 * 1024;
 
 #[cfg(not(windows))]
@@ -171,19 +174,17 @@ fn host_target_triple() -> Option<&'static str> {
     }
 }
 
+#[cfg(windows)]
 fn global_cli_target() -> AppResult<PathBuf> {
-    #[cfg(windows)]
-    {
-        let local = dirs::data_local_dir()
-            .ok_or_else(|| AppError::Config("no local application-data directory".into()))?;
-        return Ok(local.join("DopeDB").join("bin").join("dopedb.exe"));
-    }
+    let local = dirs::data_local_dir()
+        .ok_or_else(|| AppError::Config("no local application-data directory".into()))?;
+    Ok(local.join("DopeDB").join("bin").join("dopedb.exe"))
+}
 
-    #[cfg(not(windows))]
-    {
-        let home = dirs::home_dir().ok_or_else(|| AppError::Config("no home directory".into()))?;
-        Ok(home.join(".local").join("bin").join("dopedb"))
-    }
+#[cfg(not(windows))]
+fn global_cli_target() -> AppResult<PathBuf> {
+    let home = dirs::home_dir().ok_or_else(|| AppError::Config("no home directory".into()))?;
+    Ok(home.join(".local").join("bin").join("dopedb"))
 }
 
 fn in_app_cli_target() -> AppResult<PathBuf> {
