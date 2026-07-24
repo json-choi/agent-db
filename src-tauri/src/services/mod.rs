@@ -6,6 +6,7 @@ mod connection_service;
 mod dashboard_service;
 mod document_service;
 mod query_service;
+mod script_service;
 
 pub(crate) use catalog_service::{CatalogReadPolicy, CatalogService};
 pub(crate) use connection_service::{
@@ -13,7 +14,7 @@ pub(crate) use connection_service::{
 };
 pub(crate) use dashboard_service::{
     AgentDashboardCommitError, AgentDashboardPrepareError, AgentDashboardPresentation,
-    DashboardService,
+    DashboardRunError, DashboardRunReceipt, DashboardRunRequest, DashboardService,
 };
 pub(crate) use document_service::{
     AgentDocumentReadError, AgentDocumentReadRequest, DesktopDocumentReadError,
@@ -26,6 +27,9 @@ pub(crate) use query_service::{
     AgentQueryRunPrepareError, DesktopSqlClassificationReceipt, DesktopSqlClassificationRequest,
     DesktopSqlInspectionError, DesktopSqlPreviewReceipt, DesktopSqlPreviewRequest,
     DesktopSqlRunError, DesktopSqlRunReceipt, DesktopSqlRunRequest, QueryService, QUERY_PLAN_TTL,
+};
+pub(crate) use script_service::{
+    DesktopScriptRunError, DesktopScriptRunReceipt, DesktopScriptRunRequest, ScriptService,
 };
 
 use crate::connection::ConnectionManager;
@@ -40,6 +44,7 @@ pub(crate) struct ApplicationServices {
     pub(crate) dashboard: DashboardService,
     pub(crate) document: DocumentService,
     pub(crate) query: QueryService,
+    pub(crate) script: ScriptService,
 }
 
 impl ApplicationServices {
@@ -49,7 +54,8 @@ impl ApplicationServices {
             catalog: CatalogService::new(store.clone(), connections.clone()),
             dashboard: DashboardService::new(store.clone(), connections.clone()),
             document: DocumentService::new(store.clone(), connections.clone()),
-            query: QueryService::new(store, connections),
+            query: QueryService::new(store.clone(), connections.clone()),
+            script: ScriptService::new(store, connections),
         }
     }
 }

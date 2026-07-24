@@ -9,28 +9,27 @@
 //! remains the authoritative stop.
 
 use chrono::Utc;
-use sqlx::AssertSqlSafe;
 use tauri::State;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::audit::{self, RecordArgs};
-use crate::connection::{self, ConnectionAccess, ConnectionLease, DbPool};
+use crate::connection::{self, ConnectionAccess, ConnectionLease};
 use crate::error::{AppError, AppResult};
-use crate::executor;
 use crate::model::{
     ConnectionProfile, Dashboard, DashboardDraft, DocumentQuery, Engine, HistoryEntry,
-    MonitoringStatus, PlatformFeatureFlags, QueryKind, QueryResult, SafetySettings, Workspace,
+    MonitoringStatus, PlatformFeatureFlags, QueryKind, SafetySettings, Workspace,
     WorkspaceAuthState, WorkspaceAuthUser, WorkspaceConnectionAccess, WorkspaceCredentialMode,
     WorkspaceDeviceAuthorization, WorkspaceFeatureState, WorkspaceKind, WorkspaceLoginPoll,
 };
 use crate::monitoring;
-use crate::safety::{classify, PoolRef};
 use crate::services::{
-    CatalogReadPolicy, DesktopDocumentReadError, DesktopDocumentReadRequest,
-    DesktopSqlClassificationReceipt, DesktopSqlClassificationRequest, DesktopSqlInspectionError,
-    DesktopSqlPreviewReceipt, DesktopSqlPreviewRequest, DesktopSqlRunError, DesktopSqlRunReceipt,
-    DesktopSqlRunRequest, DocumentReadReceipt,
+    CatalogReadPolicy, DashboardRunError, DashboardRunReceipt, DashboardRunRequest,
+    DesktopDocumentReadError, DesktopDocumentReadRequest, DesktopScriptRunError,
+    DesktopScriptRunReceipt, DesktopScriptRunRequest, DesktopSqlClassificationReceipt,
+    DesktopSqlClassificationRequest, DesktopSqlInspectionError, DesktopSqlPreviewReceipt,
+    DesktopSqlPreviewRequest, DesktopSqlRunError, DesktopSqlRunReceipt, DesktopSqlRunRequest,
+    DocumentReadReceipt,
 };
 use crate::state::AppState;
 use crate::store::PinnedConnection;
@@ -39,14 +38,6 @@ use crate::store::PinnedConnection;
 
 const MAX_CONNECTION_CREDENTIAL_BYTES: usize = 1 << 16;
 
-/// Borrow a `DbPool` as a `safety::PoolRef` (the L2/L3 entry handle).
-fn pool_ref(db: &DbPool) -> PoolRef<'_> {
-    match db {
-        DbPool::Postgres(p) => PoolRef::Postgres(p),
-        DbPool::Mysql(p) => PoolRef::Mysql(p),
-        DbPool::Sqlite(p) => PoolRef::Sqlite(p),
-    }
-}
 /// Acquire a manager-owned read lease pinned to the active account/workspace scope.
 /// The manager performs online RBAC checks and single-flight cache opening.
 async fn get_live(state: &AppState, id: Uuid) -> AppResult<ConnectionLease> {
@@ -95,65 +86,6 @@ fn validate_schema_group_engine(
         )));
     }
     Ok(())
-}
-
-/// Append an audit record (always) and a query-history row for one run/attempt.
-/// Best-effort outcome logging: failures never mask the actual command result, but
-/// they are logged (never silently dropped) so a dropped compliance row is visible.
-#[allow(clippy::too_many_arguments)]
-async fn record_run(
-    state: &AppState,
-    pin: &PinnedConnection,
-    sql: &str,
-    kind: QueryKind,
-    action: &str,
-    status: &str,
-    row_count: Option<i64>,
-    duration_ms: Option<i64>,
-    error: Option<String>,
-    origin: &str,
-) {
-    let id = pin.connection_id;
-    let engine = pin.profile.engine;
-    if let Err(e) = audit::record(
-        &state.store,
-        RecordArgs {
-            connection_id: id,
-            engine,
-            agent_prompt: None,
-            sql: sql.to_string(),
-            kind,
-            action: action.to_string(),
-            approved_by: None,
-            affected_estimate: row_count,
-            error: error.clone(),
-        },
-    )
-    .await
-    {
-        tracing::error!("audit record ({action}) failed for connection {id}: {e}");
-    }
-    if let Err(e) = state
-        .store
-        .insert_history_if_current(
-            pin,
-            &HistoryEntry {
-                id: Uuid::new_v4(),
-                connection_id: id,
-                sql: sql.to_string(),
-                kind,
-                status: status.to_string(),
-                row_count,
-                duration_ms,
-                error,
-                executed_at: Utc::now(),
-                origin: origin.to_string(),
-            },
-        )
-        .await
-    {
-        tracing::error!("history insert failed for connection {id}: {e}");
-    }
 }
 
 // ── workspace context ────────────────────────────────────────────────────────
@@ -976,100 +908,16 @@ pub async fn run_dashboard(
     state: State<'_, AppState>,
     id: Uuid,
     query_id: Option<Uuid>,
-) -> AppResult<QueryResult> {
-    let operation_scope = state.connections.begin_operation_scope().await;
-    let dashboard = state.store.get_dashboard(id).await?;
-    let operation_pin = operation_scope
-        .pin_connection(dashboard.connection_id)
-        .await?;
-    let profile = operation_pin.profile.clone();
-    let draft = DashboardDraft {
-        connection_id: dashboard.connection_id,
-        title: dashboard.title.clone(),
-        description: dashboard.description.clone(),
-        sql: dashboard.sql.clone(),
-        visualization: dashboard.visualization.clone(),
-    };
-    if let Err(e) = crate::dashboard::validate_draft(&draft, profile.engine) {
-        let kind = classify(&dashboard.sql, profile.engine)
-            .map(|classification| classification.kind)
-            .unwrap_or(QueryKind::Write);
-        record_run(
-            &state,
-            &operation_pin,
-            &dashboard.sql,
-            kind,
-            "dashboard:run",
-            "blocked",
-            None,
-            None,
-            Some(e.to_string()),
-            "dashboard",
-        )
-        .await;
-        return Err(e);
-    }
-
-    let settings = state.store.get_safety(dashboard.connection_id).await?;
-    let live = match operation_scope
-        .connect(operation_pin.clone(), ConnectionAccess::Read)
+) -> AppResult<DashboardRunReceipt> {
+    state
+        .services
+        .dashboard
+        .run(DashboardRunRequest {
+            dashboard_id: id,
+            query_id,
+        })
         .await
-    {
-        Ok(live) => live,
-        Err(e) => {
-            record_run(
-                &state,
-                &operation_pin,
-                &dashboard.sql,
-                QueryKind::Read,
-                "dashboard:run",
-                "error",
-                None,
-                None,
-                Some(e.to_string()),
-                "dashboard",
-            )
-            .await;
-            return Err(e);
-        }
-    };
-    let max_rows = settings.max_rows.clamp(1, 100_000);
-    let run =
-        crate::safety::run_read_only(pool_ref(live.live().sql()?.ro()), &dashboard.sql, max_rows);
-    match executor::cancel::guard(query_id, executor::cancel::QUERY_TIMEOUT, run).await {
-        Ok(result) => {
-            record_run(
-                &state,
-                &operation_pin,
-                &dashboard.sql,
-                QueryKind::Read,
-                "dashboard:run",
-                "ok",
-                Some(result.row_count as i64),
-                Some(result.duration_ms as i64),
-                None,
-                "dashboard",
-            )
-            .await;
-            Ok(result)
-        }
-        Err(e) => {
-            record_run(
-                &state,
-                &operation_pin,
-                &dashboard.sql,
-                QueryKind::Read,
-                "dashboard:run",
-                "error",
-                None,
-                None,
-                Some(e.to_string()),
-                "dashboard",
-            )
-            .await;
-            Err(e)
-        }
-    }
+        .map_err(DashboardRunError::into_error)
 }
 
 // ── schema ───────────────────────────────────────────────────────────────────
@@ -1204,99 +1052,6 @@ pub async fn run_document_query(
 
 // ── multi-statement script execution ─────────────────────────────────────────
 
-fn stmt_ok(sql: &str, affected: u64) -> crate::model::ScriptStatement {
-    crate::model::ScriptStatement {
-        sql: sql.to_string(),
-        result: None,
-        affected: Some(affected as i64),
-        error: None,
-    }
-}
-
-fn stmt_err(sql: &str, msg: String) -> crate::model::ScriptStatement {
-    crate::model::ScriptStatement {
-        sql: sql.to_string(),
-        result: None,
-        affected: None,
-        error: Some(msg),
-    }
-}
-
-fn stmt_skipped(sql: &str) -> crate::model::ScriptStatement {
-    stmt_err(sql, "skipped — transaction rolled back".into())
-}
-
-/// True when a script must take the write path (any statement isn't a plain read).
-fn script_has_write(kinds: &[QueryKind]) -> bool {
-    kinds.iter().any(|k| !matches!(k, QueryKind::Read))
-}
-
-/// Run every statement in ONE write-pool transaction, capturing each statement's
-/// affected count. First error rolls back the whole transaction; the failing
-/// statement gets its error, every statement after it is marked skipped, and nothing
-/// commits. Returns `(per-statement outcomes, committed)`.
-// ponytail: SELECTs inside a write script report `affected` only (no grid). To see
-// query results, run a read-only script — that path streams rows per statement.
-// NOTE: MySQL implicitly commits DDL, so a
-// mixed DDL script's atomicity is best-effort there.
-async fn execute_script_tx(
-    pool: &DbPool,
-    statements: &[String],
-) -> (Vec<crate::model::ScriptStatement>, bool) {
-    macro_rules! run_tx {
-        ($p:expr) => {{
-            let mut out: Vec<crate::model::ScriptStatement> = Vec::with_capacity(statements.len());
-            match $p.begin().await {
-                Ok(mut tx) => {
-                    let mut ok = true;
-                    for s in statements {
-                        match sqlx::query(AssertSqlSafe(s.as_str()))
-                            .execute(&mut *tx)
-                            .await
-                        {
-                            Ok(r) => out.push(stmt_ok(s, r.rows_affected())),
-                            Err(e) => {
-                                out.push(stmt_err(s, e.to_string()));
-                                ok = false;
-                                break;
-                            }
-                        }
-                    }
-                    if !ok {
-                        let _ = tx.rollback().await;
-                        while out.len() < statements.len() {
-                            out.push(stmt_skipped(&statements[out.len()]));
-                        }
-                        (out, false)
-                    } else if let Err(e) = tx.commit().await {
-                        // Commit itself failed → nothing persisted; flag every statement.
-                        let msg = format!("commit failed — nothing was saved: {e}");
-                        for st in &mut out {
-                            st.error = Some(msg.clone());
-                            st.affected = None;
-                        }
-                        (out, false)
-                    } else {
-                        (out, true)
-                    }
-                }
-                Err(e) => (
-                    statements
-                        .iter()
-                        .map(|s| stmt_err(s, format!("could not begin transaction: {e}")))
-                        .collect(),
-                    false,
-                ),
-            }
-        }};
-    }
-    match pool {
-        DbPool::Postgres(p) => run_tx!(p),
-        DbPool::Mysql(p) => run_tx!(p),
-        DbPool::Sqlite(p) => run_tx!(p),
-    }
-}
-
 /// Run a pasted multi-statement script. Splits into statements (comment-only skipped),
 /// classifies EACH via L1, then:
 /// - all reads → run sequentially on the read-only pool (honoring `auto_run_reads`,
@@ -1314,292 +1069,19 @@ pub async fn run_script(
     approved: bool,
     query_id: Option<Uuid>,
     origin: Option<String>,
-) -> AppResult<crate::model::ScriptOutcome> {
-    use crate::model::{ScriptOutcome, ScriptStatement};
-
-    let operation_scope = state.connections.begin_operation_scope().await;
-    let operation_pin = operation_scope.pin_connection(id).await?;
-    let profile = operation_pin.profile.clone();
-    let settings = state.store.get_safety(id).await?;
-    let engine = profile.engine;
-    let origin = origin.unwrap_or_else(|| "manual".into());
-
-    // Split authoritatively in the backend; comment-only segments are discarded.
-    let statements = crate::sql_script::split_statements(&sql, engine);
-    if statements.is_empty() {
-        return Err(AppError::Config(
-            "no executable statements in the script".into(),
-        ));
-    }
-    let kinds: Vec<QueryKind> = statements
-        .iter()
-        .map(|s| classify(s, engine).map(|c| c.kind))
-        .collect::<AppResult<_>>()?;
-
-    // ── all-reads path: sequential on the read-only pool ──────────────────────
-    if !script_has_write(&kinds) {
-        // Reads honor `auto_run_reads`; when off they need the same explicit approval
-        // a single read would (mirrors run_sql's RequireApproval for reads).
-        if !settings.auto_run_reads && !approved {
-            let reason = "reads require approval for this connection".to_string();
-            record_run(
-                &state,
-                &operation_pin,
-                &sql,
-                QueryKind::Read,
-                "blocked",
-                "blocked",
-                None,
-                None,
-                Some(reason.clone()),
-                &origin,
-            )
-            .await;
-            return Err(AppError::Blocked { reason });
-        }
-
-        let live = match operation_scope
-            .connect(operation_pin.clone(), ConnectionAccess::Read)
-            .await
-        {
-            Ok(live) => live,
-            Err(e) => {
-                record_run(
-                    &state,
-                    &operation_pin,
-                    &sql,
-                    QueryKind::Read,
-                    "script:execute",
-                    "error",
-                    None,
-                    None,
-                    Some(e.to_string()),
-                    &origin,
-                )
-                .await;
-                return Err(e);
-            }
-        };
-        let live = live.live().sql()?;
-        let mut out: Vec<ScriptStatement> = Vec::with_capacity(statements.len());
-        let mut failure: Option<String> = None;
-        for stmt in &statements {
-            if failure.is_some() {
-                out.push(stmt_skipped(stmt));
-                continue;
-            }
-            // query_id threaded in so a long read script is cancellable per statement.
-            match executor::run_read(live, engine, stmt, settings.max_rows, query_id).await {
-                Ok(result) => out.push(ScriptStatement {
-                    sql: stmt.clone(),
-                    result: Some(result),
-                    affected: None,
-                    error: None,
-                }),
-                Err(e) => {
-                    let msg = e.to_string();
-                    out.push(stmt_err(stmt, msg.clone()));
-                    failure = Some(msg);
-                }
-            }
-        }
-        let total: i64 = out
-            .iter()
-            .filter_map(|s| s.result.as_ref())
-            .map(|r| r.row_count as i64)
-            .sum();
-        let (status, err) = match &failure {
-            Some(e) => ("error", Some(e.clone())),
-            None => ("ok", None),
-        };
-        record_run(
-            &state,
-            &operation_pin,
-            &sql,
-            QueryKind::Read,
-            "script:execute",
-            status,
-            Some(total),
-            None,
-            err,
-            &origin,
-        )
-        .await;
-        return Ok(ScriptOutcome {
-            statements: out,
-            committed: false,
-            all_reads: true,
-        });
-    }
-
-    if !profile.workspace_access.can_write() {
-        return Err(AppError::Blocked {
-            reason: "your workspace role grants read-only database access".into(),
-        });
-    }
-    // ── write/DDL path: one transaction, all-or-nothing ───────────────────────
-    // Same gates as run_sql: writes must be enabled AND the run explicitly approved.
-    if !settings.allow_writes {
-        let reason = "writing is disabled for this connection (writes are off by default). \
-                      Enable writes in the connection's safety settings to run this script."
-            .to_string();
-        record_run(
-            &state,
-            &operation_pin,
-            &sql,
-            QueryKind::Write,
-            "blocked",
-            "blocked",
-            None,
-            None,
-            Some(reason.clone()),
-            &origin,
-        )
-        .await;
-        return Err(AppError::Blocked { reason });
-    }
-    if !approved {
-        let reason = "this script modifies data and requires explicit approval".to_string();
-        record_run(
-            &state,
-            &operation_pin,
-            &sql,
-            QueryKind::Write,
-            "blocked",
-            "blocked",
-            None,
-            None,
-            Some(reason.clone()),
-            &origin,
-        )
-        .await;
-        return Err(AppError::Blocked { reason });
-    }
-
-    let has_ddl = kinds.iter().any(|k| matches!(k, QueryKind::Ddl));
-    let script_kind = if has_ddl {
-        QueryKind::Ddl
-    } else if kinds.iter().any(|k| matches!(k, QueryKind::Privilege)) {
-        QueryKind::Privilege
-    } else {
-        QueryKind::Write
-    };
-
-    // Compliance: persist the attempt BEFORE touching the DB; fail closed if we can't.
-    audit::record(
-        &state.store,
-        RecordArgs {
+) -> AppResult<DesktopScriptRunReceipt> {
+    state
+        .services
+        .script
+        .run_desktop(DesktopScriptRunRequest {
             connection_id: id,
-            engine,
-            agent_prompt: None,
-            sql: sql.clone(),
-            kind: script_kind,
-            action: "script:execute:attempt".into(),
-            approved_by: None,
-            affected_estimate: None,
-            error: None,
-        },
-    )
-    .await
-    .map_err(|e| {
-        AppError::Config(format!(
-            "audit pre-record failed — refusing to run script: {e}"
-        ))
-    })?;
-
-    let live = match operation_scope
-        .connect(operation_pin.clone(), ConnectionAccess::Write)
+            sql,
+            approved,
+            query_id,
+            origin,
+        })
         .await
-    {
-        Ok(live) => live,
-        Err(e) => {
-            record_run(
-                &state,
-                &operation_pin,
-                &sql,
-                script_kind,
-                "script:execute",
-                "error",
-                None,
-                None,
-                Some(e.to_string()),
-                &origin,
-            )
-            .await;
-            return Err(e);
-        }
-    };
-    // Same audit-closure rule as run_sql: a document connection reaching the
-    // write path must not leave a dangling attempt record.
-    let live = match live.live().sql() {
-        Ok(live) => live,
-        Err(e) => {
-            record_run(
-                &state,
-                &operation_pin,
-                &sql,
-                script_kind,
-                "script:execute",
-                "error",
-                None,
-                None,
-                Some(e.to_string()),
-                &origin,
-            )
-            .await;
-            return Err(e);
-        }
-    };
-    // Wrap the whole transaction in the cancel/timeout guard; a cancel drops the tx
-    // future mid-flight (uncommitted → rolled back), same as the single-write path.
-    let tx_fut =
-        async { Ok::<_, AppError>(execute_script_tx(&live.write_pool, &statements).await) };
-    let (rows, committed) =
-        match executor::cancel::guard(query_id, executor::cancel::QUERY_TIMEOUT, tx_fut).await {
-            Ok(v) => v,
-            Err(e) => {
-                record_run(
-                    &state,
-                    &operation_pin,
-                    &sql,
-                    script_kind,
-                    "script:execute",
-                    "error",
-                    None,
-                    None,
-                    Some(e.to_string()),
-                    &origin,
-                )
-                .await;
-                return Err(e);
-            }
-        };
-
-    // A committed DDL changed the catalog — drop the cached schema.
-    if committed && has_ddl {
-        let _ = state.store.clear_schema_cache(id).await;
-    }
-    let total: i64 = rows.iter().filter_map(|s| s.affected).sum();
-    let first_err = rows.iter().find_map(|s| s.error.clone());
-    record_run(
-        &state,
-        &operation_pin,
-        &sql,
-        script_kind,
-        "script:execute",
-        if committed { "ok" } else { "error" },
-        Some(total),
-        None,
-        first_err,
-        &origin,
-    )
-    .await;
-
-    Ok(ScriptOutcome {
-        statements: rows,
-        committed,
-        all_reads: false,
-    })
+        .map_err(DesktopScriptRunError::into_error)
 }
 
 // ── safety settings ──────────────────────────────────────────────────────────
@@ -2038,102 +1520,6 @@ pub async fn pick_file(app: tauri::AppHandle) -> Option<String> {
         .blocking_pick_file()
         .and_then(|path| path.into_path().ok())
         .map(|path| path.to_string_lossy().into_owned())
-}
-
-#[cfg(test)]
-mod script_tests {
-    use super::*;
-    use crate::model::QueryKind;
-    use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
-
-    async fn sqlite(tag: &str) -> SqlitePool {
-        let path =
-            std::env::temp_dir().join(format!("dopedb-script-{tag}-{}.db", std::process::id()));
-        let _ = std::fs::remove_file(&path);
-        let opts = SqliteConnectOptions::new()
-            .filename(&path)
-            .create_if_missing(true);
-        SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(opts)
-            .await
-            .unwrap()
-    }
-
-    // Gating decision: pure reads take the read path; any write/DDL/privilege forces
-    // the (approval + allow_writes) write path.
-    #[test]
-    fn write_path_only_when_a_statement_writes() {
-        assert!(!script_has_write(&[QueryKind::Read, QueryKind::Read]));
-        assert!(script_has_write(&[QueryKind::Read, QueryKind::Write]));
-        assert!(script_has_write(&[QueryKind::Ddl]));
-        assert!(script_has_write(&[QueryKind::Privilege]));
-    }
-
-    // One transaction: a mid-script failure rolls back everything before it, marks the
-    // failing + trailing statements, and commits nothing.
-    #[tokio::test]
-    async fn tx_rolls_back_the_whole_script_on_error() {
-        let pool = sqlite("rollback").await;
-        sqlx::raw_sql("CREATE TABLE t (id INTEGER);")
-            .execute(&pool)
-            .await
-            .unwrap();
-        let db = DbPool::Sqlite(pool.clone());
-
-        let (rows, committed) = execute_script_tx(
-            &db,
-            &[
-                "INSERT INTO t VALUES (1)".into(),
-                "INSERT INTO t VALUES (2)".into(),
-                "THIS IS NOT SQL".into(),
-                "INSERT INTO t VALUES (3)".into(),
-            ],
-        )
-        .await;
-
-        assert!(!committed, "a failed statement must not commit");
-        assert!(rows[0].error.is_none() && rows[1].error.is_none());
-        assert!(
-            rows[2].error.is_some(),
-            "the bad statement carries the error"
-        );
-        assert!(
-            rows[3].error.is_some(),
-            "statements after the failure are skipped"
-        );
-
-        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM t")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(n, 0, "rollback leaves the table empty");
-    }
-
-    // All statements succeed → one commit, every row persisted.
-    #[tokio::test]
-    async fn tx_commits_all_on_success() {
-        let pool = sqlite("commit").await;
-        let db = DbPool::Sqlite(pool.clone());
-
-        let (rows, committed) = execute_script_tx(
-            &db,
-            &[
-                "CREATE TABLE t (id INTEGER)".into(),
-                "INSERT INTO t VALUES (1)".into(),
-                "INSERT INTO t VALUES (2)".into(),
-            ],
-        )
-        .await;
-
-        assert!(committed);
-        assert!(rows.iter().all(|r| r.error.is_none()));
-        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM t")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(n, 2);
-    }
 }
 
 #[cfg(test)]
