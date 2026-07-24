@@ -6,7 +6,9 @@
 
 use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::Read;
+#[cfg(not(windows))]
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -364,8 +366,6 @@ fn atomic_replace(from: &Path, to: &Path) -> AppResult<()> {
 
 #[cfg(windows)]
 fn atomic_replace(from: &Path, to: &Path) -> AppResult<()> {
-    use std::os::windows::ffi::OsStrExt;
-
     use windows_sys::Win32::Storage::FileSystem::{
         MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
     };

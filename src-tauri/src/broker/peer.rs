@@ -30,13 +30,13 @@ mod windows {
         ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
     };
     use windows_sys::Win32::Security::{
-        EqualSid, GetTokenInformation, OpenProcessToken, SetFileSecurityW, TokenUser,
-        DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
-        SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
+        EqualSid, GetTokenInformation, SetFileSecurityW, TokenUser, DACL_SECURITY_INFORMATION,
+        PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES,
+        TOKEN_QUERY, TOKEN_USER,
     };
     use windows_sys::Win32::System::Pipes::GetNamedPipeClientProcessId;
     use windows_sys::Win32::System::Threading::{
-        GetCurrentProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
     };
 
     const OWNER_ONLY_SDDL: &str = "D:P(A;;GA;;;SY)(A;;GA;;;OW)";
