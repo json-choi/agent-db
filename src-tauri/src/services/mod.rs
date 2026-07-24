@@ -14,7 +14,8 @@ mod script_service;
 pub(crate) use activity_service::{ActivityService, AuditSnapshotReceipt, AuditVerdict};
 pub(crate) use catalog_service::{CatalogReadPolicy, CatalogService};
 pub(crate) use connection_service::{
-    AgentConnectionSummary, ConnectionService, LegacyConnectionResolutionError,
+    AgentConnectionSummary, ConnectionProfileTestRequest, ConnectionService,
+    ConnectionUpsertRequest, LegacyConnectionResolutionError,
 };
 pub(crate) use dashboard_service::{
     AgentDashboardCommitError, AgentDashboardPrepareError, AgentDashboardPresentation,
@@ -62,7 +63,7 @@ impl ApplicationServices {
     pub(crate) fn new(store: Store, connections: ConnectionManager) -> Self {
         Self {
             activity: ActivityService::new(store.clone()),
-            connections: ConnectionService::new(store.clone()),
+            connections: ConnectionService::new(store.clone(), connections.clone()),
             catalog: CatalogService::new(store.clone(), connections.clone()),
             dashboard: DashboardService::new(store.clone(), connections.clone()),
             document: DocumentService::new(store.clone(), connections.clone()),

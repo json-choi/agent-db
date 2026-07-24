@@ -21,13 +21,13 @@ use crate::model::{
     WorkspaceFeatureState, WorkspaceKind, WorkspaceLoginPoll,
 };
 use crate::services::{
-    AuditSnapshotReceipt, AuditVerdict, CatalogReadPolicy, DashboardRunError, DashboardRunReceipt,
-    DashboardRunRequest, DesktopDocumentReadError, DesktopDocumentReadRequest,
-    DesktopScriptRunError, DesktopScriptRunReceipt, DesktopScriptRunRequest,
-    DesktopSqlClassificationReceipt, DesktopSqlClassificationRequest, DesktopSqlInspectionError,
-    DesktopSqlPreviewReceipt, DesktopSqlPreviewRequest, DesktopSqlRunError, DesktopSqlRunReceipt,
-    DesktopSqlRunRequest, DocumentReadReceipt, MonitoringChangeRequest, MonitoringServiceError,
-    MonitoringStatusReceipt,
+    AuditSnapshotReceipt, AuditVerdict, CatalogReadPolicy, ConnectionProfileTestRequest,
+    ConnectionUpsertRequest, DashboardRunError, DashboardRunReceipt, DashboardRunRequest,
+    DesktopDocumentReadError, DesktopDocumentReadRequest, DesktopScriptRunError,
+    DesktopScriptRunReceipt, DesktopScriptRunRequest, DesktopSqlClassificationReceipt,
+    DesktopSqlClassificationRequest, DesktopSqlInspectionError, DesktopSqlPreviewReceipt,
+    DesktopSqlPreviewRequest, DesktopSqlRunError, DesktopSqlRunReceipt, DesktopSqlRunRequest,
+    DocumentReadReceipt, MonitoringChangeRequest, MonitoringServiceError, MonitoringStatusReceipt,
 };
 use crate::state::AppState;
 
@@ -39,36 +39,6 @@ fn delete_secret_best_effort(id: Uuid, action: &'static str) {
     if let Err(error) = connection::delete_secret(&id) {
         tracing::warn!(credential_id = %id, %error, action, "credential cleanup deferred");
     }
-}
-
-fn normalize_schema_group(schema_group: Option<String>) -> Option<String> {
-    schema_group.and_then(|value| {
-        let trimmed = value.trim().to_string();
-        (!trimmed.is_empty()).then_some(trimmed)
-    })
-}
-
-fn validate_schema_group_engine(
-    profile: &ConnectionProfile,
-    connections: &[ConnectionProfile],
-) -> AppResult<()> {
-    let Some(group) = profile.schema_group.as_deref() else {
-        return Ok(());
-    };
-    let incompatible = connections.iter().any(|connection| {
-        connection.id != profile.id
-            && connection
-                .schema_group
-                .as_deref()
-                .is_some_and(|candidate| candidate.trim().eq_ignore_ascii_case(group))
-            && connection.engine != profile.engine
-    });
-    if incompatible {
-        return Err(AppError::Config(format!(
-            "schema group '{group}' already contains a different database engine"
-        )));
-    }
-    Ok(())
 }
 
 // ── workspace context ────────────────────────────────────────────────────────
@@ -641,13 +611,16 @@ pub async fn bind_workspace_connection_credentials(
 // ── connection CRUD ──────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub fn list_drivers() -> Vec<crate::driver::DriverDescriptor> {
-    crate::driver::list()
+pub fn list_drivers(state: State<'_, AppState>) -> Vec<crate::driver::DriverDescriptor> {
+    state.services.connections.list_drivers()
 }
 
 #[tauri::command]
-pub fn install_driver(id: String) -> AppResult<crate::driver::DriverDescriptor> {
-    crate::driver::install(&id)
+pub fn install_driver(
+    state: State<'_, AppState>,
+    id: String,
+) -> AppResult<crate::driver::DriverDescriptor> {
+    state.services.connections.install_driver(&id)
 }
 
 #[tauri::command]
@@ -661,73 +634,14 @@ pub async fn upsert_connection(
     profile: ConnectionProfile,
     password: Option<String>,
 ) -> AppResult<ConnectionProfile> {
-    let mut profile = profile;
-    if profile.workspace_access != WorkspaceConnectionAccess::Local {
-        return Err(AppError::Blocked {
-            reason: "shared templates are edited by workspace editors; bind credentials separately"
-                .into(),
-        });
-    }
-    profile.schema_group = normalize_schema_group(profile.schema_group);
-    // Reject stale or incompatible explicit driver choices before persisting the profile.
-    crate::driver::validate(&profile)?;
-    let mutation = state.connections.begin_scope_mutation().await;
-    // Scope validation precedes credential-store writes so a known UUID from another
-    // workspace cannot replace that resource's member-local secret as a side effect.
     state
-        .store
-        .ensure_connection_write_scope(profile.id)
-        .await?;
-    let connections = state.store.list_connections().await?;
-    validate_schema_group_engine(&profile, &connections)?;
-    let existing_secret_id = connections
-        .iter()
-        .find(|connection| connection.id == profile.id)
-        .and_then(|connection| connection.secret_ref.as_deref())
-        .map(Uuid::parse_str)
-        .transpose()
-        .map_err(|_| AppError::Config("stored connection secret reference is invalid".into()))?;
-    let password = password
-        .filter(|password| !password.is_empty())
-        .map(Zeroizing::new);
-    if password
-        .as_ref()
-        .is_some_and(|value| value.len() > MAX_CONNECTION_CREDENTIAL_BYTES)
-    {
-        return Err(AppError::Config(
-            "connection credential exceeds the size limit".into(),
-        ));
-    }
-    // Never trust an IPC-supplied secret reference. Preserve the stored pointer when
-    // no password is supplied, or write a new credential item and atomically swap the
-    // pointer with the SQLite profile.
-    profile.secret_ref = existing_secret_id.map(|id| id.to_string());
-    let replacement_secret_id = password.as_ref().map(|_| Uuid::new_v4());
-    if let Some(password) = password.as_deref() {
-        let credential_id = replacement_secret_id.expect("replacement id accompanies password");
-        connection::store_secret(&credential_id, password)?;
-        profile.secret_ref = Some(credential_id.to_string());
-    }
-    match state.store.upsert_connection(&profile).await {
-        Ok(profile) => {
-            // Only retire the old material after SQLite commits. A failed edit keeps
-            // both the prior pool and catalog valid.
-            let _ = state.store.clear_schema_cache(profile.id).await;
-            mutation.retire_connection(profile.id).await;
-            if replacement_secret_id.is_some() {
-                if let Some(previous_id) = existing_secret_id {
-                    delete_secret_best_effort(previous_id, "replace_connection_credentials");
-                }
-            }
-            Ok(profile)
-        }
-        Err(error) => {
-            if let Some(credential_id) = replacement_secret_id {
-                delete_secret_best_effort(credential_id, "upsert_connection");
-            }
-            Err(error)
-        }
-    }
+        .services
+        .connections
+        .upsert(ConnectionUpsertRequest {
+            profile,
+            password: password.map(Zeroizing::new),
+        })
+        .await
 }
 
 #[tauri::command]
@@ -736,121 +650,37 @@ pub async fn set_connections_schema_group(
     ids: Vec<Uuid>,
     schema_group: Option<String>,
 ) -> AppResult<Vec<ConnectionProfile>> {
-    let mut unique_ids = Vec::with_capacity(ids.len());
-    for id in ids {
-        if !unique_ids.contains(&id) {
-            unique_ids.push(id);
-        }
-    }
-    if unique_ids.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let mutation = state.connections.begin_scope_mutation().await;
-    let normalized = normalize_schema_group(schema_group);
-    let mut connections = state.store.list_connections().await?;
-    for id in &unique_ids {
-        let profile = connections
-            .iter_mut()
-            .find(|profile| profile.id == *id)
-            .ok_or_else(|| AppError::NotFound(format!("connection {id}")))?;
-        if profile.workspace_access != WorkspaceConnectionAccess::Local {
-            return Err(AppError::Blocked {
-                reason: "shared template metadata must be changed through the workspace service"
-                    .into(),
-            });
-        }
-        profile.schema_group = normalized.clone();
-    }
-
-    let updated = unique_ids
-        .iter()
-        .map(|id| {
-            connections
-                .iter()
-                .find(|profile| profile.id == *id)
-                .cloned()
-                .ok_or_else(|| AppError::NotFound(format!("connection {id}")))
-        })
-        .collect::<AppResult<Vec<_>>>()?;
-    for profile in &updated {
-        validate_schema_group_engine(profile, &connections)?;
-    }
-
     state
-        .store
-        .set_connections_schema_group(&unique_ids, normalized)
-        .await?;
-    mutation.retire_connections(&unique_ids).await;
-    Ok(updated)
+        .services
+        .connections
+        .set_schema_group(ids, schema_group)
+        .await
 }
 
 #[tauri::command]
 pub async fn delete_connection(state: State<'_, AppState>, id: Uuid) -> AppResult<()> {
-    let mutation = state
-        .connections
-        .begin_connection_mutation(id, ConnectionAccess::Read)
-        .await?;
-    let profile = mutation.pin().profile.clone();
-    if profile.workspace_access != WorkspaceConnectionAccess::Local {
-        return Err(AppError::Blocked {
-            reason: "shared connections can only be removed by a workspace administrator".into(),
-        });
-    }
-    state.store.delete_connection(id).await?;
-    if let Some(secret_ref) = profile.secret_ref.as_deref() {
-        match Uuid::parse_str(secret_ref) {
-            Ok(credential_id) => {
-                delete_secret_best_effort(credential_id, "delete_connection");
-            }
-            Err(error) => {
-                tracing::warn!(connection_id = %id, %error, "ignored invalid credential reference while deleting connection");
-            }
-        }
-    }
-    mutation.retire_connection(id).await;
-    Ok(())
+    state.services.connections.delete(id).await
 }
 
 #[tauri::command]
 pub async fn test_connection(state: State<'_, AppState>, id: Uuid) -> AppResult<()> {
-    let profile = state.store.get_connection(id).await?;
-    if !profile.workspace_access.can_read() {
-        return Err(AppError::Blocked {
-            reason: "your workspace role cannot test this shared connection".into(),
-        });
-    }
-    state
-        .connections
-        .pin(id, ConnectionAccess::Read)
-        .await?
-        .test_fresh()
-        .await
+    state.services.connections.test(id).await
 }
 
-/// Dial an ad-hoc (possibly unsaved) profile purely to check that it connects.
-/// Persists NOTHING — no store row, no credential-store write, no cached pool. This is the
-/// connection form's "Test connection" button: a literal reachability check.
 #[tauri::command]
 pub async fn test_connection_profile(
+    state: State<'_, AppState>,
     profile: ConnectionProfile,
     password: Option<String>,
 ) -> AppResult<()> {
-    if profile.workspace_access != WorkspaceConnectionAccess::Local
-        || profile.credential_mode != WorkspaceCredentialMode::Local
-    {
-        return Err(AppError::Blocked {
-            reason: "shared connections must be tested through workspace authorization".into(),
-        });
-    }
-    let secret = Zeroizing::new(password.unwrap_or_default());
-    if secret.len() > MAX_CONNECTION_CREDENTIAL_BYTES {
-        return Err(AppError::Config(
-            "connection credential exceeds the size limit".into(),
-        ));
-    }
-    let live = connection::connect(&profile, secret.as_str()).await?;
-    live.test().await
+    state
+        .services
+        .connections
+        .test_profile(ConnectionProfileTestRequest {
+            profile,
+            password: password.map(Zeroizing::new),
+        })
+        .await
 }
 
 // ── saved dashboards ─────────────────────────────────────────────────────────
@@ -1325,59 +1155,4 @@ pub async fn pick_file(app: tauri::AppHandle) -> Option<String> {
         .blocking_pick_file()
         .and_then(|path| path.into_path().ok())
         .map(|path| path.to_string_lossy().into_owned())
-}
-
-#[cfg(test)]
-mod schema_group_tests {
-    use std::collections::HashMap;
-
-    use uuid::Uuid;
-
-    use super::{normalize_schema_group, validate_schema_group_engine};
-    use crate::model::{ConnectionProfile, Engine, Provider};
-
-    fn profile(id: u128, engine: Engine, group: Option<&str>) -> ConnectionProfile {
-        ConnectionProfile {
-            id: Uuid::from_u128(id),
-            name: format!("connection-{id}"),
-            engine,
-            provider: Provider::Generic,
-            driver_id: None,
-            host: "localhost".into(),
-            port: 0,
-            database: "test".into(),
-            username: "tester".into(),
-            sslmode: "disable".into(),
-            extra_params: HashMap::new(),
-            readonly_default: true,
-            allow_writes: false,
-            secret_ref: None,
-            env: None,
-            schema_group: group.map(str::to_string),
-            workspace_access: crate::model::WorkspaceConnectionAccess::Local,
-            credential_mode: crate::model::WorkspaceCredentialMode::Local,
-        }
-    }
-
-    #[test]
-    fn normalizes_empty_and_padded_group_names() {
-        assert_eq!(
-            normalize_schema_group(Some("  Core  ".into())).as_deref(),
-            Some("Core")
-        );
-        assert_eq!(normalize_schema_group(Some("   ".into())), None);
-    }
-
-    #[test]
-    fn rejects_a_different_engine_in_the_same_case_insensitive_group() {
-        let postgres = profile(1, Engine::Postgres, Some("Core"));
-        let mysql = profile(2, Engine::Mysql, Some(" core "));
-
-        assert!(validate_schema_group_engine(&postgres, &[mysql]).is_err());
-        assert!(validate_schema_group_engine(
-            &postgres,
-            &[profile(3, Engine::Postgres, Some("CORE"))],
-        )
-        .is_ok());
-    }
 }
