@@ -53,7 +53,6 @@ pub fn run() {
             // Start the local MCP server (Streamable HTTP on 127.0.0.1:7686). It shares
             // the app's Store + credential-store + safety pipeline via the tools in `mcp`.
             let st = app.state::<state::AppState>();
-            let store = st.store.clone();
             let token = st.mcp_token.clone();
             // ApplicationServices owns the same scope-aware connection manager as
             // AppState; runtime status remains shared so the UI can report the
@@ -63,24 +62,21 @@ pub fn run() {
             let handle = app.handle().clone();
             // HTTP endpoint (Claude Code / Cursor / …).
             {
-                let (store, token, handle, services, runtime) = (
-                    store.clone(),
+                let (token, handle, services, runtime) = (
                     token.clone(),
                     handle.clone(),
                     services.clone(),
                     runtime.clone(),
                 );
                 tauri::async_runtime::spawn(async move {
-                    if let Err(e) = mcp::serve_mcp(handle, store, token, services, runtime).await {
+                    if let Err(e) = mcp::serve_mcp(handle, token, services, runtime).await {
                         tracing::error!("MCP HTTP server failed: {e}");
                     }
                 });
             }
             // Raw TCP listener the stdio bridge dials (Claude Desktop).
             tauri::async_runtime::spawn(async move {
-                if let Err(e) =
-                    mcp::serve_stdio_bridge(handle, store, token, services, runtime).await
-                {
+                if let Err(e) = mcp::serve_stdio_bridge(handle, token, services, runtime).await {
                     tracing::error!("MCP stdio-bridge failed: {e}");
                 }
             });

@@ -20,7 +20,6 @@ use uuid::Uuid;
 #[cfg(test)]
 use chrono::Utc;
 
-use crate::audit::{self, RecordArgs};
 use crate::error::AppError;
 #[cfg(test)]
 use crate::model::{ConnectionProfile, HistoryEntry};
@@ -28,17 +27,17 @@ use crate::model::{DashboardKind, DocumentPage, DocumentQuery, Engine, QueryKind
 #[cfg(test)]
 use crate::services::MAX_AGENT_ROWS;
 use crate::services::{
-    AgentConnectionSummary, AgentDashboardCommitError, AgentDashboardPrepareError,
-    AgentDashboardPresentation, AgentDocumentReadError, AgentDocumentReadRequest,
-    AgentQueryInvocationOrigin, AgentQueryPlanError, AgentQueryPlanRequest, AgentQueryRunError,
-    AgentQueryRunPrepareError, ApplicationServices, CatalogReadPolicy,
-    LegacyConnectionResolutionError, QUERY_PLAN_TTL,
+    ActivityRecordRequest, AgentConnectionSummary, AgentDashboardCommitError,
+    AgentDashboardPrepareError, AgentDashboardPresentation, AgentDocumentReadError,
+    AgentDocumentReadRequest, AgentQueryInvocationOrigin, AgentQueryPlanError,
+    AgentQueryPlanRequest, AgentQueryRunError, AgentQueryRunPrepareError, ApplicationServices,
+    CatalogReadPolicy, LegacyConnectionResolutionError, QUERY_PLAN_TTL,
 };
+#[cfg(test)]
 use crate::store::Store;
 
 #[derive(Clone)]
 pub(crate) struct DbTools {
-    store: Store,
     events: ToolEventSink,
     /// Transport-neutral application services shared with the Tauri adapter.
     services: ApplicationServices,
@@ -166,25 +165,17 @@ fn connection_list_payload(connections: &[AgentConnectionSummary]) -> serde_json
 }
 
 impl DbTools {
-    pub(crate) fn new(store: Store, app: AppHandle, services: ApplicationServices) -> Self {
+    pub(crate) fn new(app: AppHandle, services: ApplicationServices) -> Self {
         Self {
-            store,
             events: ToolEventSink::tauri(app),
             services,
         }
     }
 
     #[cfg(test)]
-    fn new_for_test(store: Store, services: ApplicationServices) -> (Self, RecordedToolEvents) {
+    fn new_for_test(services: ApplicationServices) -> (Self, RecordedToolEvents) {
         let (events, recorded) = ToolEventSink::recording();
-        (
-            Self {
-                store,
-                events,
-                services,
-            },
-            recorded,
-        )
+        (Self { events, services }, recorded)
     }
 
     fn emit(&self, event: &str, payload: serde_json::Value) {
@@ -219,21 +210,17 @@ impl DbTools {
         action: &str,
         error: Option<String>,
     ) {
-        let _ = audit::record(
-            &self.store,
-            RecordArgs {
+        self.services
+            .activity
+            .record_best_effort(ActivityRecordRequest {
                 connection_id: conn_id,
                 engine,
-                agent_prompt: None,
-                sql: sql.to_string(),
+                subject: sql.to_string(),
                 kind,
                 action: action.to_string(),
-                approved_by: None,
-                affected_estimate: None,
                 error,
-            },
-        )
-        .await;
+            })
+            .await;
     }
 }
 
@@ -1031,7 +1018,7 @@ mod tests {
 
         let connections = ConnectionManager::new(store.clone());
         let services = ApplicationServices::new(store.clone(), connections.clone());
-        let (tools, events) = DbTools::new_for_test(store.clone(), services);
+        let (tools, events) = DbTools::new_for_test(services);
         (tools, events, store, connection_id, query_run_id)
     }
 

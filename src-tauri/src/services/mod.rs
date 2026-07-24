@@ -2,6 +2,7 @@
 //! broker adapters. Services expose domain DTOs and errors, never transport types.
 
 mod activity_service;
+mod agent_service;
 mod catalog_service;
 mod connection_credentials;
 mod connection_service;
@@ -13,7 +14,10 @@ mod safety_service;
 mod script_service;
 mod workspace_service;
 
-pub(crate) use activity_service::{ActivityService, AuditSnapshotReceipt, AuditVerdict};
+pub(crate) use activity_service::{
+    ActivityRecordRequest, ActivityService, AuditSnapshotReceipt, AuditVerdict,
+};
+pub(crate) use agent_service::{AgentService, ChatThreadCreateRequest};
 pub(crate) use catalog_service::{CatalogReadPolicy, CatalogService};
 pub(crate) use connection_service::{
     AgentConnectionSummary, ConnectionProfileTestRequest, ConnectionService,
@@ -54,6 +58,7 @@ use crate::store::Store;
 #[derive(Clone)]
 pub(crate) struct ApplicationServices {
     pub(crate) activity: ActivityService,
+    pub(crate) agent: AgentService,
     pub(crate) connections: ConnectionService,
     pub(crate) catalog: CatalogService,
     pub(crate) dashboard: DashboardService,
@@ -70,6 +75,7 @@ impl ApplicationServices {
         let connection_credentials = connection_credentials::system_connection_credentials();
         Self {
             activity: ActivityService::new(store.clone()),
+            agent: AgentService::new(store.clone()),
             connections: ConnectionService::new(
                 store.clone(),
                 connections.clone(),

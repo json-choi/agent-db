@@ -25,7 +25,6 @@ use uuid::Uuid;
 
 use crate::services::ApplicationServices;
 use crate::state::McpRuntime;
-use crate::store::Store;
 use tools::DbTools;
 
 /// Fixed loopback port for the Streamable HTTP MCP endpoint.
@@ -345,13 +344,12 @@ async fn require_bearer(
 /// lifetime (kill switch / graceful shutdown is Phase 3).
 pub async fn serve_mcp(
     app: AppHandle,
-    store: Store,
     token: String,
     services: ApplicationServices,
     runtime: Arc<Mutex<McpRuntime>>,
 ) -> std::io::Result<()> {
     let service = StreamableHttpService::new(
-        move || Ok::<_, std::io::Error>(DbTools::new(store.clone(), app.clone(), services.clone())),
+        move || Ok::<_, std::io::Error>(DbTools::new(app.clone(), services.clone())),
         Arc::new(LocalSessionManager::default()),
         Default::default(),
     );
@@ -427,7 +425,6 @@ pub async fn serve_mcp(
 /// `DbTools` handler, so Claude Desktop gets identical tools + safety over stdio.
 pub async fn serve_stdio_bridge(
     app: AppHandle,
-    store: Store,
     token: String,
     services: ApplicationServices,
     runtime: Arc<Mutex<McpRuntime>>,
@@ -454,7 +451,6 @@ pub async fn serve_stdio_bridge(
                 continue;
             }
         };
-        let store = store.clone();
         let app = app.clone();
         let services = services.clone();
         let token = token.clone();
@@ -471,7 +467,7 @@ pub async fn serve_stdio_bridge(
                 tracing::warn!("bridge auth failed — dropping connection");
                 return; // unauthenticated — drop the connection
             }
-            let handler = DbTools::new(store, app, services);
+            let handler = DbTools::new(app, services);
             match rmcp::serve_server(handler, (reader, w)).await {
                 Ok(service) => {
                     let _ = service.waiting().await;

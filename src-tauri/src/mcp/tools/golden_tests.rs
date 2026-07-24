@@ -95,7 +95,7 @@ impl SqliteHarness {
         let connections = ConnectionManager::new(store.clone());
         let services =
             crate::services::ApplicationServices::new(store.clone(), connections.clone());
-        let (tools, events) = DbTools::new_for_test(store.clone(), services);
+        let (tools, events) = DbTools::new_for_test(services);
 
         Self {
             store,
@@ -438,8 +438,7 @@ async fn sqlite_read_flow_matches_phase_zero_golden() {
 #[tokio::test]
 async fn query_plan_is_shared_and_single_use_across_mcp_handlers() {
     let harness = SqliteHarness::new().await;
-    let (other_handler, _) =
-        DbTools::new_for_test(harness.store.clone(), harness.tools.services.clone());
+    let (other_handler, _) = DbTools::new_for_test(harness.tools.services.clone());
     let plan = tool_json(
         harness
             .tools

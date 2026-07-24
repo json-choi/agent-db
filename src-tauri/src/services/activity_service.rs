@@ -3,10 +3,20 @@
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::audit;
+use crate::audit::{self, RecordArgs};
 use crate::error::AppResult;
-use crate::model::{AuditEntry, HistoryEntry};
+use crate::model::{AuditEntry, Engine, HistoryEntry, QueryKind};
 use crate::store::Store;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ActivityRecordRequest {
+    pub(crate) connection_id: Uuid,
+    pub(crate) engine: Engine,
+    pub(crate) subject: String,
+    pub(crate) kind: QueryKind,
+    pub(crate) action: String,
+    pub(crate) error: Option<String>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -59,6 +69,26 @@ impl ActivityService {
     pub(crate) async fn history(&self, connection_id: Uuid) -> AppResult<Vec<HistoryEntry>> {
         self.store.list_history(connection_id).await
     }
+
+    /// Record a non-execution adapter action without allowing an audit outage to
+    /// change the already-completed read result.
+    pub(crate) async fn record_best_effort(&self, request: ActivityRecordRequest) {
+        let _ = audit::record(
+            &self.store,
+            RecordArgs {
+                connection_id: request.connection_id,
+                engine: request.engine,
+                agent_prompt: None,
+                sql: request.subject,
+                kind: request.kind,
+                action: request.action,
+                approved_by: None,
+                affected_estimate: None,
+                error: request.error,
+            },
+        )
+        .await;
+    }
 }
 
 #[cfg(test)]
@@ -69,7 +99,6 @@ mod tests {
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
     use super::*;
-    use crate::audit::RecordArgs;
     use crate::error::AppError;
     use crate::model::{
         ConnectionProfile, Engine, Provider, QueryKind, WorkspaceConnectionAccess,
@@ -118,22 +147,16 @@ mod tests {
     #[tokio::test]
     async fn typed_audit_receipts_preserve_the_legacy_wire() {
         let (service, store, connection_id) = harness().await;
-        audit::record(
-            &store,
-            RecordArgs {
+        service
+            .record_best_effort(ActivityRecordRequest {
                 connection_id,
                 engine: Engine::Sqlite,
-                agent_prompt: None,
-                sql: "SELECT 1".into(),
+                subject: "SELECT 1".into(),
                 kind: QueryKind::Read,
                 action: "read".into(),
-                approved_by: None,
-                affected_estimate: Some(1),
                 error: None,
-            },
-        )
-        .await
-        .unwrap();
+            })
+            .await;
 
         let verdict = service.verify_audit(connection_id).await.unwrap();
         assert_eq!(

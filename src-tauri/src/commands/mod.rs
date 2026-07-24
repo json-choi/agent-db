@@ -19,14 +19,14 @@ use crate::model::{
     WorkspaceDeviceAuthorization, WorkspaceFeatureState, WorkspaceLoginPoll,
 };
 use crate::services::{
-    AuditSnapshotReceipt, AuditVerdict, CatalogReadPolicy, ConnectionProfileTestRequest,
-    ConnectionUpsertRequest, DashboardRunError, DashboardRunReceipt, DashboardRunRequest,
-    DesktopDocumentReadError, DesktopDocumentReadRequest, DesktopScriptRunError,
-    DesktopScriptRunReceipt, DesktopScriptRunRequest, DesktopSqlClassificationReceipt,
-    DesktopSqlClassificationRequest, DesktopSqlInspectionError, DesktopSqlPreviewReceipt,
-    DesktopSqlPreviewRequest, DesktopSqlRunError, DesktopSqlRunReceipt, DesktopSqlRunRequest,
-    DocumentReadReceipt, MonitoringChangeRequest, MonitoringServiceError, MonitoringStatusReceipt,
-    WorkspaceConnectionCopyRequest, WorkspaceCredentialBindingRequest,
+    AgentService, AuditSnapshotReceipt, AuditVerdict, CatalogReadPolicy, ChatThreadCreateRequest,
+    ConnectionProfileTestRequest, ConnectionUpsertRequest, DashboardRunError, DashboardRunReceipt,
+    DashboardRunRequest, DesktopDocumentReadError, DesktopDocumentReadRequest,
+    DesktopScriptRunError, DesktopScriptRunReceipt, DesktopScriptRunRequest,
+    DesktopSqlClassificationReceipt, DesktopSqlClassificationRequest, DesktopSqlInspectionError,
+    DesktopSqlPreviewReceipt, DesktopSqlPreviewRequest, DesktopSqlRunError, DesktopSqlRunReceipt,
+    DesktopSqlRunRequest, DocumentReadReceipt, MonitoringChangeRequest, MonitoringServiceError,
+    MonitoringStatusReceipt, WorkspaceConnectionCopyRequest, WorkspaceCredentialBindingRequest,
 };
 use crate::state::AppState;
 
@@ -604,7 +604,7 @@ pub fn open_agent_app(platform: String) -> AppResult<String> {
 /// so a hung `claude`/`codex` subprocess can't freeze the app.
 #[tauri::command]
 pub async fn detect_agent_clis() -> Vec<crate::agent::CliInfo> {
-    crate::agent::detect_clis_async().await
+    AgentService::detect_clis().await
 }
 
 /// Models `provider`'s CLI can run a turn against (Codex: its own live catalog;
@@ -614,7 +614,7 @@ pub async fn detect_agent_clis() -> Vec<crate::agent::CliInfo> {
 pub async fn list_agent_models(
     provider: crate::agent::AgentProvider,
 ) -> AppResult<Vec<crate::agent::AgentModel>> {
-    crate::agent::list_models_async(provider).await
+    AgentService::list_models(provider).await
 }
 
 /// Saved chat threads, most recently updated first.
@@ -622,7 +622,7 @@ pub async fn list_agent_models(
 pub async fn list_chat_threads(
     state: State<'_, AppState>,
 ) -> AppResult<Vec<crate::agent::ChatThread>> {
-    state.store.list_chat_threads().await
+    state.services.agent.list_threads().await
 }
 
 /// One thread's messages, oldest first.
@@ -631,7 +631,7 @@ pub async fn get_chat_messages(
     state: State<'_, AppState>,
     thread_id: Uuid,
 ) -> AppResult<Vec<crate::agent::ChatMessageRecord>> {
-    state.store.list_chat_messages(thread_id).await
+    state.services.agent.messages(thread_id).await
 }
 
 /// Create a new (empty) chat thread. The frontend calls this on a draft's first send,
@@ -647,15 +647,21 @@ pub async fn create_chat_thread(
     effort: Option<String>,
 ) -> AppResult<crate::agent::ChatThread> {
     state
-        .store
-        .create_chat_thread(provider, connection_id, model, effort)
+        .services
+        .agent
+        .create_thread(ChatThreadCreateRequest {
+            provider,
+            connection_id,
+            model,
+            effort,
+        })
         .await
 }
 
 /// Delete a thread; its messages cascade with it.
 #[tauri::command]
 pub async fn delete_chat_thread(state: State<'_, AppState>, thread_id: Uuid) -> AppResult<()> {
-    state.store.delete_chat_thread(thread_id).await
+    state.services.agent.delete_thread(thread_id).await
 }
 
 /// Run one chat turn against an existing thread. Progress streams as
