@@ -1,12 +1,12 @@
-//! The `#[tauri::command]` boundary. Thin wiring only — each command validates
-//! inputs, routes to the real module functions (store / connection / introspect /
-//! agent / safety / executor / audit), and returns an [`AppResult`] that serializes
-//! to `{ kind, message }` for the frontend.
+//! The `#[tauri::command]` boundary. Commands already migrated to
+//! [`crate::services`] are thin adapters; the remaining legacy commands stay here
+//! only until their service boundary is extracted. Every command returns an
+//! [`AppResult`] that serializes to `{ kind, message }` for the frontend.
 //!
-//! Safety invariant enforced here: writes/DDL/privilege are blocked unless the
-//! connection's `allow_writes` is on AND the call is `approved`. L4 (`decide`) makes
-//! the policy call; the executor re-checks both gates as defense in depth; L2 (the
-//! DB's own read-only session) remains the authoritative stop.
+//! Safety invariants live in the service/operation path: writes, DDL, and privilege
+//! changes are blocked unless policy authorizes the exact request. The executor
+//! re-checks its gates as defense in depth, while the database's read-only session
+//! remains the authoritative stop.
 
 use chrono::Utc;
 use sqlx::AssertSqlSafe;
@@ -19,17 +19,18 @@ use crate::connection::{self, ConnectionAccess, ConnectionLease, DbPool};
 use crate::error::{AppError, AppResult};
 use crate::executor;
 use crate::model::{
-    ConnectionProfile, Dashboard, DashboardDraft, DocumentQuery, Engine, ExecOutcome, HistoryEntry,
+    ConnectionProfile, Dashboard, DashboardDraft, DocumentQuery, Engine, HistoryEntry,
     MonitoringStatus, PlatformFeatureFlags, QueryKind, QueryResult, SafetySettings, Workspace,
     WorkspaceAuthState, WorkspaceAuthUser, WorkspaceConnectionAccess, WorkspaceCredentialMode,
     WorkspaceDeviceAuthorization, WorkspaceFeatureState, WorkspaceKind, WorkspaceLoginPoll,
 };
 use crate::monitoring;
-use crate::safety::{classify, decide, GateDecision, PoolRef};
+use crate::safety::{classify, PoolRef};
 use crate::services::{
     CatalogReadPolicy, DesktopDocumentReadError, DesktopDocumentReadRequest,
     DesktopSqlClassificationReceipt, DesktopSqlClassificationRequest, DesktopSqlInspectionError,
-    DesktopSqlPreviewReceipt, DesktopSqlPreviewRequest, DocumentReadReceipt,
+    DesktopSqlPreviewReceipt, DesktopSqlPreviewRequest, DesktopSqlRunError, DesktopSqlRunReceipt,
+    DesktopSqlRunRequest, DocumentReadReceipt,
 };
 use crate::state::AppState;
 use crate::store::PinnedConnection;
@@ -1157,197 +1158,19 @@ pub async fn run_sql(
     // executor cancel slot; `origin` tags the history row (agent/data-view vs manual).
     query_id: Option<Uuid>,
     origin: Option<String>,
-) -> AppResult<ExecOutcome> {
-    let operation_scope = state.connections.begin_operation_scope().await;
-    let operation_pin = operation_scope.pin_connection(id).await?;
-    let profile = operation_pin.profile.clone();
-    let settings = state.store.get_safety(id).await?;
-    let classification = classify(&sql, profile.engine)?;
-    let engine = profile.engine;
-    let origin = origin.unwrap_or_else(|| "manual".into());
-    let is_write = !matches!(classification.kind, QueryKind::Read);
-    if is_write && !profile.workspace_access.can_write() {
-        return Err(AppError::Blocked {
-            reason: "your workspace role grants read-only database access".into(),
-        });
-    }
-    // L4 policy decision (writes off / multi-statement → hard block).
-    let decision = decide(&settings, &classification);
-    match &decision {
-        GateDecision::Block { reason } => {
-            let reason = reason.clone();
-            record_run(
-                &state,
-                &operation_pin,
-                &sql,
-                classification.kind,
-                "blocked",
-                "blocked",
-                None,
-                None,
-                Some(reason.clone()),
-                &origin,
-            )
-            .await;
-            return Err(AppError::Blocked { reason });
-        }
-        GateDecision::RequireApproval if !approved => {
-            let reason = "this statement modifies data and requires explicit approval".to_string();
-            record_run(
-                &state,
-                &operation_pin,
-                &sql,
-                classification.kind,
-                "blocked",
-                "blocked",
-                None,
-                None,
-                Some(reason.clone()),
-                &origin,
-            )
-            .await;
-            return Err(AppError::Blocked { reason });
-        }
-        _ => {}
-    }
-
-    // A write the gate auto-approved (require_approval=false + allow_writes=true) must
-    // clear the executor's defense-in-depth `approved` check too — otherwise AutoRun
-    // writes would be blocked one layer down.
-    let authorized = approved || matches!(decision, GateDecision::AutoRun);
-
-    // Compliance: a committed write MUST leave an audit trail. Insert the attempt row
-    // BEFORE touching the DB and fail closed if we can't persist it — otherwise a
-    // crash mid-write (or a post-run logging failure) could leave zero audit rows.
-    if is_write {
-        audit::record(
-            &state.store,
-            RecordArgs {
-                connection_id: id,
-                engine,
-                agent_prompt: None,
-                sql: sql.clone(),
-                kind: classification.kind,
-                action: "execute:attempt".into(),
-                approved_by: None,
-                affected_estimate: None,
-                error: None,
-            },
-        )
+) -> AppResult<DesktopSqlRunReceipt> {
+    state
+        .services
+        .query
+        .run_desktop_sql(DesktopSqlRunRequest {
+            connection_id: id,
+            sql,
+            approved,
+            query_id,
+            origin,
+        })
         .await
-        .map_err(|e| {
-            AppError::Config(format!(
-                "audit pre-record failed — refusing to run write: {e}"
-            ))
-        })?;
-    }
-
-    let live = match operation_scope
-        .connect(
-            operation_pin.clone(),
-            if is_write {
-                ConnectionAccess::Write
-            } else {
-                ConnectionAccess::Read
-            },
-        )
-        .await
-    {
-        Ok(live) => live,
-        Err(e) => {
-            record_run(
-                &state,
-                &operation_pin,
-                &sql,
-                classification.kind,
-                "error",
-                "error",
-                None,
-                None,
-                Some(e.to_string()),
-                &origin,
-            )
-            .await;
-            return Err(e);
-        }
-    };
-    // A document connection can reach here (fail-safe Write + writes enabled);
-    // the attempt row above must still get its closing error record.
-    let live = match live.live().sql() {
-        Ok(live) => live,
-        Err(e) => {
-            record_run(
-                &state,
-                &operation_pin,
-                &sql,
-                classification.kind,
-                "error",
-                "error",
-                None,
-                None,
-                Some(e.to_string()),
-                &origin,
-            )
-            .await;
-            return Err(e);
-        }
-    };
-    match executor::execute(
-        live,
-        engine,
-        &classification,
-        &sql,
-        &settings,
-        authorized,
-        query_id,
-    )
-    .await
-    {
-        Ok(outcome) => {
-            // A committed DDL changed the catalog — drop the cached schema so the
-            // sidebar/agent don't serve a stale table list.
-            if matches!(classification.kind, QueryKind::Ddl) && outcome.committed {
-                let _ = state.store.clear_schema_cache(id).await;
-            }
-            let row_count = outcome
-                .result
-                .as_ref()
-                .map(|r| r.row_count as i64)
-                .or_else(|| outcome.affected.map(|a| a as i64));
-            let duration_ms = outcome.result.as_ref().map(|r| r.duration_ms as i64);
-            let action = if outcome.committed { "execute" } else { "read" };
-            record_run(
-                &state,
-                &operation_pin,
-                &sql,
-                classification.kind,
-                action,
-                "ok",
-                row_count,
-                duration_ms,
-                None,
-                &origin,
-            )
-            .await;
-            Ok(outcome)
-        }
-        Err(e) => {
-            record_run(
-                &state,
-                &operation_pin,
-                &sql,
-                classification.kind,
-                "error",
-                "error",
-                None,
-                None,
-                Some(e.to_string()),
-                &origin,
-            )
-            .await;
-            Err(e)
-        }
-    }
+        .map_err(DesktopSqlRunError::into_error)
 }
 
 // ── typed document queries (MongoDB) ─────────────────────────────────────────

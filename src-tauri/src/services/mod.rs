@@ -24,8 +24,8 @@ pub(crate) use query_service::{planning_guidance, MAX_AGENT_ROWS};
 pub(crate) use query_service::{
     AgentQueryInvocationOrigin, AgentQueryPlanError, AgentQueryPlanRequest, AgentQueryRunError,
     AgentQueryRunPrepareError, DesktopSqlClassificationReceipt, DesktopSqlClassificationRequest,
-    DesktopSqlInspectionError, DesktopSqlPreviewReceipt, DesktopSqlPreviewRequest, QueryService,
-    QUERY_PLAN_TTL,
+    DesktopSqlInspectionError, DesktopSqlPreviewReceipt, DesktopSqlPreviewRequest,
+    DesktopSqlRunError, DesktopSqlRunReceipt, DesktopSqlRunRequest, QueryService, QUERY_PLAN_TTL,
 };
 
 use crate::connection::ConnectionManager;

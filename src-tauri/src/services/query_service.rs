@@ -16,9 +16,10 @@ use crate::connection::{
     ConnectionOperationScope, DbPool,
 };
 use crate::error::AppError;
+use crate::executor;
 use crate::model::{
-    Classification, ConnectionProfile, Engine, HistoryEntry, PreviewMode, PreviewReport, QueryKind,
-    QueryResult, SafetySettings,
+    Classification, ConnectionProfile, Engine, ExecOutcome, HistoryEntry, PreviewMode,
+    PreviewReport, QueryKind, QueryResult, SafetySettings,
 };
 use crate::monitoring::{self, HealthSnapshot};
 use crate::safety::{self, PoolRef};
@@ -50,6 +51,17 @@ pub(crate) struct DesktopSqlClassificationRequest {
 pub(crate) struct DesktopSqlPreviewRequest {
     pub(crate) connection_id: Uuid,
     pub(crate) sql: String,
+}
+
+/// Desktop SQL execution input. `approved` remains only for Phase 1 wire
+/// compatibility; Phase 2 replaces it with a stored exact Operation approval.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DesktopSqlRunRequest {
+    pub(crate) connection_id: Uuid,
+    pub(crate) sql: String,
+    pub(crate) approved: bool,
+    pub(crate) query_id: Option<Uuid>,
+    pub(crate) origin: Option<String>,
 }
 
 /// Classification result retaining the active workspace/account scope through
@@ -90,6 +102,87 @@ impl serde::Serialize for DesktopSqlPreviewReceipt {
         S: serde::Serializer,
     {
         serde::Serialize::serialize(&self.report, serializer)
+    }
+}
+
+/// Successful desktop execution retaining the exact connection lease until Tauri
+/// has serialized the legacy [`ExecOutcome`] response.
+pub(crate) struct DesktopSqlRunReceipt {
+    outcome: ExecOutcome,
+    _lease: ConnectionLease,
+}
+
+impl serde::Serialize for DesktopSqlRunReceipt {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serde::Serialize::serialize(&self.outcome, serializer)
+    }
+}
+
+/// Desktop execution failures preserve the existing structured `AppError` wire
+/// while retaining authority for blocked and post-connect failures until the thin
+/// adapter maps the error.
+#[derive(Debug)]
+pub(crate) enum DesktopSqlRunError {
+    Blocked(DesktopSqlRunBlocked),
+    Application(AppError),
+    Execution(Box<DesktopSqlExecutionFailure>),
+}
+
+impl DesktopSqlRunError {
+    pub(crate) fn into_error(self) -> AppError {
+        match self {
+            Self::Blocked(blocked) => blocked.into_error(),
+            Self::Application(error) => error,
+            Self::Execution(failure) => failure.into_error(),
+        }
+    }
+}
+
+/// A policy rejection that holds the operation scope through adapter error
+/// mapping, preventing a concurrent workspace switch from relabeling the result.
+pub(crate) struct DesktopSqlRunBlocked {
+    reason: String,
+    _scope: ConnectionOperationScope,
+}
+
+impl fmt::Debug for DesktopSqlRunBlocked {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DesktopSqlRunBlocked")
+            .field("reason", &self.reason)
+            .finish_non_exhaustive()
+    }
+}
+
+impl DesktopSqlRunBlocked {
+    fn into_error(self) -> AppError {
+        AppError::Blocked {
+            reason: self.reason,
+        }
+    }
+}
+
+/// A post-connect failure retaining the live lease until adapter error mapping.
+pub(crate) struct DesktopSqlExecutionFailure {
+    error: AppError,
+    _lease: ConnectionLease,
+}
+
+impl fmt::Debug for DesktopSqlExecutionFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DesktopSqlExecutionFailure")
+            .field("error", &self.error)
+            .finish_non_exhaustive()
+    }
+}
+
+impl DesktopSqlExecutionFailure {
+    fn into_error(self) -> AppError {
+        self.error
     }
 }
 
@@ -618,6 +711,228 @@ impl QueryService {
         })
     }
 
+    /// Execute one desktop SQL statement while preserving the Phase 1 Tauri wire,
+    /// gate, cancellation, audit, history, and schema-cache behavior.
+    ///
+    /// The caller-provided approval boolean is intentionally quarantined here only
+    /// until Operation Runtime replaces it with an exact stored approval.
+    pub(crate) async fn run_desktop_sql(
+        &self,
+        request: DesktopSqlRunRequest,
+    ) -> Result<DesktopSqlRunReceipt, DesktopSqlRunError> {
+        let operation_scope = self.connections.begin_operation_scope().await;
+        let operation_pin = operation_scope
+            .pin_connection(request.connection_id)
+            .await
+            .map_err(DesktopSqlRunError::Application)?;
+        let settings = self
+            .store
+            .get_safety(operation_pin.connection_id)
+            .await
+            .map_err(DesktopSqlRunError::Application)?;
+        let classification = safety::classify(&request.sql, operation_pin.profile.engine)
+            .map_err(DesktopSqlRunError::Application)?;
+        let engine = operation_pin.profile.engine;
+        let history_origin = request.origin.unwrap_or_else(|| "manual".into());
+        let is_write = !matches!(classification.kind, QueryKind::Read);
+
+        if is_write && !operation_pin.profile.workspace_access.can_write() {
+            return Err(DesktopSqlRunError::Blocked(DesktopSqlRunBlocked {
+                reason: "your workspace role grants read-only database access".into(),
+                _scope: operation_scope,
+            }));
+        }
+
+        let decision = safety::decide(&settings, &classification);
+        let blocked_reason = match &decision {
+            safety::GateDecision::Block { reason } => Some(reason.clone()),
+            safety::GateDecision::RequireApproval if !request.approved => {
+                Some("this statement modifies data and requires explicit approval".into())
+            }
+            _ => None,
+        };
+        if let Some(reason) = blocked_reason {
+            record_desktop_run(
+                &self.store,
+                &operation_pin,
+                DesktopRunRecord {
+                    sql: &request.sql,
+                    kind: classification.kind,
+                    action: "blocked",
+                    status: "blocked",
+                    row_count: None,
+                    duration_ms: None,
+                    error: Some(reason.clone()),
+                    origin: &history_origin,
+                },
+            )
+            .await;
+            return Err(DesktopSqlRunError::Blocked(DesktopSqlRunBlocked {
+                reason,
+                _scope: operation_scope,
+            }));
+        }
+
+        // Legacy compatibility: an auto-run gate decision clears the executor's
+        // defense-in-depth approval check even when the caller supplied false.
+        let authorized = request.approved || matches!(decision, safety::GateDecision::AutoRun);
+
+        // A committed mutation must have a durable attempt row before target touch.
+        // This remains fail-closed until Operation Runtime owns the event ledger.
+        if is_write {
+            audit::record(
+                &self.store,
+                RecordArgs {
+                    connection_id: operation_pin.connection_id,
+                    engine,
+                    agent_prompt: None,
+                    sql: request.sql.clone(),
+                    kind: classification.kind,
+                    action: "execute:attempt".into(),
+                    approved_by: None,
+                    affected_estimate: None,
+                    error: None,
+                },
+            )
+            .await
+            .map_err(|error| {
+                DesktopSqlRunError::Application(AppError::Config(format!(
+                    "audit pre-record failed — refusing to run write: {error}"
+                )))
+            })?;
+        }
+
+        let lease = match operation_scope
+            .connect(
+                operation_pin.clone(),
+                if is_write {
+                    ConnectionAccess::Write
+                } else {
+                    ConnectionAccess::Read
+                },
+            )
+            .await
+        {
+            Ok(lease) => lease,
+            Err(error) => {
+                record_desktop_run(
+                    &self.store,
+                    &operation_pin,
+                    DesktopRunRecord {
+                        sql: &request.sql,
+                        kind: classification.kind,
+                        action: "error",
+                        status: "error",
+                        row_count: None,
+                        duration_ms: None,
+                        error: Some(error.to_string()),
+                        origin: &history_origin,
+                    },
+                )
+                .await;
+                return Err(DesktopSqlRunError::Application(error));
+            }
+        };
+        let live = match lease.live().sql() {
+            Ok(live) => live,
+            Err(error) => {
+                record_desktop_run(
+                    &self.store,
+                    &operation_pin,
+                    DesktopRunRecord {
+                        sql: &request.sql,
+                        kind: classification.kind,
+                        action: "error",
+                        status: "error",
+                        row_count: None,
+                        duration_ms: None,
+                        error: Some(error.to_string()),
+                        origin: &history_origin,
+                    },
+                )
+                .await;
+                return Err(DesktopSqlRunError::Execution(Box::new(
+                    DesktopSqlExecutionFailure {
+                        error,
+                        _lease: lease,
+                    },
+                )));
+            }
+        };
+
+        match executor::execute(
+            live,
+            engine,
+            &classification,
+            &request.sql,
+            &settings,
+            authorized,
+            request.query_id,
+        )
+        .await
+        {
+            Ok(outcome) => {
+                if matches!(classification.kind, QueryKind::Ddl) && outcome.committed {
+                    let _ = self
+                        .store
+                        .clear_schema_cache(operation_pin.connection_id)
+                        .await;
+                }
+                let row_count = outcome
+                    .result
+                    .as_ref()
+                    .map(|result| result.row_count as i64)
+                    .or_else(|| outcome.affected.map(|affected| affected as i64));
+                let duration_ms = outcome
+                    .result
+                    .as_ref()
+                    .map(|result| result.duration_ms as i64);
+                record_desktop_run(
+                    &self.store,
+                    &operation_pin,
+                    DesktopRunRecord {
+                        sql: &request.sql,
+                        kind: classification.kind,
+                        action: if outcome.committed { "execute" } else { "read" },
+                        status: "ok",
+                        row_count,
+                        duration_ms,
+                        error: None,
+                        origin: &history_origin,
+                    },
+                )
+                .await;
+                Ok(DesktopSqlRunReceipt {
+                    outcome,
+                    _lease: lease,
+                })
+            }
+            Err(error) => {
+                record_desktop_run(
+                    &self.store,
+                    &operation_pin,
+                    DesktopRunRecord {
+                        sql: &request.sql,
+                        kind: classification.kind,
+                        action: "error",
+                        status: "error",
+                        row_count: None,
+                        duration_ms: None,
+                        error: Some(error.to_string()),
+                        origin: &history_origin,
+                    },
+                )
+                .await;
+                Err(DesktopSqlRunError::Execution(Box::new(
+                    DesktopSqlExecutionFailure {
+                        error,
+                        _lease: lease,
+                    },
+                )))
+            }
+        }
+    }
+
     /// Classify, preview, and inspect aggregate health before minting one immutable
     /// single-use plan. A `caution` decision is guidance and never an execution block.
     pub(crate) async fn plan_agent_read(
@@ -933,6 +1248,69 @@ fn skipped_preview_report(note: &str) -> PreviewReport {
         exact_rows: None,
         plan: None,
         note: Some(note.into()),
+    }
+}
+
+struct DesktopRunRecord<'a> {
+    sql: &'a str,
+    kind: QueryKind,
+    action: &'a str,
+    status: &'a str,
+    row_count: Option<i64>,
+    duration_ms: Option<i64>,
+    error: Option<String>,
+    origin: &'a str,
+}
+
+/// Append the established desktop audit and history pair. Logging remains
+/// best-effort so provenance outages do not mask the target operation result.
+async fn record_desktop_run(store: &Store, pin: &PinnedConnection, record: DesktopRunRecord<'_>) {
+    if let Err(error) = audit::record(
+        store,
+        RecordArgs {
+            connection_id: pin.connection_id,
+            engine: pin.profile.engine,
+            agent_prompt: None,
+            sql: record.sql.to_string(),
+            kind: record.kind,
+            action: record.action.to_string(),
+            approved_by: None,
+            affected_estimate: record.row_count,
+            error: record.error.clone(),
+        },
+    )
+    .await
+    {
+        tracing::error!(
+            connection_id = %pin.connection_id,
+            action = record.action,
+            %error,
+            "desktop SQL audit record failed"
+        );
+    }
+    if let Err(error) = store
+        .insert_history_if_current(
+            pin,
+            &HistoryEntry {
+                id: Uuid::new_v4(),
+                connection_id: pin.connection_id,
+                sql: record.sql.to_string(),
+                kind: record.kind,
+                status: record.status.to_string(),
+                row_count: record.row_count,
+                duration_ms: record.duration_ms,
+                error: record.error,
+                executed_at: Utc::now(),
+                origin: record.origin.to_string(),
+            },
+        )
+        .await
+    {
+        tracing::error!(
+            connection_id = %pin.connection_id,
+            %error,
+            "desktop SQL history insert failed"
+        );
     }
 }
 
@@ -1504,6 +1882,30 @@ mod tests {
             .await
             .unwrap();
         }
+
+        async fn enable_writes(&self, require_approval: bool) {
+            let mut writable = self.profile.clone();
+            writable.allow_writes = true;
+            self.store.upsert_connection(&writable).await.unwrap();
+
+            let mut settings = self.store.get_safety(self.connection_id).await.unwrap();
+            settings.allow_writes = true;
+            settings.require_approval = require_approval;
+            self.store
+                .set_safety(self.connection_id, &settings)
+                .await
+                .unwrap();
+        }
+
+        async fn audit_actions_in_order(&self) -> Vec<String> {
+            let (mut entries, valid, first_bad) = audit::snapshot(&self.store, self.connection_id)
+                .await
+                .unwrap();
+            assert!(valid);
+            assert_eq!(first_bad, None);
+            entries.reverse();
+            entries.into_iter().map(|entry| entry.action).collect()
+        }
     }
 
     #[tokio::test]
@@ -1997,6 +2399,403 @@ mod tests {
         assert!(
             matches!(error, AppError::Db(_)),
             "missing target must surface the legacy database-open error, got {error}"
+        );
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn desktop_sql_read_preserves_wire_provenance_and_lease_guard() {
+        let harness = SqliteHarness::new().await;
+        let receipt = harness
+            .service
+            .run_desktop_sql(DesktopSqlRunRequest {
+                connection_id: harness.connection_id,
+                sql: "SELECT id, name FROM users ORDER BY id".into(),
+                approved: false,
+                query_id: None,
+                origin: Some("data-view".into()),
+            })
+            .await
+            .unwrap();
+        let result = receipt
+            .outcome
+            .result
+            .as_ref()
+            .expect("read execution must return a result grid");
+        assert_eq!(result.row_count, 2);
+        assert_eq!(
+            serde_json::to_value(&receipt).unwrap(),
+            serde_json::json!({
+                "result": {
+                    "columns": ["id", "name"],
+                    "rows": [[1, "Ada"], [2, "Linus"]],
+                    "rowCount": 2,
+                    "truncated": false,
+                    "durationMs": result.duration_ms
+                },
+                "affected": null,
+                "committed": false
+            }),
+            "desktop SQL receipt must preserve the literal legacy ExecOutcome wire"
+        );
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(100),
+                harness.connections.begin_scope_mutation(),
+            )
+            .await
+            .is_err(),
+            "desktop SQL receipt must retain the live lease through serialization"
+        );
+
+        let history = harness
+            .store
+            .list_history(harness.connection_id)
+            .await
+            .unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].status, "ok");
+        assert_eq!(history[0].kind, QueryKind::Read);
+        assert_eq!(history[0].row_count, Some(2));
+        assert_eq!(history[0].origin, "data-view");
+        let (audit, valid, first_bad) = audit::snapshot(&harness.store, harness.connection_id)
+            .await
+            .unwrap();
+        assert!(valid);
+        assert_eq!(first_bad, None);
+        assert_eq!(audit.len(), 1);
+        assert_eq!(audit[0].action, "read");
+        assert_eq!(audit[0].affected_estimate, Some(2));
+
+        drop(receipt);
+        let mutation = tokio::time::timeout(
+            Duration::from_secs(5),
+            harness.connections.begin_scope_mutation(),
+        )
+        .await
+        .expect("scope writer must proceed after desktop SQL receipt drop");
+        drop(mutation);
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn desktop_sql_write_gate_preserves_exact_error_audit_and_scope() {
+        let harness = SqliteHarness::new().await;
+        let blocked = match harness
+            .service
+            .run_desktop_sql(DesktopSqlRunRequest {
+                connection_id: harness.connection_id,
+                sql: "UPDATE users SET name = 'Grace' WHERE id = 1".into(),
+                approved: true,
+                query_id: None,
+                origin: None,
+            })
+            .await
+        {
+            Err(DesktopSqlRunError::Blocked(blocked)) => blocked,
+            _ => panic!("writes-disabled policy must reject before target touch"),
+        };
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(100),
+                harness.connections.begin_scope_mutation(),
+            )
+            .await
+            .is_err(),
+            "blocked desktop SQL error must retain its scope through adapter mapping"
+        );
+        let error = blocked.into_error();
+        assert_eq!(
+            serde_json::to_value(&error).unwrap(),
+            serde_json::json!({
+                "kind": "blocked",
+                "message": "blocked: writing is disabled for this connection (writes are off by default). Enable writes in the connection's safety settings to propose it."
+            })
+        );
+        assert_eq!(harness.user_name(1).await, "Ada");
+        assert_eq!(
+            harness.audit_actions_in_order().await,
+            ["blocked".to_string()]
+        );
+        let history = harness
+            .store
+            .list_history(harness.connection_id)
+            .await
+            .unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].status, "blocked");
+        assert_eq!(history[0].origin, "manual");
+        assert_eq!(
+            history[0].error.as_deref(),
+            Some(
+                "writing is disabled for this connection (writes are off by default). Enable writes in the connection's safety settings to propose it."
+            )
+        );
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn desktop_sql_workspace_view_role_blocks_without_audit_or_target_touch() {
+        let harness = SqliteHarness::new().await;
+        harness.enable_writes(true).await;
+        harness.set_connection_access_for_test("view").await;
+
+        let error = match harness
+            .service
+            .run_desktop_sql(DesktopSqlRunRequest {
+                connection_id: harness.connection_id,
+                sql: "UPDATE users SET name = 'Grace' WHERE id = 1".into(),
+                approved: true,
+                query_id: None,
+                origin: None,
+            })
+            .await
+        {
+            Err(error) => error.into_error(),
+            Ok(_) => panic!("workspace read role must reject mutations"),
+        };
+        assert_eq!(
+            serde_json::to_value(&error).unwrap(),
+            serde_json::json!({
+                "kind": "blocked",
+                "message": "blocked: workspace role cannot execute this connection"
+            })
+        );
+        harness.set_connection_access_for_test("local").await;
+        assert_eq!(harness.user_name(1).await, "Ada");
+        assert!(harness.audit_actions_in_order().await.is_empty());
+        assert!(harness
+            .store
+            .list_history(harness.connection_id)
+            .await
+            .unwrap()
+            .is_empty());
+
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn desktop_sql_exact_approval_compatibility_commits_and_records_both_ledgers() {
+        let harness = SqliteHarness::new().await;
+        harness.enable_writes(true).await;
+        let sql = "UPDATE users SET name = 'Grace' WHERE id = 1";
+
+        let rejected = match harness
+            .service
+            .run_desktop_sql(DesktopSqlRunRequest {
+                connection_id: harness.connection_id,
+                sql: sql.into(),
+                approved: false,
+                query_id: None,
+                origin: Some("sql".into()),
+            })
+            .await
+        {
+            Err(error) => error.into_error(),
+            Ok(_) => panic!("legacy approval-required write must remain blocked"),
+        };
+        assert!(matches!(
+            rejected,
+            AppError::Blocked { reason }
+                if reason == "this statement modifies data and requires explicit approval"
+        ));
+
+        let receipt = harness
+            .service
+            .run_desktop_sql(DesktopSqlRunRequest {
+                connection_id: harness.connection_id,
+                sql: sql.into(),
+                approved: true,
+                query_id: None,
+                origin: Some("sql".into()),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&receipt).unwrap(),
+            serde_json::json!({
+                "result": null,
+                "affected": 1,
+                "committed": true
+            })
+        );
+        drop(receipt);
+        assert_eq!(harness.user_name(1).await, "Grace");
+        assert_eq!(
+            harness.audit_actions_in_order().await,
+            ["blocked", "execute:attempt", "execute"]
+        );
+        let history = harness
+            .store
+            .list_history(harness.connection_id)
+            .await
+            .unwrap();
+        assert_eq!(history.len(), 2);
+        assert!(history
+            .iter()
+            .any(|entry| entry.status == "blocked" && entry.origin == "sql"));
+        assert!(history.iter().any(|entry| {
+            entry.status == "ok"
+                && entry.origin == "sql"
+                && entry.kind == QueryKind::Write
+                && entry.row_count == Some(1)
+        }));
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn desktop_sql_legacy_auto_run_write_still_authorizes_the_executor() {
+        let harness = SqliteHarness::new().await;
+        harness.enable_writes(false).await;
+        let receipt = harness
+            .service
+            .run_desktop_sql(DesktopSqlRunRequest {
+                connection_id: harness.connection_id,
+                sql: "UPDATE users SET name = 'Grace' WHERE id = 1".into(),
+                approved: false,
+                query_id: None,
+                origin: None,
+            })
+            .await
+            .unwrap();
+        assert!(receipt.outcome.committed);
+        drop(receipt);
+        assert_eq!(harness.user_name(1).await, "Grace");
+        assert_eq!(
+            harness.audit_actions_in_order().await,
+            ["execute:attempt", "execute"]
+        );
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn desktop_sql_write_fails_closed_when_attempt_audit_is_unavailable() {
+        let harness = SqliteHarness::new().await;
+        harness.enable_writes(true).await;
+        sqlx::raw_sql(
+            "CREATE TRIGGER fail_desktop_write_attempt
+             BEFORE INSERT ON audit_log
+             BEGIN
+               SELECT RAISE(FAIL, 'forced desktop attempt audit failure');
+             END;",
+        )
+        .execute(harness.store.pool())
+        .await
+        .unwrap();
+
+        let error = match harness
+            .service
+            .run_desktop_sql(DesktopSqlRunRequest {
+                connection_id: harness.connection_id,
+                sql: "UPDATE users SET name = 'Grace' WHERE id = 1".into(),
+                approved: true,
+                query_id: None,
+                origin: None,
+            })
+            .await
+        {
+            Err(error) => error.into_error(),
+            Ok(_) => panic!("write must fail closed before target touch"),
+        };
+        assert!(matches!(
+            error,
+            AppError::Config(message)
+                if message.starts_with("audit pre-record failed — refusing to run write:")
+                    && message.contains("forced desktop attempt audit failure")
+        ));
+        assert_eq!(harness.user_name(1).await, "Ada");
+        assert!(audit::snapshot(&harness.store, harness.connection_id)
+            .await
+            .unwrap()
+            .0
+            .is_empty());
+        assert!(harness
+            .store
+            .list_history(harness.connection_id)
+            .await
+            .unwrap()
+            .is_empty());
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn desktop_sql_execution_failure_closes_the_attempt_and_keeps_original_error() {
+        let harness = SqliteHarness::new().await;
+        harness.enable_writes(true).await;
+        let failure = match harness
+            .service
+            .run_desktop_sql(DesktopSqlRunRequest {
+                connection_id: harness.connection_id,
+                sql: "UPDATE missing_users SET name = 'Grace' WHERE id = 1".into(),
+                approved: true,
+                query_id: None,
+                origin: None,
+            })
+            .await
+        {
+            Err(DesktopSqlRunError::Execution(failure)) => failure,
+            _ => panic!("missing target table must fail during desktop execution"),
+        };
+        let original = failure.error.to_string();
+        assert!(original.contains("missing_users"));
+        assert!(!original.contains("audit"));
+        let mapped = failure.into_error();
+        assert_eq!(mapped.to_string(), original);
+        assert_eq!(
+            harness.audit_actions_in_order().await,
+            ["execute:attempt", "error"]
+        );
+        let history = harness
+            .store
+            .list_history(harness.connection_id)
+            .await
+            .unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].status, "error");
+        assert!(history[0]
+            .error
+            .as_deref()
+            .is_some_and(|message| message.contains("missing_users")));
+        assert_eq!(harness.user_name(1).await, "Ada");
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn desktop_sql_committed_ddl_invalidates_the_legacy_schema_cache() {
+        let harness = SqliteHarness::new().await;
+        harness.enable_writes(true).await;
+        harness
+            .store
+            .set_schema_cache(harness.connection_id, r#"{"tables":[]}"#)
+            .await
+            .unwrap();
+        assert!(harness
+            .store
+            .get_schema_cache(harness.connection_id)
+            .await
+            .unwrap()
+            .is_some());
+
+        let receipt = harness
+            .service
+            .run_desktop_sql(DesktopSqlRunRequest {
+                connection_id: harness.connection_id,
+                sql: "CREATE TABLE widgets (id INTEGER PRIMARY KEY)".into(),
+                approved: true,
+                query_id: None,
+                origin: None,
+            })
+            .await
+            .unwrap();
+        assert!(receipt.outcome.committed);
+        drop(receipt);
+        assert_eq!(
+            harness
+                .store
+                .get_schema_cache(harness.connection_id)
+                .await
+                .unwrap(),
+            None
         );
         harness.close().await;
     }
