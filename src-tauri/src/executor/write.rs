@@ -9,6 +9,7 @@ use crate::connection::{LiveConnection, Pool};
 use crate::error::{AppError, AppResult};
 use crate::executor::cancel;
 use crate::model::{Engine, ExecOutcome, SafetySettings};
+use crate::operations::ExecutionGrant;
 
 /// Execute an approved write inside a transaction and commit it.
 ///
@@ -20,8 +21,15 @@ pub async fn run_write(
     _engine: Engine, // pool enum is self-describing; kept to honor the executor contract
     sql: &str,
     settings: &SafetySettings,
+    grant: &ExecutionGrant,
     query_id: Option<Uuid>,
 ) -> AppResult<ExecOutcome> {
+    if query_id != Some(grant.operation_id()) {
+        return Err(AppError::Blocked {
+            reason: "write cancellation scope does not match its approved operation".into(),
+        });
+    }
+    let _exact_payload = (grant.payload_sha256(), grant.connection_id());
     if !settings.allow_writes {
         return Err(AppError::Blocked {
             reason: "writes are disabled for this connection (allow_writes = 0)".into(),
@@ -38,7 +46,11 @@ pub async fn run_write(
                     .execute(&mut *tx)
                     .await?
                     .rows_affected();
-                tx.commit().await?;
+                tx.commit().await.map_err(|error| {
+                    AppError::OutcomeUnknown(format!(
+                        "PostgreSQL commit acknowledgement failed: {error}"
+                    ))
+                })?;
                 n
             }
             Pool::Mysql(pool) => {
@@ -47,7 +59,11 @@ pub async fn run_write(
                     .execute(&mut *tx)
                     .await?
                     .rows_affected();
-                tx.commit().await?;
+                tx.commit().await.map_err(|error| {
+                    AppError::OutcomeUnknown(format!(
+                        "MySQL commit acknowledgement failed: {error}"
+                    ))
+                })?;
                 n
             }
             Pool::Sqlite(pool) => {
@@ -56,7 +72,11 @@ pub async fn run_write(
                     .execute(&mut *tx)
                     .await?
                     .rows_affected();
-                tx.commit().await?;
+                tx.commit().await.map_err(|error| {
+                    AppError::OutcomeUnknown(format!(
+                        "SQLite commit acknowledgement failed: {error}"
+                    ))
+                })?;
                 n
             }
         };

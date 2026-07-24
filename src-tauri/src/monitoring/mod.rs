@@ -15,6 +15,7 @@ use tokio::time::timeout;
 use crate::connection::{LiveConnection, Pool};
 use crate::error::{AppError, AppResult};
 use crate::model::{Engine, MonitoringStatus};
+use crate::operations::ExecutionGrant;
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const LONG_QUERY_SECONDS: i64 = 30;
@@ -121,7 +122,19 @@ pub async fn status(live: &LiveConnection, engine: Engine) -> AppResult<Monitori
 
 /// Apply or remove PostgreSQL's fixed `pg_monitor` membership for CURRENT_USER.
 /// This is intentionally not an arbitrary-SQL surface and does not enable general writes.
-pub async fn set_postgres_role(live: &LiveConnection, enabled: bool) -> AppResult<()> {
+pub async fn set_postgres_role(
+    live: &LiveConnection,
+    enabled: bool,
+    grant: &ExecutionGrant,
+    operation_id: uuid::Uuid,
+    connection_id: uuid::Uuid,
+) -> AppResult<()> {
+    if grant.operation_id() != operation_id || grant.connection_id() != connection_id {
+        return Err(AppError::Blocked {
+            reason: "monitoring role change does not match its approved operation".into(),
+        });
+    }
+    let _exact_payload_hash = grant.payload_sha256();
     let Pool::Postgres(pool) = &live.write_pool else {
         return Err(AppError::Config(
             "pg_monitor is only available for PostgreSQL connections".into(),

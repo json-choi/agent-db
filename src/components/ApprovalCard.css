@@ -51,6 +51,27 @@
   font-size: var(--ds-font-size-sm);
 }
 
+.approval .note code {
+  overflow-wrap: anywhere;
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-font-size-xs);
+}
+
+.approval-confirmation {
+  display: grid;
+  gap: var(--ds-space-2);
+  font-size: var(--ds-font-size-sm);
+}
+
+.approval-confirmation code {
+  font-family: var(--ds-font-mono);
+}
+
+.approval-confirmation input {
+  width: min(100%, 320px);
+  font-family: var(--ds-font-mono);
+}
+
 .plan summary {
   cursor: pointer;
   padding: var(--ds-space-1) 0;

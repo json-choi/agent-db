@@ -52,6 +52,11 @@ pub enum AppError {
     /// The safety gate blocked an action; `reason` is shown verbatim in the UI.
     #[error("blocked: {reason}")]
     Blocked { reason: String },
+
+    /// A target mutation may have committed, but the driver could not confirm its
+    /// final state. Callers must not retry automatically.
+    #[error("operation outcome is unknown: {0}")]
+    OutcomeUnknown(String),
 }
 
 impl AppError {
@@ -70,6 +75,7 @@ impl AppError {
             AppError::Config(_) => "config",
             AppError::NotFound(_) => "notFound",
             AppError::Blocked { .. } => "blocked",
+            AppError::OutcomeUnknown(_) => "outcomeUnknown",
         }
     }
 

@@ -21,12 +21,15 @@ use crate::model::{
 use crate::services::{
     AgentService, AuditSnapshotReceipt, AuditVerdict, CatalogReadPolicy, ChatThreadCreateRequest,
     ConnectionProfileTestRequest, ConnectionUpsertRequest, DashboardRunError, DashboardRunReceipt,
-    DashboardRunRequest, DesktopDocumentReadError, DesktopDocumentReadRequest,
-    DesktopScriptRunError, DesktopScriptRunReceipt, DesktopScriptRunRequest,
-    DesktopSqlClassificationReceipt, DesktopSqlClassificationRequest, DesktopSqlInspectionError,
-    DesktopSqlPreviewReceipt, DesktopSqlPreviewRequest, DesktopSqlRunError, DesktopSqlRunReceipt,
-    DesktopSqlRunRequest, DocumentReadReceipt, MonitoringChangeRequest, MonitoringServiceError,
-    MonitoringStatusReceipt, WorkspaceConnectionCopyRequest, WorkspaceCredentialBindingRequest,
+    DashboardRunRequest, DesktopDocumentProposalReceipt, DesktopDocumentProposalRequest,
+    DesktopDocumentReadError, DesktopScriptProposalReceipt, DesktopScriptProposalRequest,
+    DesktopScriptRunError, DesktopScriptRunReceipt, DesktopSqlClassificationReceipt,
+    DesktopSqlClassificationRequest, DesktopSqlInspectionError, DesktopSqlPreviewReceipt,
+    DesktopSqlPreviewRequest, DesktopSqlProposalReceipt, DesktopSqlProposalRequest,
+    DesktopSqlRunError, DesktopSqlRunReceipt, DocumentReadReceipt, MonitoringProposalReceipt,
+    MonitoringProposalRequest, MonitoringServiceError, MonitoringStatusReceipt,
+    OperationDecisionReceipt, OperationDecisionRequest, WorkspaceConnectionCopyRequest,
+    WorkspaceCredentialBindingRequest,
 };
 use crate::state::AppState;
 
@@ -378,89 +381,146 @@ pub async fn preview_sql(
 // ── execution (L4 gate → executor → audit) ───────────────────────────────────
 
 #[tauri::command]
-pub async fn run_sql(
+pub async fn propose_sql(
     state: State<'_, AppState>,
     id: Uuid,
     sql: String,
-    approved: bool,
-    // Optional so existing frontend invokes keep working. `query_id` wires the
-    // executor cancel slot; `origin` tags the history row (agent/data-view vs manual).
-    query_id: Option<Uuid>,
     origin: Option<String>,
+) -> AppResult<DesktopSqlProposalReceipt> {
+    state
+        .services
+        .query
+        .propose_desktop_sql(DesktopSqlProposalRequest {
+            connection_id: id,
+            sql,
+            origin,
+        })
+        .await
+        .map_err(DesktopSqlInspectionError::into_error)
+}
+
+#[tauri::command]
+pub async fn approve_operation(
+    state: State<'_, AppState>,
+    operation_id: Uuid,
+    payload_hash: String,
+    reason: Option<String>,
+) -> AppResult<OperationDecisionReceipt> {
+    state
+        .services
+        .operation
+        .approve_local(
+            &state.local_operation_approval,
+            OperationDecisionRequest {
+                operation_id,
+                expected_payload_hash: payload_hash,
+                reason,
+            },
+        )
+        .await
+}
+
+#[tauri::command]
+pub async fn reject_operation(
+    state: State<'_, AppState>,
+    operation_id: Uuid,
+    payload_hash: String,
+    reason: Option<String>,
+) -> AppResult<OperationDecisionReceipt> {
+    state
+        .services
+        .operation
+        .reject_local(
+            &state.local_operation_approval,
+            OperationDecisionRequest {
+                operation_id,
+                expected_payload_hash: payload_hash,
+                reason,
+            },
+        )
+        .await
+}
+
+#[tauri::command]
+pub async fn run_sql(
+    state: State<'_, AppState>,
+    operation_id: Uuid,
 ) -> AppResult<DesktopSqlRunReceipt> {
     state
         .services
         .query
-        .run_desktop_sql(DesktopSqlRunRequest {
-            connection_id: id,
-            sql,
-            approved,
-            query_id,
-            origin,
-        })
+        .run_desktop_sql(operation_id)
         .await
         .map_err(DesktopSqlRunError::into_error)
 }
 
 // ── typed document queries (MongoDB) ─────────────────────────────────────────
 
-/// The document counterpart of `run_sql`: same L4 gate and audit/history trail,
-/// but classification walks the TYPED request (aggregate-stage allowlist) instead
-/// of SQL text, and there is no write path at all — a non-Read classification is
-/// blocked regardless of `allow_writes`/`approved`.
 #[tauri::command]
-pub async fn run_document_query(
+pub async fn propose_document_query(
     state: State<'_, AppState>,
     id: Uuid,
     query: DocumentQuery,
-    approved: bool,
-    query_id: Option<Uuid>,
     origin: Option<String>,
-) -> AppResult<DocumentReadReceipt> {
+) -> AppResult<DesktopDocumentProposalReceipt> {
     state
         .services
         .document
-        .run_desktop_read(DesktopDocumentReadRequest {
+        .propose_desktop_read(DesktopDocumentProposalRequest {
             connection_id: id,
             query,
-            approved,
-            query_id,
             origin,
         })
         .await
         .map_err(DesktopDocumentReadError::into_error)
 }
 
+/// Typed document execution accepts only a durable single-use operation id. The
+/// stored query is reclassified against the MongoDB stage allowlist before use.
+#[tauri::command]
+pub async fn run_document_query(
+    state: State<'_, AppState>,
+    operation_id: Uuid,
+) -> AppResult<DocumentReadReceipt> {
+    state
+        .services
+        .document
+        .run_desktop_read(operation_id)
+        .await
+        .map_err(DesktopDocumentReadError::into_error)
+}
+
 // ── multi-statement script execution ─────────────────────────────────────────
 
-/// Run a pasted multi-statement script. Splits into statements (comment-only skipped),
-/// classifies EACH via L1, then:
-/// - all reads → run sequentially on the read-only pool (honoring `auto_run_reads`,
-///   `max_rows` per statement), stopping at the first error;
-/// - any write/DDL → require `approved` AND `allow_writes`, then run ALL statements in
-///   ONE write-pool transaction (rollback on the first error).
-///
-/// This is the escape hatch from `run_sql`'s single-statement L4 hard block: a seed or
-/// multi-statement file that `run_sql` refuses can run here, still gated + audited.
 #[tauri::command]
-pub async fn run_script(
+pub async fn propose_script(
     state: State<'_, AppState>,
     id: Uuid,
     sql: String,
-    approved: bool,
-    query_id: Option<Uuid>,
     origin: Option<String>,
+) -> AppResult<DesktopScriptProposalReceipt> {
+    state
+        .services
+        .script
+        .propose_desktop(DesktopScriptProposalRequest {
+            connection_id: id,
+            sql,
+            origin,
+        })
+        .await
+        .map_err(DesktopScriptRunError::into_error)
+}
+
+/// Execute a previously persisted script by operation id only.
+#[tauri::command]
+pub async fn run_script(
+    state: State<'_, AppState>,
+    operation_id: Uuid,
 ) -> AppResult<DesktopScriptRunReceipt> {
     state
         .services
         .script
-        .run_desktop(DesktopScriptRunRequest {
-            connection_id: id,
-            sql,
-            approved,
-            query_id,
-            origin,
-        })
+        .run_desktop(operation_id)
         .await
         .map_err(DesktopScriptRunError::into_error)
 }
@@ -496,24 +556,35 @@ pub async fn get_monitoring_status(
         .map_err(MonitoringServiceError::into_error)
 }
 
-/// Grant/revoke one fixed PostgreSQL predefined role for CURRENT_USER. This narrow
-/// privilege action is independent of arbitrary SQL writes, but still requires a
-/// visible user confirmation and is recorded with an explicit approver.
+/// Persist one immutable fixed-role proposal. The desktop must render its literal
+/// SQL and hash before using the separate exact approval command.
 #[tauri::command]
-pub async fn set_postgres_monitoring(
+pub async fn propose_postgres_monitoring(
     state: State<'_, AppState>,
     id: Uuid,
     enabled: bool,
-    approved: bool,
+) -> AppResult<MonitoringProposalReceipt> {
+    state
+        .services
+        .monitoring
+        .propose_postgres_role(MonitoringProposalRequest {
+            connection_id: id,
+            enabled,
+        })
+        .await
+        .map_err(MonitoringServiceError::into_error)
+}
+
+/// Consume one exactly approved fixed-role proposal by operation id only.
+#[tauri::command]
+pub async fn set_postgres_monitoring(
+    state: State<'_, AppState>,
+    operation_id: Uuid,
 ) -> AppResult<MonitoringStatusReceipt> {
     state
         .services
         .monitoring
-        .set_postgres_role(MonitoringChangeRequest {
-            connection_id: id,
-            enabled,
-            approved,
-        })
+        .run_postgres_role(operation_id)
         .await
         .map_err(MonitoringServiceError::into_error)
 }

@@ -6,11 +6,11 @@
 // Nothing here is trusted for safety — the Rust core re-enforces every gate (L2).
 
 import { useEffect, useRef, useState } from "react";
-import { useI18n, type I18nKey } from "../lib/i18n";
 import {
+  approveOperation,
   cancelQuery,
-  classifySql,
-  previewSql,
+  proposeSql,
+  rejectOperation,
   runSql,
 } from "../ipc/commands";
 import type {
@@ -20,10 +20,12 @@ import type {
   PreviewReport,
   RiskLevel,
   SafetySettings,
+  SqlOperationProposal,
 } from "../ipc/types";
-import { errMessage } from "../ipc/types";
+import { errMessage, isQueryCancellationError } from "../ipc/types";
 import { Icon, type IconName } from "./Icon";
 import LazySqlViewer from "./LazySqlViewer";
+import { useI18n, type I18nKey } from "../lib/i18n";
 import "./ApprovalCard.css";
 
 const ENGINE_LABEL: Record<Engine, string> = {
@@ -72,6 +74,7 @@ export default function ApprovalCard({
   engine,
   sql,
   safety,
+  initialProposal,
   rationale,
   collapseSql = false,
   onExecuted,
@@ -81,6 +84,7 @@ export default function ApprovalCard({
   engine: Engine;
   sql: string;
   safety: SafetySettings;
+  initialProposal?: SqlOperationProposal;
   rationale?: string;
   collapseSql?: boolean;
   onExecuted: (outcome: ExecOutcome) => void;
@@ -89,10 +93,13 @@ export default function ApprovalCard({
   const { t } = useI18n();
   const [cls, setCls] = useState<Classification | null>(null);
   const [preview, setPreview] = useState<PreviewReport | null>(null);
+  const [proposal, setProposal] = useState<SqlOperationProposal | null>(null);
+  const [proposalVersion, setProposalVersion] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [decided, setDecided] = useState<null | "approved" | "rejected">(null);
   const [cancelled, setCancelled] = useState(false);
+  const [confirmation, setConfirmation] = useState("");
   // The in-flight query id, so Cancel can signal it. Held in a ref (not state) since
   // execute() reads it synchronously and it never needs to re-render. `cancelledRef`
   // mirrors the flag so execute()'s catch sees it without a stale closure.
@@ -106,18 +113,22 @@ export default function ApprovalCard({
     let alive = true;
     setCls(null);
     setPreview(null);
+    setProposal(null);
     setError(null);
     setDecided(null);
     setCancelled(false);
+    setConfirmation("");
     if (!sql.trim()) return;
     (async () => {
       try {
-        const c = await classifySql(connectionId, sql);
+        const p =
+          initialProposal && proposalVersion === 0
+            ? initialProposal
+            : await proposeSql(connectionId, sql);
         if (!alive) return;
-        setCls(c);
-        const p = await previewSql(connectionId, sql);
-        if (!alive) return;
-        setPreview(p);
+        setProposal(p);
+        setCls(p.classification);
+        setPreview(p.preview);
       } catch (e) {
         if (alive) setError(errMessage(e));
       }
@@ -125,32 +136,61 @@ export default function ApprovalCard({
     return () => {
       alive = false;
     };
-  }, [connectionId, sql]);
+  }, [connectionId, initialProposal, proposalVersion, sql]);
 
   const isRead = cls?.kind === "read";
   const isWrite = !!cls && !isRead;
   const writesBlocked = isWrite && !safety.allowWrites;
-  // Reads auto-run when the connection allows it — matching the backend gate
-  // (`decide()` only applies require_approval to writes, never to reads).
-  const canAutoRun = isRead && safety.autoRunReads && !!cls;
+  const confirmationPhrase = proposal?.confirmationPhrase ?? null;
+  const confirmationMatches =
+    confirmationPhrase === null || confirmation === confirmationPhrase;
+  // Reads auto-run only when the connection allows it. Target mutations always
+  // stay behind an exact Operation approval regardless of legacy saved settings.
+  const canAutoRun = isRead && proposal?.autoRun === true;
 
-  async function execute(approved: boolean) {
-    const id = crypto.randomUUID();
+  async function execute() {
+    if (!proposal) return;
+    const id = proposal.operationId;
     queryId.current = id;
     cancelledRef.current = false;
     setBusy(true);
     setError(null);
     setCancelled(false);
     try {
-      const outcome = await runSql(connectionId, sql, approved, id);
+      if (proposal.approvalRequired) {
+        await approveOperation(
+          proposal.operationId,
+          proposal.payloadHash,
+          confirmationPhrase ? confirmation : undefined,
+        );
+      }
+      const outcome = await runSql(proposal.operationId);
       setDecided("approved");
       onExecuted(outcome);
     } catch (e) {
-      // A cancelled query fails on the backend — show it as a benign note, not an error.
-      if (cancelledRef.current) setCancelled(true);
+      // A local cancel click is benign only when Rust confirms a read cancellation.
+      // An interrupted write is `outcomeUnknown` and must stay visible.
+      if (cancelledRef.current && isQueryCancellationError(e)) setCancelled(true);
       else setError(errMessage(e));
     } finally {
       queryId.current = null;
+      setBusy(false);
+    }
+  }
+
+  async function reject() {
+    if (!proposal || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      if (proposal.approvalRequired) {
+        await rejectOperation(proposal.operationId, proposal.payloadHash);
+      }
+      setDecided("rejected");
+      onReject?.();
+    } catch (e) {
+      setError(errMessage(e));
+    } finally {
       setBusy(false);
     }
   }
@@ -175,7 +215,7 @@ export default function ApprovalCard({
   // Auto-run reads (per settings) exactly once, after classification lands.
   useEffect(() => {
     if (canAutoRun && decided === null && !busy) {
-      void execute(true);
+      void execute();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canAutoRun]);
@@ -255,6 +295,25 @@ export default function ApprovalCard({
       - {n}
     </div>
   ));
+  const payloadHashBlock = proposal && (
+    <div className="note muted">
+      {t("approval.payloadHash")} <code>{proposal.payloadHash}</code>
+    </div>
+  );
+  const confirmationBlock = confirmationPhrase && (
+    <label className="approval-confirmation">
+      <span>
+        {t("approval.confirmationPrompt")} <code>{confirmationPhrase}</code>
+      </span>
+      <input
+        value={confirmation}
+        onChange={(event) => setConfirmation(event.target.value)}
+        placeholder={confirmationPhrase}
+        autoComplete="off"
+        spellCheck={false}
+      />
+    </label>
+  );
   const compactStatus = writesBlocked
     ? t("approval.writesDisabledCompact")
     : !cls
@@ -310,6 +369,8 @@ export default function ApprovalCard({
       {!compact && previewBlock}
       {!compact && planBlock}
       {!compact && notesBlock}
+      {!compact && payloadHashBlock}
+      {confirmationBlock}
 
       {error && <div className="error">{error}</div>}
       {/* Additive, not a terminal branch — the action buttons below stay reachable so a
@@ -323,7 +384,13 @@ export default function ApprovalCard({
         // rejection to approve it, rather than forcing a re-issue.
         <div className="approval-actions ds-action-row ds-control-row">
           <StatusGlyph label={t("approval.rejected")} icon="circleSlash" tone="danger" />
-          <button className="btn" onClick={() => setDecided(null)}>
+          <button
+            className="btn"
+            onClick={() => {
+              setDecided(null);
+              setProposalVersion((version) => version + 1);
+            }}
+          >
             {t("approval.reconsider")}
           </button>
         </div>
@@ -346,8 +413,8 @@ export default function ApprovalCard({
           )}
           <button
             className="btn primary"
-            disabled={busy || !cls || writesBlocked}
-            onClick={() => execute(true)}
+            disabled={busy || !proposal || writesBlocked || !confirmationMatches}
+            onClick={() => void execute()}
           >
             {isWrite
               ? compact
@@ -357,11 +424,8 @@ export default function ApprovalCard({
           </button>
           <button
             className="btn"
-            disabled={busy}
-            onClick={() => {
-              setDecided("rejected");
-              onReject?.();
-            }}
+            disabled={busy || !proposal}
+            onClick={() => void reject()}
           >
             {t("approval.reject")}
           </button>
@@ -376,6 +440,7 @@ export default function ApprovalCard({
             {previewBlock}
             {planBlock}
             {notesBlock}
+            {payloadHashBlock}
           </details>
           <details className="generated-sql">
             <summary>{t("approval.generatedSql")}</summary>

@@ -2,7 +2,8 @@
 
 use std::fmt;
 
-use chrono::Utc;
+use chrono::{Duration as ChronoDuration, Utc};
+use serde::{Deserialize, Serialize};
 use sqlx::AssertSqlSafe;
 use uuid::Uuid;
 
@@ -13,18 +14,43 @@ use crate::connection::{
 use crate::error::{AppError, AppResult};
 use crate::executor;
 use crate::model::{HistoryEntry, QueryKind, ScriptOutcome, ScriptStatement};
+use crate::operations::{
+    ClaimedOperation, ExecutionGrant, NewOperation, OperationKind, OperationPlanDisposition,
+    OperationRiskLevel, OperationRuntime, OperationState,
+};
 use crate::safety;
 use crate::store::{PinnedConnection, Store};
 
-/// Desktop script input. The legacy approval boolean remains isolated here until
-/// exact Operation approvals replace it in FND-04.
+use super::operation_service::{
+    actor_for_pin, capture_policy, ensure_operation_scope, required_confirmation,
+};
+use super::query_service::QUERY_PLAN_TTL;
+
+/// Desktop script input accepted only at the immutable proposal boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct DesktopScriptRunRequest {
+pub(crate) struct DesktopScriptProposalRequest {
     pub(crate) connection_id: Uuid,
     pub(crate) sql: String,
-    pub(crate) approved: bool,
-    pub(crate) query_id: Option<Uuid>,
     pub(crate) origin: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopScriptProposalReceipt {
+    pub(crate) operation_id: Uuid,
+    pub(crate) payload_hash: String,
+    pub(crate) state: OperationState,
+    pub(crate) approval_required: bool,
+    pub(crate) confirmation_phrase: Option<String>,
+    pub(crate) statement_count: usize,
+    pub(crate) expires_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoredDesktopScriptPayload {
+    sql: String,
+    history_origin: String,
 }
 
 /// Successful script execution retaining target authority until the adapter has
@@ -104,12 +130,14 @@ impl DesktopScriptExecutionFailure {
 pub(crate) struct ScriptService {
     store: Store,
     connections: ConnectionManager,
+    operation: OperationRuntime,
 }
 
 struct PreparedScriptRun {
     operation_scope: ConnectionOperationScope,
     operation_pin: PinnedConnection,
-    request: DesktopScriptRunRequest,
+    operation: ClaimedOperation,
+    payload: StoredDesktopScriptPayload,
     statements: Vec<String>,
     kinds: Vec<QueryKind>,
     settings: crate::model::SafetySettings,
@@ -118,18 +146,30 @@ struct PreparedScriptRun {
 }
 
 impl ScriptService {
-    pub(super) fn new(store: Store, connections: ConnectionManager) -> Self {
-        Self { store, connections }
+    pub(super) fn new(
+        store: Store,
+        connections: ConnectionManager,
+        operation: OperationRuntime,
+    ) -> Self {
+        Self {
+            store,
+            connections,
+            operation,
+        }
     }
 
-    /// Split and classify every statement, then execute either sequentially on the
-    /// read-only pool or atomically on the write pool under the legacy Phase 1 gates.
-    pub(crate) async fn run_desktop(
+    /// Persist one exact multi-statement proposal after classifying every statement.
+    /// All-read scripts become ready single-use plans; any mutation always waits for
+    /// exact approval regardless of the legacy prompt preference.
+    pub(crate) async fn propose_desktop(
         &self,
-        request: DesktopScriptRunRequest,
-    ) -> Result<DesktopScriptRunReceipt, DesktopScriptRunError> {
+        request: DesktopScriptProposalRequest,
+    ) -> Result<DesktopScriptProposalReceipt, DesktopScriptRunError> {
         let operation_scope = self.connections.begin_operation_scope().await;
-        let operation_pin = match operation_scope.pin_connection(request.connection_id).await {
+        let pin = match operation_scope
+            .pin_connection_for_view(request.connection_id)
+            .await
+        {
             Ok(pin) => pin,
             Err(error) => {
                 return Err(DesktopScriptRunError::Scoped(DesktopScriptScopedFailure {
@@ -138,7 +178,172 @@ impl ScriptService {
                 }))
             }
         };
-        let settings = match self.store.get_safety(request.connection_id).await {
+        if pin.profile.engine.is_document() {
+            return Err(DesktopScriptRunError::Scoped(DesktopScriptScopedFailure {
+                error: AppError::Blocked {
+                    reason: "SQL scripts are unavailable for document connections".into(),
+                },
+                _scope: operation_scope,
+            }));
+        }
+        let settings = self
+            .store
+            .get_safety(pin.connection_id)
+            .await
+            .map_err(DesktopScriptRunError::Application)?;
+        let statements = crate::sql_script::split_statements(&request.sql, pin.profile.engine);
+        if statements.is_empty() {
+            return Err(DesktopScriptRunError::Scoped(DesktopScriptScopedFailure {
+                error: AppError::Config("no executable statements in the script".into()),
+                _scope: operation_scope,
+            }));
+        }
+        let classifications = statements
+            .iter()
+            .map(|statement| safety::classify(statement, pin.profile.engine))
+            .collect::<AppResult<Vec<_>>>()
+            .map_err(DesktopScriptRunError::Application)?;
+        let kinds = classifications
+            .iter()
+            .map(|classification| classification.kind)
+            .collect::<Vec<_>>();
+        if kinds
+            .iter()
+            .any(|kind| matches!(kind, QueryKind::Privilege))
+        {
+            return Err(DesktopScriptRunError::Scoped(DesktopScriptScopedFailure {
+                error: AppError::Blocked {
+                    reason: "arbitrary privilege SQL is blocked; use a supported, narrowly scoped administrative action"
+                        .into(),
+                },
+                _scope: operation_scope,
+            }));
+        }
+        let has_write = script_has_write(&kinds);
+        let access_allowed = if has_write {
+            pin.profile.workspace_access.can_write()
+        } else {
+            pin.profile.workspace_access.can_read()
+        };
+        if !access_allowed {
+            return Err(DesktopScriptRunError::Scoped(DesktopScriptScopedFailure {
+                error: AppError::Blocked {
+                    reason: "your workspace role no longer grants this script access".into(),
+                },
+                _scope: operation_scope,
+            }));
+        }
+        if has_write && !settings.allow_writes {
+            return Err(DesktopScriptRunError::Scoped(DesktopScriptScopedFailure {
+                error: AppError::Blocked {
+                    reason: "writes are disabled for this connection".into(),
+                },
+                _scope: operation_scope,
+            }));
+        }
+        let policy = capture_policy(&pin, &settings).map_err(DesktopScriptRunError::Application)?;
+        let history_origin = request.origin.unwrap_or_else(|| "manual".into());
+        let payload = serde_json::to_value(StoredDesktopScriptPayload {
+            sql: request.sql,
+            history_origin: history_origin.clone(),
+        })
+        .map_err(AppError::from)
+        .map_err(DesktopScriptRunError::Application)?;
+        let operation_id = Uuid::new_v4();
+        let expires_at = Utc::now()
+            + if has_write {
+                ChronoDuration::minutes(5)
+            } else {
+                ChronoDuration::from_std(QUERY_PLAN_TTL)
+                    .expect("query plan TTL is representable by chrono")
+            };
+        let disposition = if has_write {
+            OperationPlanDisposition::ApprovalRequired
+        } else {
+            OperationPlanDisposition::Ready
+        };
+        let operation = self
+            .operation
+            .plan(
+                NewOperation {
+                    id: operation_id,
+                    workspace_id: pin.scope.workspace_id,
+                    account_scope: pin.scope.account_scope.storage_key().into(),
+                    connection_id: pin.connection_id,
+                    connection_revision: pin.connection_revision,
+                    terminal_session_id: None,
+                    actor: actor_for_pin(&pin, history_origin),
+                    kind: if has_write {
+                        OperationKind::SqlScript
+                    } else {
+                        OperationKind::ReadQuery
+                    },
+                    payload_schema_version: 1,
+                    payload,
+                    schema_fingerprint: None,
+                    risk_level: script_operation_risk(&classifications),
+                    preview: serde_json::json!({
+                        "classifications": classifications,
+                        "statementCount": statements.len(),
+                    }),
+                    policy_snapshot: policy.snapshot,
+                    policy_revision: policy.revision,
+                    single_use: true,
+                    idempotency_key: operation_id.to_string(),
+                    expires_at: Some(expires_at),
+                },
+                disposition,
+            )
+            .await
+            .map_err(DesktopScriptRunError::Application)?;
+        let confirmation_phrase = required_confirmation(&operation).map(str::to_owned);
+        Ok(DesktopScriptProposalReceipt {
+            operation_id: operation.id,
+            payload_hash: operation.payload_hash,
+            state: operation.state,
+            approval_required: has_write,
+            confirmation_phrase,
+            statement_count: statements.len(),
+            expires_at,
+        })
+    }
+
+    /// Execute an immutable script by operation id only.
+    pub(crate) async fn run_desktop(
+        &self,
+        operation_id: Uuid,
+    ) -> Result<DesktopScriptRunReceipt, DesktopScriptRunError> {
+        let planned = self
+            .operation
+            .get(operation_id)
+            .await
+            .map_err(DesktopScriptRunError::Application)?;
+        if planned.payload_schema_version != 1
+            || !matches!(
+                planned.kind,
+                OperationKind::ReadQuery | OperationKind::SqlScript
+            )
+        {
+            return Err(DesktopScriptRunError::Application(AppError::Blocked {
+                reason: "operation is not a supported SQL script proposal".into(),
+            }));
+        }
+        let payload: StoredDesktopScriptPayload = serde_json::from_value(planned.payload.clone())
+            .map_err(AppError::from)
+            .map_err(DesktopScriptRunError::Application)?;
+        let operation_scope = self.connections.begin_operation_scope().await;
+        let operation_pin = match operation_scope.pin_connection(planned.connection_id).await {
+            Ok(pin) => pin,
+            Err(error) => {
+                return Err(DesktopScriptRunError::Scoped(DesktopScriptScopedFailure {
+                    error,
+                    _scope: operation_scope,
+                }))
+            }
+        };
+        ensure_operation_scope(&planned, &operation_pin)
+            .map_err(DesktopScriptRunError::Application)?;
+        let settings = match self.store.get_safety(operation_pin.connection_id).await {
             Ok(settings) => settings,
             Err(error) => {
                 return Err(DesktopScriptRunError::Scoped(DesktopScriptScopedFailure {
@@ -147,9 +352,19 @@ impl ScriptService {
                 }))
             }
         };
+        let policy = capture_policy(&operation_pin, &settings)
+            .map_err(DesktopScriptRunError::Application)?;
+        if policy.revision != planned.policy_revision {
+            return Err(DesktopScriptRunError::Scoped(DesktopScriptScopedFailure {
+                error: AppError::Blocked {
+                    reason: "the connection or safety policy changed; create a new proposal".into(),
+                },
+                _scope: operation_scope,
+            }));
+        }
         let engine = operation_pin.profile.engine;
-        let history_origin = request.origin.clone().unwrap_or_else(|| "manual".into());
-        let statements = crate::sql_script::split_statements(&request.sql, engine);
+        let history_origin = payload.history_origin.clone();
+        let statements = crate::sql_script::split_statements(&payload.sql, engine);
         if statements.is_empty() {
             return Err(DesktopScriptRunError::Scoped(DesktopScriptScopedFailure {
                 error: AppError::Config("no executable statements in the script".into()),
@@ -169,12 +384,42 @@ impl ScriptService {
                 }))
             }
         };
+        if kinds
+            .iter()
+            .any(|kind| matches!(kind, QueryKind::Privilege))
+        {
+            return Err(DesktopScriptRunError::Scoped(DesktopScriptScopedFailure {
+                error: AppError::Blocked {
+                    reason: "stored script contains blocked arbitrary privilege SQL".into(),
+                },
+                _scope: operation_scope,
+            }));
+        }
 
         let has_write = script_has_write(&kinds);
+        let expected_kind = if has_write {
+            OperationKind::SqlScript
+        } else {
+            OperationKind::ReadQuery
+        };
+        if planned.kind != expected_kind {
+            return Err(DesktopScriptRunError::Scoped(DesktopScriptScopedFailure {
+                error: AppError::Blocked {
+                    reason: "stored script classification no longer matches its proposal".into(),
+                },
+                _scope: operation_scope,
+            }));
+        }
+        let operation = self
+            .operation
+            .claim(operation_id)
+            .await
+            .map_err(DesktopScriptRunError::Application)?;
         let prepared = PreparedScriptRun {
             operation_scope,
             operation_pin,
-            request,
+            operation,
+            payload,
             statements,
             kinds,
             settings,
@@ -195,34 +440,15 @@ impl ScriptService {
         let PreparedScriptRun {
             operation_scope,
             operation_pin,
-            request,
+            operation,
+            payload,
             statements,
             kinds: _,
             settings,
             engine,
             history_origin,
         } = prepared;
-        if !settings.auto_run_reads && !request.approved {
-            let reason = "reads require approval for this connection".to_string();
-            record_script_run(
-                &self.store,
-                &operation_pin,
-                ScriptRunRecord {
-                    sql: &request.sql,
-                    kind: QueryKind::Read,
-                    action: "blocked",
-                    status: "blocked",
-                    row_count: None,
-                    error: Some(reason.clone()),
-                    origin: &history_origin,
-                },
-            )
-            .await;
-            return Err(DesktopScriptRunError::Scoped(DesktopScriptScopedFailure {
-                error: AppError::Blocked { reason },
-                _scope: operation_scope,
-            }));
-        }
+        let operation_id = operation.record().id;
 
         let lease = match operation_scope
             .connect(operation_pin.clone(), ConnectionAccess::Read)
@@ -234,7 +460,7 @@ impl ScriptService {
                     &self.store,
                     &operation_pin,
                     ScriptRunRecord {
-                        sql: &request.sql,
+                        sql: &payload.sql,
                         kind: QueryKind::Read,
                         action: "script:execute",
                         status: "error",
@@ -244,12 +470,26 @@ impl ScriptService {
                     },
                 )
                 .await;
+                let _ = self
+                    .operation
+                    .fail(
+                        operation_id,
+                        &serde_json::json!({"reason": "connection_failed"}),
+                    )
+                    .await;
                 return Err(DesktopScriptRunError::Application(error));
             }
         };
         let live = match lease.live().sql() {
             Ok(live) => live,
             Err(error) => {
+                let _ = self
+                    .operation
+                    .fail(
+                        operation_id,
+                        &serde_json::json!({"reason": "sql_backend_unavailable"}),
+                    )
+                    .await;
                 return Err(DesktopScriptRunError::Execution(Box::new(
                     DesktopScriptExecutionFailure {
                         error,
@@ -265,8 +505,14 @@ impl ScriptService {
                 outcomes.push(statement_skipped(statement));
                 continue;
             }
-            match executor::run_read(live, engine, statement, settings.max_rows, request.query_id)
-                .await
+            match executor::run_read(
+                live,
+                engine,
+                statement,
+                settings.max_rows,
+                Some(operation_id),
+            )
+            .await
             {
                 Ok(result) => outcomes.push(ScriptStatement {
                     sql: statement.clone(),
@@ -286,6 +532,7 @@ impl ScriptService {
             .filter_map(|statement| statement.result.as_ref())
             .map(|result| result.row_count as i64)
             .sum();
+        let failed = failure.is_some();
         let (status, error) = match failure {
             Some(error) => ("error", Some(error)),
             None => ("ok", None),
@@ -294,7 +541,7 @@ impl ScriptService {
             &self.store,
             &operation_pin,
             ScriptRunRecord {
-                sql: &request.sql,
+                sql: &payload.sql,
                 kind: QueryKind::Read,
                 action: "script:execute",
                 status,
@@ -304,6 +551,22 @@ impl ScriptService {
             },
         )
         .await;
+        let operation_result = if failed {
+            self.operation
+                .fail(
+                    operation_id,
+                    &serde_json::json!({"reason": "script_statement_failed"}),
+                )
+                .await
+        } else {
+            self.operation
+                .succeed(
+                    operation_id,
+                    &serde_json::json!({"rowCount": total, "statementCount": statements.len()}),
+                )
+                .await
+        };
+        operation_result.map_err(DesktopScriptRunError::Application)?;
         Ok(DesktopScriptRunReceipt {
             outcome: ScriptOutcome {
                 statements: outcomes,
@@ -321,13 +584,15 @@ impl ScriptService {
         let PreparedScriptRun {
             operation_scope,
             operation_pin,
-            request,
+            operation,
+            payload,
             statements,
             kinds,
             settings,
             engine,
             history_origin,
         } = prepared;
+        let operation_id = operation.record().id;
         if !operation_pin.profile.workspace_access.can_write() {
             return Err(DesktopScriptRunError::Scoped(DesktopScriptScopedFailure {
                 error: AppError::Blocked {
@@ -344,7 +609,7 @@ impl ScriptService {
                 &self.store,
                 &operation_pin,
                 ScriptRunRecord {
-                    sql: &request.sql,
+                    sql: &payload.sql,
                     kind: QueryKind::Write,
                     action: "blocked",
                     status: "blocked",
@@ -359,28 +624,6 @@ impl ScriptService {
                 _scope: operation_scope,
             }));
         }
-        if !request.approved {
-            let reason = "this script modifies data and requires explicit approval".to_string();
-            record_script_run(
-                &self.store,
-                &operation_pin,
-                ScriptRunRecord {
-                    sql: &request.sql,
-                    kind: QueryKind::Write,
-                    action: "blocked",
-                    status: "blocked",
-                    row_count: None,
-                    error: Some(reason.clone()),
-                    origin: &history_origin,
-                },
-            )
-            .await;
-            return Err(DesktopScriptRunError::Scoped(DesktopScriptScopedFailure {
-                error: AppError::Blocked { reason },
-                _scope: operation_scope,
-            }));
-        }
-
         let has_ddl = kinds.iter().any(|kind| matches!(kind, QueryKind::Ddl));
         let script_kind = if has_ddl {
             QueryKind::Ddl
@@ -395,19 +638,26 @@ impl ScriptService {
         if let Err(error) = audit::record(
             &self.store,
             RecordArgs {
-                connection_id: request.connection_id,
+                connection_id: operation_pin.connection_id,
                 engine,
                 agent_prompt: None,
-                sql: request.sql.clone(),
+                sql: payload.sql.clone(),
                 kind: script_kind,
                 action: "script:execute:attempt".into(),
-                approved_by: None,
+                approved_by: Some(operation.record().actor.id.clone()),
                 affected_estimate: None,
                 error: None,
             },
         )
         .await
         {
+            let _ = self
+                .operation
+                .fail(
+                    operation_id,
+                    &serde_json::json!({"reason": "audit_pre_record_failed"}),
+                )
+                .await;
             return Err(DesktopScriptRunError::Scoped(DesktopScriptScopedFailure {
                 error: AppError::Config(format!(
                     "audit pre-record failed — refusing to run script: {error}"
@@ -426,7 +676,7 @@ impl ScriptService {
                     &self.store,
                     &operation_pin,
                     ScriptRunRecord {
-                        sql: &request.sql,
+                        sql: &payload.sql,
                         kind: script_kind,
                         action: "script:execute",
                         status: "error",
@@ -436,6 +686,13 @@ impl ScriptService {
                     },
                 )
                 .await;
+                let _ = self
+                    .operation
+                    .fail(
+                        operation_id,
+                        &serde_json::json!({"reason": "connection_failed"}),
+                    )
+                    .await;
                 return Err(DesktopScriptRunError::Application(error));
             }
         };
@@ -446,7 +703,7 @@ impl ScriptService {
                     &self.store,
                     &operation_pin,
                     ScriptRunRecord {
-                        sql: &request.sql,
+                        sql: &payload.sql,
                         kind: script_kind,
                         action: "script:execute",
                         status: "error",
@@ -456,6 +713,13 @@ impl ScriptService {
                     },
                 )
                 .await;
+                let _ = self
+                    .operation
+                    .fail(
+                        operation_id,
+                        &serde_json::json!({"reason": "sql_backend_unavailable"}),
+                    )
+                    .await;
                 return Err(DesktopScriptRunError::Execution(Box::new(
                     DesktopScriptExecutionFailure {
                         error,
@@ -464,11 +728,14 @@ impl ScriptService {
                 )));
             }
         };
-        let transaction = async {
-            Ok::<_, AppError>(execute_script_transaction(&live.write_pool, &statements).await)
-        };
+        let transaction = execute_script_transaction(
+            &live.write_pool,
+            &statements,
+            operation.grant(),
+            operation_id,
+        );
         let (outcomes, committed) = match executor::cancel::guard(
-            request.query_id,
+            Some(operation_id),
             executor::cancel::QUERY_TIMEOUT,
             transaction,
         )
@@ -476,11 +743,24 @@ impl ScriptService {
         {
             Ok(result) => result,
             Err(error) => {
+                let interrupted = matches!(
+                    &error,
+                    AppError::Safety(reason)
+                        if reason == "query cancelled"
+                            || reason.starts_with("query timed out after ")
+                );
+                let error = if interrupted {
+                    AppError::OutcomeUnknown(format!(
+                        "script execution was interrupted before rollback or commit could be confirmed: {error}"
+                    ))
+                } else {
+                    error
+                };
                 record_script_run(
                     &self.store,
                     &operation_pin,
                     ScriptRunRecord {
-                        sql: &request.sql,
+                        sql: &payload.sql,
                         kind: script_kind,
                         action: "script:execute",
                         status: "error",
@@ -490,6 +770,18 @@ impl ScriptService {
                     },
                 )
                 .await;
+                let _ = if matches!(&error, AppError::OutcomeUnknown(_)) {
+                    self.operation
+                        .mark_outcome_unknown(
+                            operation_id,
+                            &serde_json::json!({"reason": "target_outcome_unconfirmed"}),
+                        )
+                        .await
+                } else {
+                    self.operation
+                        .fail(operation_id, &serde_json::json!({"reason": error.kind()}))
+                        .await
+                };
                 return Err(DesktopScriptRunError::Execution(Box::new(
                     DesktopScriptExecutionFailure {
                         error,
@@ -499,8 +791,50 @@ impl ScriptService {
             }
         };
 
+        if !committed
+            && matches!(engine, crate::model::Engine::Mysql)
+            && kinds
+                .iter()
+                .any(|kind| matches!(kind, QueryKind::Ddl | QueryKind::Privilege))
+        {
+            let error = AppError::OutcomeUnknown(
+                "MySQL may implicitly commit DDL or privilege statements before a later script statement fails"
+                    .into(),
+            );
+            record_script_run(
+                &self.store,
+                &operation_pin,
+                ScriptRunRecord {
+                    sql: &payload.sql,
+                    kind: script_kind,
+                    action: "script:execute",
+                    status: "outcome_unknown",
+                    row_count: None,
+                    error: Some(error.to_string()),
+                    origin: &history_origin,
+                },
+            )
+            .await;
+            let _ = self
+                .operation
+                .mark_outcome_unknown(
+                    operation_id,
+                    &serde_json::json!({"reason": "mysql_implicit_commit_unconfirmed"}),
+                )
+                .await;
+            return Err(DesktopScriptRunError::Execution(Box::new(
+                DesktopScriptExecutionFailure {
+                    error,
+                    _lease: lease,
+                },
+            )));
+        }
+
         if committed && has_ddl {
-            let _ = self.store.clear_schema_cache(request.connection_id).await;
+            let _ = self
+                .store
+                .clear_schema_cache(operation_pin.connection_id)
+                .await;
         }
         let total = outcomes
             .iter()
@@ -513,7 +847,7 @@ impl ScriptService {
             &self.store,
             &operation_pin,
             ScriptRunRecord {
-                sql: &request.sql,
+                sql: &payload.sql,
                 kind: script_kind,
                 action: "script:execute",
                 status: if committed { "ok" } else { "error" },
@@ -523,6 +857,41 @@ impl ScriptService {
             },
         )
         .await;
+        let lifecycle = if committed {
+            self.operation
+                .succeed(
+                    operation_id,
+                    &serde_json::json!({
+                        "rowCount": total,
+                        "statementCount": statements.len(),
+                    }),
+                )
+                .await
+        } else {
+            self.operation
+                .fail(
+                    operation_id,
+                    &serde_json::json!({"reason": "script_transaction_rolled_back"}),
+                )
+                .await
+        };
+        if let Err(error) = lifecycle {
+            if committed {
+                let _ = self
+                    .operation
+                    .mark_outcome_unknown(
+                        operation_id,
+                        &serde_json::json!({"reason": "local_receipt_failed"}),
+                    )
+                    .await;
+            }
+            return Err(DesktopScriptRunError::Execution(Box::new(
+                DesktopScriptExecutionFailure {
+                    error,
+                    _lease: lease,
+                },
+            )));
+        }
         Ok(DesktopScriptRunReceipt {
             outcome: ScriptOutcome {
                 statements: outcomes,
@@ -560,12 +929,41 @@ fn script_has_write(kinds: &[QueryKind]) -> bool {
     kinds.iter().any(|kind| !matches!(kind, QueryKind::Read))
 }
 
+fn script_operation_risk(classifications: &[crate::model::Classification]) -> OperationRiskLevel {
+    if classifications.iter().any(|classification| {
+        classification.no_where && !matches!(classification.kind, QueryKind::Read)
+    }) {
+        return OperationRiskLevel::Critical;
+    }
+    classifications
+        .iter()
+        .fold(OperationRiskLevel::Low, |risk, classification| {
+            match (risk, classification.risk) {
+                (OperationRiskLevel::High, _) | (_, crate::model::RiskLevel::High) => {
+                    OperationRiskLevel::High
+                }
+                (OperationRiskLevel::Medium, _) | (_, crate::model::RiskLevel::Medium) => {
+                    OperationRiskLevel::Medium
+                }
+                _ => OperationRiskLevel::Low,
+            }
+        })
+}
+
 /// Execute every statement in one write-pool transaction. MySQL may implicitly
 /// commit DDL, so mixed MySQL DDL scripts retain the existing best-effort caveat.
 async fn execute_script_transaction(
     pool: &DbPool,
     statements: &[String],
-) -> (Vec<ScriptStatement>, bool) {
+    grant: &ExecutionGrant,
+    operation_id: Uuid,
+) -> AppResult<(Vec<ScriptStatement>, bool)> {
+    if grant.operation_id() != operation_id {
+        return Err(AppError::Blocked {
+            reason: "script transaction scope does not match its approved operation".into(),
+        });
+    }
+    let _exact_payload = (grant.payload_sha256(), grant.connection_id());
     macro_rules! run_transaction {
         ($pool:expr) => {{
             let mut outcomes = Vec::with_capacity(statements.len());
@@ -588,18 +986,19 @@ async fn execute_script_transaction(
                         }
                     }
                     if !succeeded {
-                        let _ = transaction.rollback().await;
+                        if let Err(error) = transaction.rollback().await {
+                            return Err(AppError::OutcomeUnknown(format!(
+                                "script rollback acknowledgement failed: {error}"
+                            )));
+                        }
                         while outcomes.len() < statements.len() {
                             outcomes.push(statement_skipped(&statements[outcomes.len()]));
                         }
                         (outcomes, false)
                     } else if let Err(error) = transaction.commit().await {
-                        let message = format!("commit failed — nothing was saved: {error}");
-                        for outcome in &mut outcomes {
-                            outcome.error = Some(message.clone());
-                            outcome.affected = None;
-                        }
-                        (outcomes, false)
+                        return Err(AppError::OutcomeUnknown(format!(
+                            "script commit acknowledgement failed: {error}"
+                        )));
                     } else {
                         (outcomes, true)
                     }
@@ -619,11 +1018,11 @@ async fn execute_script_transaction(
             }
         }};
     }
-    match pool {
+    Ok(match pool {
         DbPool::Postgres(pool) => run_transaction!(pool),
         DbPool::Mysql(pool) => run_transaction!(pool),
         DbPool::Sqlite(pool) => run_transaction!(pool),
-    }
+    })
 }
 
 struct ScriptRunRecord<'a> {
@@ -693,7 +1092,7 @@ mod tests {
     use std::str::FromStr;
     use std::time::Duration;
 
-    use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use tempfile::TempDir;
 
     use super::*;
@@ -707,6 +1106,8 @@ mod tests {
         store: Store,
         connections: ConnectionManager,
         service: ScriptService,
+        operation_service: crate::services::OperationService,
+        approval: crate::operations::LocalApprovalAuthority,
         connection_id: Uuid,
         profile: ConnectionProfile,
         target_path: std::path::PathBuf,
@@ -750,12 +1151,20 @@ mod tests {
             };
             store.upsert_connection(&profile).await.unwrap();
             let connections = ConnectionManager::new(store.clone());
-            let service = ScriptService::new(store.clone(), connections.clone());
+            let (operation, approval) = OperationRuntime::new(&store);
+            let operation_service = crate::services::OperationService::new(
+                store.clone(),
+                connections.clone(),
+                operation.clone(),
+            );
+            let service = ScriptService::new(store.clone(), connections.clone(), operation);
             Self {
                 directory,
                 store,
                 connections,
                 service,
+                operation_service,
+                approval,
                 connection_id,
                 profile,
                 target_path,
@@ -802,6 +1211,34 @@ mod tests {
             entries.into_iter().map(|entry| entry.action).collect()
         }
 
+        async fn propose(
+            &self,
+            sql: &str,
+            origin: Option<&str>,
+        ) -> Result<DesktopScriptProposalReceipt, DesktopScriptRunError> {
+            self.service
+                .propose_desktop(DesktopScriptProposalRequest {
+                    connection_id: self.connection_id,
+                    sql: sql.into(),
+                    origin: origin.map(str::to_string),
+                })
+                .await
+        }
+
+        async fn approve(&self, proposal: &DesktopScriptProposalReceipt) {
+            self.operation_service
+                .approve_local(
+                    &self.approval,
+                    crate::services::OperationDecisionRequest {
+                        operation_id: proposal.operation_id,
+                        expected_payload_hash: proposal.payload_hash.clone(),
+                        reason: None,
+                    },
+                )
+                .await
+                .unwrap();
+        }
+
         async fn close(self) {
             let mutation = self
                 .connections
@@ -814,9 +1251,11 @@ mod tests {
                 store,
                 connections,
                 service,
+                operation_service,
                 ..
             } = self;
             drop(service);
+            drop(operation_service);
             drop(connections);
             store.pool().close().await;
             drop(store);
@@ -845,20 +1284,6 @@ mod tests {
         pool.close().await;
     }
 
-    async fn standalone_sqlite(tag: &str) -> SqlitePool {
-        let path =
-            std::env::temp_dir().join(format!("dopedb-script-{tag}-{}.db", std::process::id()));
-        let _ = std::fs::remove_file(&path);
-        let options = SqliteConnectOptions::new()
-            .filename(&path)
-            .create_if_missing(true);
-        SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(options)
-            .await
-            .unwrap()
-    }
-
     #[test]
     fn write_path_only_when_a_statement_writes() {
         assert!(!script_has_write(&[QueryKind::Read, QueryKind::Read]));
@@ -868,70 +1293,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn transaction_rolls_back_the_whole_script_on_error() {
-        let pool = standalone_sqlite("rollback").await;
-        sqlx::raw_sql("CREATE TABLE t (id INTEGER);")
-            .execute(&pool)
-            .await
-            .unwrap();
-        let db = DbPool::Sqlite(pool.clone());
-        let (rows, committed) = execute_script_transaction(
-            &db,
-            &[
-                "INSERT INTO t VALUES (1)".into(),
-                "INSERT INTO t VALUES (2)".into(),
-                "THIS IS NOT SQL".into(),
-                "INSERT INTO t VALUES (3)".into(),
-            ],
-        )
-        .await;
-        assert!(!committed);
-        assert!(rows[0].error.is_none() && rows[1].error.is_none());
-        assert!(rows[2].error.is_some());
-        assert!(rows[3].error.is_some());
-        let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM t")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(count, 0);
-        pool.close().await;
-    }
-
-    #[tokio::test]
-    async fn transaction_commits_all_on_success() {
-        let pool = standalone_sqlite("commit").await;
-        let db = DbPool::Sqlite(pool.clone());
-        let (rows, committed) = execute_script_transaction(
-            &db,
-            &[
-                "CREATE TABLE t (id INTEGER)".into(),
-                "INSERT INTO t VALUES (1)".into(),
-                "INSERT INTO t VALUES (2)".into(),
-            ],
-        )
-        .await;
-        assert!(committed);
-        assert!(rows.iter().all(|row| row.error.is_none()));
-        let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM t")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(count, 2);
-        pool.close().await;
-    }
-
-    #[tokio::test]
     async fn read_script_preserves_wire_history_and_lease() {
         let harness = ScriptHarness::new().await;
+        let proposal = harness
+            .propose(
+                "SELECT id FROM users ORDER BY id; SELECT name FROM users ORDER BY id",
+                Some("sql"),
+            )
+            .await
+            .unwrap();
+        assert!(!proposal.approval_required);
+        assert_eq!(proposal.state, OperationState::Ready);
         let receipt = harness
             .service
-            .run_desktop(DesktopScriptRunRequest {
-                connection_id: harness.connection_id,
-                sql: "SELECT id FROM users ORDER BY id; SELECT name FROM users ORDER BY id".into(),
-                approved: false,
-                query_id: None,
-                origin: Some("sql".into()),
-            })
+            .run_desktop(proposal.operation_id)
             .await
             .unwrap();
         assert!(receipt.outcome.all_reads);
@@ -973,39 +1348,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_script_approval_gate_preserves_exact_block_contract() {
+    async fn read_script_remains_a_plan_run_flow_when_auto_run_is_off() {
         let harness = ScriptHarness::new().await;
         harness.configure(false, false).await;
-        let failure = match harness
+        let proposal = harness.propose("SELECT id FROM users", None).await.unwrap();
+        assert!(!proposal.approval_required);
+        let receipt = harness
             .service
-            .run_desktop(DesktopScriptRunRequest {
-                connection_id: harness.connection_id,
-                sql: "SELECT id FROM users".into(),
-                approved: false,
-                query_id: None,
-                origin: None,
-            })
+            .run_desktop(proposal.operation_id)
             .await
-        {
-            Err(DesktopScriptRunError::Scoped(failure)) => failure,
-            _ => panic!("manual approval must remain required when auto-run reads are off"),
-        };
-        let error = failure.into_error();
-        assert_eq!(
-            serde_json::to_value(&error).unwrap(),
-            serde_json::json!({
-                "kind": "blocked",
-                "message": "blocked: reads require approval for this connection"
-            })
-        );
-        assert_eq!(harness.audit_actions().await, ["blocked"]);
+            .unwrap();
+        assert!(receipt.outcome.all_reads);
+        drop(receipt);
+        assert_eq!(harness.audit_actions().await, ["script:execute"]);
         let history = harness
             .store
             .list_history(harness.connection_id)
             .await
             .unwrap();
         assert_eq!(history.len(), 1);
-        assert_eq!(history[0].status, "blocked");
+        assert_eq!(history[0].status, "ok");
         assert_eq!(history[0].origin, "manual");
         harness.close().await;
     }
@@ -1014,14 +1376,7 @@ mod tests {
     async fn write_script_gates_preserve_exact_errors_and_never_touch_target() {
         let harness = ScriptHarness::new().await;
         let writes_disabled = match harness
-            .service
-            .run_desktop(DesktopScriptRunRequest {
-                connection_id: harness.connection_id,
-                sql: "UPDATE users SET name = 'Grace' WHERE id = 1".into(),
-                approved: true,
-                query_id: None,
-                origin: None,
-            })
+            .propose("UPDATE users SET name = 'Grace' WHERE id = 1", None)
             .await
         {
             Err(error) => error.into_error(),
@@ -1031,46 +1386,48 @@ mod tests {
             serde_json::to_value(&writes_disabled).unwrap(),
             serde_json::json!({
                 "kind": "blocked",
-                "message": "blocked: writing is disabled for this connection (writes are off by default). Enable writes in the connection's safety settings to run this script."
+                "message": "blocked: writes are disabled for this connection"
             })
         );
 
         harness.configure(true, true).await;
-        let approval_required = match harness
-            .service
-            .run_desktop(DesktopScriptRunRequest {
-                connection_id: harness.connection_id,
-                sql: "UPDATE users SET name = 'Grace' WHERE id = 1".into(),
-                approved: false,
-                query_id: None,
-                origin: Some("sql".into()),
-            })
+        let proposal = harness
+            .propose("UPDATE users SET name = 'Grace' WHERE id = 1", Some("sql"))
             .await
-        {
+            .unwrap();
+        assert!(proposal.approval_required);
+        let approval_required = match harness.service.run_desktop(proposal.operation_id).await {
             Err(error) => error.into_error(),
             Ok(_) => panic!("unapproved write script must be rejected"),
         };
-        assert_eq!(
-            serde_json::to_value(&approval_required).unwrap(),
-            serde_json::json!({
-                "kind": "blocked",
-                "message": "blocked: this script modifies data and requires explicit approval"
-            })
-        );
+        assert!(matches!(approval_required, AppError::Blocked { .. }));
         assert_eq!(harness.user_names().await, ["Ada", "Linus"]);
-        assert_eq!(harness.audit_actions().await, ["blocked", "blocked"]);
-        let history = harness
+        assert!(harness.audit_actions().await.is_empty());
+        assert!(harness
             .store
             .list_history(harness.connection_id)
             .await
-            .unwrap();
-        assert_eq!(history.len(), 2);
-        assert!(history
-            .iter()
-            .any(|entry| entry.status == "blocked" && entry.origin == "manual"));
-        assert!(history
-            .iter()
-            .any(|entry| entry.status == "blocked" && entry.origin == "sql"));
+            .unwrap()
+            .is_empty());
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn arbitrary_privilege_script_is_blocked_before_operation_persistence() {
+        let harness = ScriptHarness::new().await;
+        harness.configure(true, true).await;
+        let error = match harness
+            .propose("GRANT SELECT ON users TO analyst", None)
+            .await
+        {
+            Err(error) => error.into_error(),
+            Ok(_) => panic!("arbitrary privilege scripts must be blocked"),
+        };
+        assert!(matches!(
+            error,
+            AppError::Blocked { ref reason } if reason.contains("arbitrary privilege SQL")
+        ));
+        assert!(harness.audit_actions().await.is_empty());
         harness.close().await;
     }
 
@@ -1078,17 +1435,18 @@ mod tests {
     async fn write_script_is_atomic_and_closes_attempt_ledger() {
         let harness = ScriptHarness::new().await;
         harness.configure(true, true).await;
+        let proposal = harness
+            .propose(
+                "UPDATE users SET name = 'Grace' WHERE id = 1;\
+                 UPDATE users SET name = 'Ken' WHERE id = 2",
+                Some("data-view"),
+            )
+            .await
+            .unwrap();
+        harness.approve(&proposal).await;
         let receipt = harness
             .service
-            .run_desktop(DesktopScriptRunRequest {
-                connection_id: harness.connection_id,
-                sql: "UPDATE users SET name = 'Grace' WHERE id = 1;\
-                      UPDATE users SET name = 'Ken' WHERE id = 2"
-                    .into(),
-                approved: true,
-                query_id: None,
-                origin: Some("data-view".into()),
-            })
+            .run_desktop(proposal.operation_id)
             .await
             .unwrap();
         assert!(receipt.outcome.committed);
@@ -1113,6 +1471,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn script_commit_without_acknowledgement_is_not_reported_as_rolled_back() {
+        let harness = ScriptHarness::new().await;
+        harness.configure(true, true).await;
+        let lease = harness
+            .connections
+            .acquire(harness.connection_id, ConnectionAccess::Write)
+            .await
+            .unwrap();
+        let DbPool::Sqlite(pool) = &lease.live().sql().unwrap().write_pool else {
+            panic!("script harness must use SQLite");
+        };
+        sqlx::raw_sql(
+            "CREATE TABLE parents (id INTEGER PRIMARY KEY);
+             CREATE TABLE deferred_children (
+               id INTEGER PRIMARY KEY,
+               parent_id INTEGER NOT NULL,
+               FOREIGN KEY(parent_id) REFERENCES parents(id)
+                 DEFERRABLE INITIALLY DEFERRED
+             );",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        drop(lease);
+
+        let proposal = harness
+            .propose(
+                "INSERT INTO deferred_children (id, parent_id) VALUES (1, 999)",
+                None,
+            )
+            .await
+            .unwrap();
+        harness.approve(&proposal).await;
+        let error = match harness.service.run_desktop(proposal.operation_id).await {
+            Err(error) => error.into_error(),
+            Ok(_) => panic!("deferred foreign-key commit must not report success"),
+        };
+        assert!(
+            matches!(error, AppError::OutcomeUnknown(_)),
+            "uncertain script commit must remain visible, got {error}"
+        );
+        assert_eq!(
+            harness
+                .service
+                .operation
+                .get(proposal.operation_id)
+                .await
+                .unwrap()
+                .state,
+            OperationState::OutcomeUnknown
+        );
+        harness.close().await;
+    }
+
+    #[tokio::test]
     async fn committed_ddl_script_invalidates_schema_cache() {
         let harness = ScriptHarness::new().await;
         harness.configure(true, true).await;
@@ -1121,17 +1534,18 @@ mod tests {
             .set_schema_cache(harness.connection_id, r#"{"tables":[]}"#)
             .await
             .unwrap();
+        let proposal = harness
+            .propose(
+                "CREATE TABLE widgets (id INTEGER PRIMARY KEY);\
+                 INSERT INTO widgets (id) VALUES (1)",
+                None,
+            )
+            .await
+            .unwrap();
+        harness.approve(&proposal).await;
         let receipt = harness
             .service
-            .run_desktop(DesktopScriptRunRequest {
-                connection_id: harness.connection_id,
-                sql: "CREATE TABLE widgets (id INTEGER PRIMARY KEY);\
-                      INSERT INTO widgets (id) VALUES (1)"
-                    .into(),
-                approved: true,
-                query_id: None,
-                origin: None,
-            })
+            .run_desktop(proposal.operation_id)
             .await
             .unwrap();
         assert!(receipt.outcome.committed);
@@ -1157,18 +1571,19 @@ mod tests {
     async fn failed_write_script_rolls_back_and_returns_statement_outcomes() {
         let harness = ScriptHarness::new().await;
         harness.configure(true, true).await;
+        let proposal = harness
+            .propose(
+                "UPDATE users SET name = 'Grace' WHERE id = 1;\
+                 UPDATE missing_users SET name = 'Ken' WHERE id = 2;\
+                 UPDATE users SET name = 'Dennis' WHERE id = 2",
+                None,
+            )
+            .await
+            .unwrap();
+        harness.approve(&proposal).await;
         let receipt = harness
             .service
-            .run_desktop(DesktopScriptRunRequest {
-                connection_id: harness.connection_id,
-                sql: "UPDATE users SET name = 'Grace' WHERE id = 1;\
-                      UPDATE missing_users SET name = 'Ken' WHERE id = 2;\
-                      UPDATE users SET name = 'Dennis' WHERE id = 2"
-                    .into(),
-                approved: true,
-                query_id: None,
-                origin: None,
-            })
+            .run_desktop(proposal.operation_id)
             .await
             .unwrap();
         assert!(!receipt.outcome.committed);
@@ -1216,17 +1631,12 @@ mod tests {
         .execute(harness.store.pool())
         .await
         .unwrap();
-        let error = match harness
-            .service
-            .run_desktop(DesktopScriptRunRequest {
-                connection_id: harness.connection_id,
-                sql: "UPDATE users SET name = 'Grace' WHERE id = 1".into(),
-                approved: true,
-                query_id: None,
-                origin: None,
-            })
+        let proposal = harness
+            .propose("UPDATE users SET name = 'Grace' WHERE id = 1", None)
             .await
-        {
+            .unwrap();
+        harness.approve(&proposal).await;
+        let error = match harness.service.run_desktop(proposal.operation_id).await {
             Err(error) => error.into_error(),
             Ok(_) => {
                 panic!("script must fail before target touch when attempt audit is unavailable")

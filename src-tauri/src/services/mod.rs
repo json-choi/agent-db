@@ -9,6 +9,7 @@ mod connection_service;
 mod dashboard_service;
 mod document_service;
 mod monitoring_service;
+mod operation_service;
 mod query_service;
 mod safety_service;
 mod script_service;
@@ -28,11 +29,15 @@ pub(crate) use dashboard_service::{
     DashboardRunError, DashboardRunReceipt, DashboardRunRequest, DashboardService,
 };
 pub(crate) use document_service::{
-    AgentDocumentReadError, AgentDocumentReadRequest, DesktopDocumentReadError,
-    DesktopDocumentReadRequest, DocumentReadReceipt, DocumentService,
+    AgentDocumentReadError, AgentDocumentReadRequest, DesktopDocumentProposalReceipt,
+    DesktopDocumentProposalRequest, DesktopDocumentReadError, DocumentReadReceipt, DocumentService,
 };
 pub(crate) use monitoring_service::{
-    MonitoringChangeRequest, MonitoringService, MonitoringServiceError, MonitoringStatusReceipt,
+    MonitoringProposalReceipt, MonitoringProposalRequest, MonitoringService,
+    MonitoringServiceError, MonitoringStatusReceipt,
+};
+pub(crate) use operation_service::{
+    OperationDecisionReceipt, OperationDecisionRequest, OperationService,
 };
 #[cfg(test)]
 pub(crate) use query_service::{planning_guidance, MAX_AGENT_ROWS};
@@ -40,11 +45,13 @@ pub(crate) use query_service::{
     AgentQueryInvocationOrigin, AgentQueryPlanError, AgentQueryPlanRequest, AgentQueryRunError,
     AgentQueryRunPrepareError, DesktopSqlClassificationReceipt, DesktopSqlClassificationRequest,
     DesktopSqlInspectionError, DesktopSqlPreviewReceipt, DesktopSqlPreviewRequest,
-    DesktopSqlRunError, DesktopSqlRunReceipt, DesktopSqlRunRequest, QueryService, QUERY_PLAN_TTL,
+    DesktopSqlProposalReceipt, DesktopSqlProposalRequest, DesktopSqlRunError, DesktopSqlRunReceipt,
+    QueryService, QUERY_PLAN_TTL,
 };
 pub(crate) use safety_service::SafetyService;
 pub(crate) use script_service::{
-    DesktopScriptRunError, DesktopScriptRunReceipt, DesktopScriptRunRequest, ScriptService,
+    DesktopScriptProposalReceipt, DesktopScriptProposalRequest, DesktopScriptRunError,
+    DesktopScriptRunReceipt, ScriptService,
 };
 pub(crate) use workspace_service::{
     WorkspaceConnectionCopyRequest, WorkspaceCredentialBindingRequest, WorkspaceService,
@@ -65,7 +72,7 @@ pub(crate) struct ApplicationServices {
     pub(crate) dashboard: DashboardService,
     pub(crate) document: DocumentService,
     pub(crate) monitoring: MonitoringService,
-    pub(crate) operation: OperationRuntime,
+    pub(crate) operation: OperationService,
     pub(crate) query: QueryService,
     pub(crate) safety: SafetyService,
     pub(crate) script: ScriptService,
@@ -79,6 +86,8 @@ impl ApplicationServices {
         operation: OperationRuntime,
     ) -> Self {
         let connection_credentials = connection_credentials::system_connection_credentials();
+        let operation_service =
+            OperationService::new(store.clone(), connections.clone(), operation.clone());
         Self {
             activity: ActivityService::new(store.clone()),
             agent: AgentService::new(store.clone()),
@@ -89,12 +98,16 @@ impl ApplicationServices {
             ),
             catalog: CatalogService::new(store.clone(), connections.clone()),
             dashboard: DashboardService::new(store.clone(), connections.clone()),
-            document: DocumentService::new(store.clone(), connections.clone()),
-            monitoring: MonitoringService::new(store.clone(), connections.clone()),
-            operation,
-            query: QueryService::new(store.clone(), connections.clone()),
+            document: DocumentService::new(store.clone(), connections.clone(), operation.clone()),
+            monitoring: MonitoringService::new(
+                store.clone(),
+                connections.clone(),
+                operation.clone(),
+            ),
+            operation: operation_service,
+            query: QueryService::new(store.clone(), connections.clone(), operation.clone()),
             safety: SafetyService::new(store.clone(), connections.clone()),
-            script: ScriptService::new(store.clone(), connections.clone()),
+            script: ScriptService::new(store.clone(), connections.clone(), operation),
             workspace: WorkspaceService::new(store, connections, connection_credentials),
         }
     }

@@ -4,6 +4,7 @@
 // a plain-object helper kept outside React state so it's unit-testable on its own.
 import { useRef, useState } from "react";
 import { cancelQuery } from "../ipc/commands";
+import { isQueryCancellationError } from "../ipc/types";
 
 interface RunTracker {
   queryId: string | null;
@@ -12,8 +13,9 @@ interface RunTracker {
 
 type RunOutcome<T> = { cancelled: true } | { cancelled: false; value: T };
 
-// Runs `fn` with a fresh queryId. If `fn` rejects after cancelTracked() flagged this
-// tracker, the rejection is swallowed (cancelled: true); any other rejection rethrows.
+// Runs `fn` with a fresh queryId. A local click is not enough to claim cancellation:
+// only the backend's confirmed read-cancellation error is swallowed. An uncertain
+// write outcome remains visible and must never look like a harmless cancellation.
 export async function runTracked<T>(
   tracker: RunTracker,
   fn: (queryId: string) => Promise<T>,
@@ -24,7 +26,7 @@ export async function runTracked<T>(
   try {
     return { cancelled: false, value: await fn(id) };
   } catch (e) {
-    if (tracker.cancelled) return { cancelled: true };
+    if (tracker.cancelled && isQueryCancellationError(e)) return { cancelled: true };
     throw e;
   } finally {
     tracker.queryId = null;
@@ -62,5 +64,10 @@ export function useQueryRun() {
     cancelTracked(tracker);
   }
 
-  return { running, cancelled, execute, cancel };
+  function track(queryId: string) {
+    tracker.queryId = queryId;
+    if (tracker.cancelled) void cancelQuery(queryId);
+  }
+
+  return { running, cancelled, execute, cancel, track };
 }

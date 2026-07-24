@@ -135,6 +135,7 @@ const messages = {
     "approval.change": "Change",
     "approval.checkingImpact": "Checking impact...",
     "approval.checkingSafety": "Checking safety...",
+    "approval.confirmationPrompt": "Type this phrase to continue:",
     "approval.estimatingImpact": "Estimating impact...",
     "approval.executed": "Executed.",
     "approval.generatedSql": "Generated SQL",
@@ -145,6 +146,7 @@ const messages = {
     "approval.modeExplain": "EXPLAIN plan",
     "approval.modeSkipped": "skipped (over threshold)",
     "approval.noWhere": "NO WHERE",
+    "approval.payloadHash": "Exact payload SHA-256:",
     "approval.readOnlyAutoRunning": "Read-only - auto-running...",
     "approval.readOnlyRunning": "Read-only - running...",
     "approval.readyToReview": "Ready to review. Details are available below.",
@@ -425,6 +427,7 @@ const messages = {
     "safety.modeWrites": "Writes allowed",
     "safety.monitoringAdminHint":
       "This account may need a DBA to grant the role. You can still try or copy the fixed SQL.",
+    "safety.monitoringApproveApply": "Approve exact change",
     "safety.monitoringBasicHint":
       "No PostgreSQL role setup is needed; MCP planning uses the aggregate signals this engine provides.",
     "safety.monitoringBody":
@@ -443,6 +446,8 @@ const messages = {
       "pg_monitor is enabled, so MCP planning can check aggregate server activity.",
     "safety.monitoringLimitedHint":
       "MCP planning has limited visibility until pg_monitor is granted.",
+    "safety.monitoringReviewGrant": "Review pg_monitor grant",
+    "safety.monitoringReviewRevoke": "Review pg_monitor removal",
     "safety.monitoringRevoke": "Remove pg_monitor",
     "safety.monitoringRevokeConfirm": "Remove pg_monitor from this database user?",
     "safety.monitoringRevoked": "PostgreSQL monitoring access removed",
@@ -451,9 +456,6 @@ const messages = {
     "safety.monitoringTitle": "Agent monitoring access",
     "safety.monitoringUser": "Database user",
     "safety.monitoringWorking": "Applying...",
-    "safety.requireApproval": "Require approval",
-    "safety.requireApprovalHint":
-      "Gate every statement behind the approval card.",
     "safety.saved": "Safety settings saved",
     "safety.title": "Safety settings",
     "safety.wrapWritesInTx": "Wrap writes in a transaction",
@@ -846,6 +848,7 @@ const messages = {
     "approval.change": "변경",
     "approval.checkingImpact": "영향 확인 중...",
     "approval.checkingSafety": "안전 확인 중...",
+    "approval.confirmationPrompt": "계속하려면 이 문구를 입력하세요:",
     "approval.estimatingImpact": "영향 추정 중...",
     "approval.executed": "실행됨.",
     "approval.generatedSql": "생성된 SQL",
@@ -856,6 +859,7 @@ const messages = {
     "approval.modeExplain": "EXPLAIN 플랜",
     "approval.modeSkipped": "건너뜀 (임계값 초과)",
     "approval.noWhere": "NO WHERE",
+    "approval.payloadHash": "정확한 페이로드 SHA-256:",
     "approval.readOnlyAutoRunning": "읽기 전용 - 자동 실행 중...",
     "approval.readOnlyRunning": "읽기 전용 - 실행 중...",
     "approval.readyToReview": "검토 준비됨. 아래에서 세부 정보를 확인하세요.",
@@ -1135,6 +1139,7 @@ const messages = {
     "safety.modeWrites": "쓰기 허용",
     "safety.monitoringAdminHint":
       "이 계정은 역할 부여에 DBA 권한이 필요할 수 있습니다. 버튼을 시도하거나 고정 SQL을 복사할 수 있습니다.",
+    "safety.monitoringApproveApply": "정확한 변경 승인",
     "safety.monitoringBasicHint":
       "PostgreSQL 역할 설정 없이 이 엔진이 제공하는 집계 상태를 MCP가 확인합니다.",
     "safety.monitoringBody":
@@ -1153,6 +1158,8 @@ const messages = {
       "pg_monitor가 활성화되어 MCP가 서버 활동 집계를 확인할 수 있습니다.",
     "safety.monitoringLimitedHint":
       "pg_monitor를 부여하기 전까지 MCP가 확인할 수 있는 상태 정보가 제한됩니다.",
+    "safety.monitoringReviewGrant": "pg_monitor 부여 검토",
+    "safety.monitoringReviewRevoke": "pg_monitor 제거 검토",
     "safety.monitoringRevoke": "pg_monitor 제거",
     "safety.monitoringRevokeConfirm": "이 DB 사용자에게서 pg_monitor 역할을 제거할까요?",
     "safety.monitoringRevoked": "PostgreSQL 모니터링 접근을 제거했습니다",
@@ -1161,8 +1168,6 @@ const messages = {
     "safety.monitoringTitle": "Agent 모니터링 접근",
     "safety.monitoringUser": "DB 사용자",
     "safety.monitoringWorking": "적용 중...",
-    "safety.requireApproval": "승인 필요",
-    "safety.requireApprovalHint": "모든 문장을 승인 카드 뒤에 둡니다.",
     "safety.saved": "안전 설정이 저장되었습니다",
     "safety.title": "안전 설정",
     "safety.wrapWritesInTx": "쓰기를 트랜잭션으로 감싸기",

@@ -2,11 +2,15 @@
 //!
 //! Produces a [`GateDecision`] the command layer enforces:
 //! - read-only SELECT + `auto_run_reads` → [`GateDecision::AutoRun`];
-//! - write / DDL / privilege:
+//! - write / DDL:
 //!     * `allow_writes` false → [`GateDecision::Block`];
-//!     * `require_approval` true (default) → [`GateDecision::RequireApproval`];
-//!     * `require_approval` false + `allow_writes` true → [`GateDecision::AutoRun`];
+//!     * `allow_writes` true → [`GateDecision::RequireApproval`];
+//! - arbitrary privilege SQL → [`GateDecision::Block`]; narrowly scoped official
+//!   operations such as `pg_monitor` use their own exact Operation service;
 //! - `> 1` statement → always [`GateDecision::Block`].
+//!
+//! The persisted `require_approval` field is retained only for storage compatibility.
+//! It can never bypass the exact Operation approval required for target mutations.
 //!
 //! This layer only *decides*; it never touches the DB. The approval-card payload
 //! (plain-English restatement, risk badge) is assembled frontend-side.
@@ -45,7 +49,11 @@ pub fn decide(settings: &SafetySettings, c: &Classification) -> GateDecision {
                 GateDecision::RequireApproval
             }
         }
-        QueryKind::Write | QueryKind::Ddl | QueryKind::Privilege => {
+        QueryKind::Privilege => GateDecision::Block {
+            reason: "arbitrary privilege SQL is blocked; use a supported, narrowly scoped administrative action"
+                .into(),
+        },
+        QueryKind::Write | QueryKind::Ddl => {
             if !settings.allow_writes {
                 GateDecision::Block {
                     reason: format!(
@@ -54,12 +62,10 @@ pub fn decide(settings: &SafetySettings, c: &Classification) -> GateDecision {
                         kind_label(c.kind)
                     ),
                 }
-            } else if settings.require_approval {
-                // Default: writes are allowed but still need an explicit confirm.
-                GateDecision::RequireApproval
             } else {
-                // Approval explicitly waived + writes allowed → run without prompting.
-                GateDecision::AutoRun
+                // Target mutations always become exact Operation proposals. The
+                // legacy persisted setting must never turn a write into auto-run.
+                GateDecision::RequireApproval
             }
         }
     }
@@ -122,30 +128,30 @@ mod tests {
     }
 
     #[test]
-    fn write_requires_approval_when_approval_on() {
-        // require_approval defaults to true → writes must confirm even with writes allowed.
-        let s = SafetySettings {
-            allow_writes: true,
-            require_approval: true,
-            ..SafetySettings::default()
-        };
-        assert!(matches!(
-            decide(&s, &cls(QueryKind::Write, 1)),
-            GateDecision::RequireApproval
-        ));
+    fn target_mutations_require_approval_when_legacy_setting_is_off() {
+        for kind in [QueryKind::Write, QueryKind::Ddl] {
+            let s = SafetySettings {
+                allow_writes: true,
+                require_approval: false,
+                ..SafetySettings::default()
+            };
+            assert!(
+                matches!(decide(&s, &cls(kind, 1)), GateDecision::RequireApproval),
+                "{kind:?} must never auto-run"
+            );
+        }
     }
 
     #[test]
-    fn write_auto_runs_when_approval_off() {
-        // require_approval=false + allow_writes=true → writes auto-run.
+    fn arbitrary_privilege_sql_is_blocked_even_when_writes_are_enabled() {
         let s = SafetySettings {
             allow_writes: true,
             require_approval: false,
             ..SafetySettings::default()
         };
         assert!(matches!(
-            decide(&s, &cls(QueryKind::Write, 1)),
-            GateDecision::AutoRun
+            decide(&s, &cls(QueryKind::Privilege, 1)),
+            GateDecision::Block { .. }
         ));
     }
 

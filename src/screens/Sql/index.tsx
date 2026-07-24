@@ -4,32 +4,40 @@
 // per-statement results. ⌘↩ runs the current draft or selected SQL.
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import type {
-  ConnectionProfile,
-  ExecOutcome,
-  PlatformInfo,
-  SafetySettings,
-  ScriptOutcome,
-} from "../../ipc/types";
-import { errDetails, errMessage, type AppErrorDetails } from "../../ipc/types";
 import {
+  approveOperation,
   classifySql,
   openAgentApp,
   previewSql,
+  proposeScript,
+  proposeSql,
+  rejectOperation,
   runScript,
   runSql,
 } from "../../ipc/commands";
-import type { PreviewReport } from "../../ipc/types";
-import { catalogQuery, mcpPlatformsQuery } from "../../lib/queries";
-import { splitStatements } from "../../lib/sqlStatements";
+import type {
+  AppErrorDetails,
+  ConnectionProfile,
+  ExecOutcome,
+  PlatformInfo,
+  PreviewReport,
+  SafetySettings,
+  ScriptOperationProposal,
+  ScriptOutcome,
+  SqlOperationProposal,
+} from "../../ipc/types";
+import { errDetails, errMessage } from "../../ipc/types";
+import ApprovalCard from "../../components/ApprovalCard";
+import DataGrid from "../../components/DataGrid";
 import { Icon } from "../../components/Icon";
 import LazySqlViewer from "../../components/LazySqlViewer";
-import DataGrid from "../../components/DataGrid";
 import ResultToolbar from "../../components/ResultToolbar";
+import { useToast } from "../../components/Toast";
 import { stamp } from "../../lib/export";
 import { useI18n } from "../../lib/i18n";
+import { catalogQuery, mcpPlatformsQuery } from "../../lib/queries";
+import { splitStatements } from "../../lib/sqlStatements";
 import { useQueryRun } from "../../lib/useQueryRun";
-import { useToast } from "../../components/Toast";
 import "./sql.css";
 
 const STEP = 200;
@@ -46,6 +54,18 @@ interface QueryErrorInfo extends AppErrorDetails {
 }
 
 interface LastAttempt {
+  sql: string;
+  at: string;
+}
+
+interface PendingSqlApproval {
+  proposal: SqlOperationProposal;
+  sql: string;
+  at: string;
+}
+
+interface PendingScriptApproval {
+  proposal: ScriptOperationProposal;
   sql: string;
   at: string;
 }
@@ -243,9 +263,13 @@ export default function Sql({
   const [run, setRun] = useState<Run | null>(null);
   const [limit, setLimit] = useState(STEP);
   const [scriptOut, setScriptOut] = useState<{ outcome: ScriptOutcome; at: string } | null>(null);
-  const { running, cancelled, execute, cancel } = useQueryRun();
+  const { running, cancelled, execute, cancel, track } = useQueryRun();
   const [runErr, setRunErr] = useState<QueryErrorInfo | null>(null);
   const [lastAttempt, setLastAttempt] = useState<LastAttempt | null>(null);
+  const [pendingApproval, setPendingApproval] = useState<PendingSqlApproval | null>(null);
+  const [pendingScriptApproval, setPendingScriptApproval] =
+    useState<PendingScriptApproval | null>(null);
+  const [scriptConfirmation, setScriptConfirmation] = useState("");
   const [elapsed, setElapsed] = useState(0);
   const [agentActionErr, setAgentActionErr] = useState<string | null>(null);
   const [askingAgent, setAskingAgent] = useState<string | null>(null);
@@ -263,17 +287,32 @@ export default function Sql({
     const script = statements.length > 1;
     const at = new Date().toLocaleTimeString();
     setRunErr(null);
+    setPendingApproval(null);
+    setPendingScriptApproval(null);
     setLimit(STEP);
     setResultKind(script ? "script" : "single");
     setLastAttempt({ sql, at });
 
     try {
-      await execute(async (id) => {
+      await execute(async () => {
         if (script) {
-          const outcome = await runScript(connection.id, sql, true, id);
+          const proposal = await proposeScript(connection.id, sql, "manual");
+          if (proposal.approvalRequired) {
+            setPendingScriptApproval({ proposal, sql, at });
+            setScriptConfirmation("");
+            return;
+          }
+          track(proposal.operationId);
+          const outcome = await runScript(proposal.operationId);
           setScriptOut({ outcome, at });
         } else {
-          const outcome = await runSql(connection.id, sql, true, id);
+          const proposal = await proposeSql(connection.id, sql, "manual");
+          if (proposal.approvalRequired) {
+            setPendingApproval({ proposal, sql, at });
+            return;
+          }
+          track(proposal.operationId);
+          const outcome = await runSql(proposal.operationId);
           setRun({ sql, outcome, at });
         }
       });
@@ -287,13 +326,62 @@ export default function Sql({
     }
   }
 
+  async function approvePendingScript() {
+    const pending = pendingScriptApproval;
+    if (!pending || running) return;
+    try {
+      await execute(async () => {
+        track(pending.proposal.operationId);
+        await approveOperation(
+          pending.proposal.operationId,
+          pending.proposal.payloadHash,
+          pending.proposal.confirmationPhrase
+            ? scriptConfirmation
+            : undefined,
+        );
+        const outcome = await runScript(pending.proposal.operationId);
+        setResultKind("script");
+        setScriptOut({ outcome, at: new Date().toLocaleTimeString() });
+        setPendingScriptApproval(null);
+        setScriptConfirmation("");
+      });
+    } catch (e) {
+      const details = errDetails(e);
+      setRunErr({
+        ...details,
+        sql: pending.sql,
+        at: new Date().toLocaleTimeString(),
+      });
+    }
+  }
+
+  async function rejectPendingScript() {
+    const pending = pendingScriptApproval;
+    if (!pending || running) return;
+    try {
+      await rejectOperation(
+        pending.proposal.operationId,
+        pending.proposal.payloadHash,
+      );
+      setPendingScriptApproval(null);
+      setScriptConfirmation("");
+    } catch (e) {
+      const details = errDetails(e);
+      setRunErr({
+        ...details,
+        sql: pending.sql,
+        at: new Date().toLocaleTimeString(),
+      });
+    }
+  }
+
   async function explain() {
     if (!draft.trim() || draftIsScript || explaining) return;
     setPlanErr(null);
     setExplaining(true);
     try {
-      // Reads only: preview_sql on a write does an execute+rollback (locks, triggers) —
-      // keep that impact out of a casual Explain action.
+      // Keep the casual Explain action read-only. Write previews are also EXPLAIN-only,
+      // but their risk review belongs to the exact proposal flow below.
       const cls = await classifySql(connection.id, draft);
       if (cls.kind !== "read") {
         setPlan(null);
@@ -471,6 +559,85 @@ export default function Sql({
             <div className="muted">{t("sql.noPlan", { mode: plan.mode })}</div>
           )}
         </details>
+      )}
+
+      {pendingApproval && (
+        <ApprovalCard
+          key={pendingApproval.proposal.operationId}
+          connectionId={connection.id}
+          engine={connection.engine}
+          sql={pendingApproval.sql}
+          safety={safety}
+          initialProposal={pendingApproval.proposal}
+          onExecuted={(outcome) => {
+            setResultKind("single");
+            setRun({
+              sql: pendingApproval.sql,
+              outcome,
+              at: new Date().toLocaleTimeString(),
+            });
+            setPendingApproval(null);
+          }}
+          onReject={() => setPendingApproval(null)}
+        />
+      )}
+
+      {pendingScriptApproval && (
+        <section className="card script-approval">
+          <div className="ds-title-line">
+            <strong>{t("approval.review")}</strong>
+            <span className="badge risk-medium">
+              {t("sql.statementCount", {
+                count: pendingScriptApproval.proposal.statementCount,
+              })}
+            </span>
+          </div>
+          <LazySqlViewer
+            value={pendingScriptApproval.sql}
+            minHeight="96px"
+          />
+          <div className="muted script-approval-hash">
+            {t("approval.payloadHash")}{" "}
+            <code>{pendingScriptApproval.proposal.payloadHash}</code>
+          </div>
+          {pendingScriptApproval.proposal.confirmationPhrase && (
+            <label className="script-approval-confirmation">
+              <span>
+                {t("approval.confirmationPrompt")}{" "}
+                <code>{pendingScriptApproval.proposal.confirmationPhrase}</code>
+              </span>
+              <input
+                value={scriptConfirmation}
+                onChange={(event) => setScriptConfirmation(event.target.value)}
+                placeholder={pendingScriptApproval.proposal.confirmationPhrase}
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </label>
+          )}
+          <div className="ds-action-row ds-control-row">
+            <button
+              className="btn primary"
+              disabled={
+                running
+                || (
+                  !!pendingScriptApproval.proposal.confirmationPhrase
+                  && scriptConfirmation !== pendingScriptApproval.proposal.confirmationPhrase
+                )
+              }
+              onClick={() => void approvePendingScript()}
+            >
+              {t("approval.approveAndRunWrite")}
+            </button>
+            <button
+              className="btn"
+              disabled={running}
+              onClick={() => void rejectPendingScript()}
+            >
+              {t("approval.reject")}
+            </button>
+          </div>
+        </section>
       )}
 
       {runErr && (

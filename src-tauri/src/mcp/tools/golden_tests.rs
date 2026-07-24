@@ -487,14 +487,19 @@ async fn execution_failure_adapter_emits_the_exact_error_result() {
         .await
         .unwrap();
     let plan_id = Uuid::new_v4();
-    harness.tools.services.query.seed_plan_for_test(
-        plan_id,
-        context.pin(),
-        "SELECT no_such_function()".into(),
-        1,
-        "ready".into(),
-        Instant::now(),
-    );
+    harness
+        .tools
+        .services
+        .query
+        .seed_plan_for_test(
+            plan_id,
+            context.pin(),
+            "SELECT no_such_function()".into(),
+            1,
+            "ready".into(),
+            Instant::now(),
+        )
+        .await;
     drop(context);
 
     let error = harness
@@ -551,14 +556,19 @@ async fn consent_history_failure_adapter_never_emits_success_rows() {
         .await
         .unwrap();
     let plan_id = Uuid::new_v4();
-    harness.tools.services.query.seed_plan_for_test(
-        plan_id,
-        context.pin(),
-        "SELECT id, name FROM users ORDER BY id".into(),
-        2,
-        "ready".into(),
-        Instant::now(),
-    );
+    harness
+        .tools
+        .services
+        .query
+        .seed_plan_for_test(
+            plan_id,
+            context.pin(),
+            "SELECT id, name FROM users ORDER BY id".into(),
+            2,
+            "ready".into(),
+            Instant::now(),
+        )
+        .await;
     drop(context);
     sqlx::raw_sql(
         "CREATE TRIGGER fail_success_query_history_adapter
@@ -1137,14 +1147,19 @@ async fn mcp_owned_errors_match_phase_zero_golden() {
         .await
         .unwrap();
     let expired_id = Uuid::parse_str("018f1111-2222-7333-8444-555566667779").unwrap();
-    harness.tools.services.query.seed_plan_for_test(
-        expired_id,
-        context.pin(),
-        "SELECT 1".into(),
-        1,
-        "ready".into(),
-        Instant::now() - QUERY_PLAN_TTL - Duration::from_secs(1),
-    );
+    harness
+        .tools
+        .services
+        .query
+        .seed_plan_for_test(
+            expired_id,
+            context.pin(),
+            "SELECT 1".into(),
+            1,
+            "ready".into(),
+            Instant::now() - QUERY_PLAN_TTL - Duration::from_secs(1),
+        )
+        .await;
     drop(context);
     let error = harness
         .tools

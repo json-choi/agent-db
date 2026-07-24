@@ -10,7 +10,6 @@ import MonitoringAccess from "./MonitoringAccess";
 import "./safety.css";
 
 const TOGGLES: { key: keyof SafetySettings; label: I18nKey; hint: I18nKey }[] = [
-  { key: "requireApproval", label: "safety.requireApproval", hint: "safety.requireApprovalHint" },
   { key: "allowWrites", label: "safety.allowWrites", hint: "safety.allowWritesHint" },
   { key: "autoRunReads", label: "safety.autoRunReads", hint: "safety.autoRunReadsHint" },
   { key: "wrapWritesInTx", label: "safety.wrapWritesInTx", hint: "safety.wrapWritesInTxHint" },

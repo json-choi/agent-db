@@ -2,7 +2,9 @@
 
 use std::fmt;
 
-use chrono::Utc;
+use chrono::{Duration as ChronoDuration, Utc};
+use dopedb_protocol::{OperationKind, OperationRiskLevel, OperationState};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::audit::{self, RecordArgs};
@@ -12,13 +14,37 @@ use crate::connection::{
 use crate::error::AppError;
 use crate::model::{Engine, HistoryEntry, MonitoringStatus, QueryKind};
 use crate::monitoring;
+use crate::operations::{NewOperation, OperationPlanDisposition, OperationRuntime};
 use crate::store::{PinnedConnection, Store};
 
+use super::operation_service::{
+    actor_for_pin, capture_policy, ensure_operation_scope, required_confirmation,
+};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct MonitoringChangeRequest {
+pub(crate) struct MonitoringProposalRequest {
     pub(crate) connection_id: Uuid,
     pub(crate) enabled: bool,
-    pub(crate) approved: bool,
+}
+
+/// Exact fixed-role operation rendered before the desktop may approve it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MonitoringProposalReceipt {
+    pub(crate) operation_id: Uuid,
+    pub(crate) payload_hash: String,
+    pub(crate) state: OperationState,
+    pub(crate) enabled: bool,
+    pub(crate) sql: String,
+    pub(crate) confirmation_phrase: Option<String>,
+    pub(crate) expires_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoredMonitoringPayload {
+    enabled: bool,
+    sql: String,
 }
 
 /// Monitoring response retaining either a metadata scope or a live target lease
@@ -117,11 +143,20 @@ impl MonitoringExecutionFailure {
 pub(crate) struct MonitoringService {
     store: Store,
     connections: ConnectionManager,
+    operation: OperationRuntime,
 }
 
 impl MonitoringService {
-    pub(super) fn new(store: Store, connections: ConnectionManager) -> Self {
-        Self { store, connections }
+    pub(super) fn new(
+        store: Store,
+        connections: ConnectionManager,
+        operation: OperationRuntime,
+    ) -> Self {
+        Self {
+            store,
+            connections,
+            operation,
+        }
     }
 
     pub(crate) async fn status(
@@ -180,26 +215,148 @@ impl MonitoringService {
         }
     }
 
-    /// Apply one fixed GRANT/REVOKE after explicit legacy approval. FND-04 replaces
-    /// that boolean with an exact stored Operation approval.
-    pub(crate) async fn set_postgres_role(
+    /// Persist one fixed PostgreSQL role change as a high-risk exact proposal.
+    /// The literal SQL is part of the immutable payload rendered to the user.
+    pub(crate) async fn propose_postgres_role(
         &self,
-        request: MonitoringChangeRequest,
-    ) -> Result<MonitoringStatusReceipt, MonitoringServiceError> {
+        request: MonitoringProposalRequest,
+    ) -> Result<MonitoringProposalReceipt, MonitoringServiceError> {
         let operation_scope = self.connections.begin_operation_scope().await;
-        let operation_pin = match operation_scope.pin_connection(request.connection_id).await {
+        let pin = match operation_scope
+            .pin_connection_for_view(request.connection_id)
+            .await
+        {
             Ok(pin) => pin,
             Err(error) => {
                 return Err(MonitoringServiceError::Scoped(MonitoringScopedFailure {
                     error,
                     _scope: operation_scope,
-                }))
+                }));
             }
         };
-        if !operation_pin.profile.workspace_access.can_write() {
+        if !pin.profile.workspace_access.can_write() {
             return Err(MonitoringServiceError::Scoped(MonitoringScopedFailure {
                 error: AppError::Blocked {
                     reason: "your workspace role cannot change database monitoring grants".into(),
+                },
+                _scope: operation_scope,
+            }));
+        }
+        if !matches!(pin.profile.engine, Engine::Postgres) {
+            return Err(MonitoringServiceError::Scoped(MonitoringScopedFailure {
+                error: AppError::Config(
+                    "pg_monitor is only available for PostgreSQL connections".into(),
+                ),
+                _scope: operation_scope,
+            }));
+        }
+        let settings = self
+            .store
+            .get_safety(pin.connection_id)
+            .await
+            .map_err(MonitoringServiceError::Application)?;
+        if !settings.allow_writes {
+            return Err(MonitoringServiceError::Scoped(MonitoringScopedFailure {
+                error: AppError::Blocked {
+                    reason: "writes are disabled for this connection".into(),
+                },
+                _scope: operation_scope,
+            }));
+        }
+        let policy =
+            capture_policy(&pin, &settings).map_err(MonitoringServiceError::Application)?;
+        let sql = monitoring_role_sql(request.enabled);
+        let payload = serde_json::to_value(StoredMonitoringPayload {
+            enabled: request.enabled,
+            sql: sql.into(),
+        })
+        .map_err(AppError::from)
+        .map_err(MonitoringServiceError::Application)?;
+        let operation_id = Uuid::new_v4();
+        let expires_at = Utc::now() + ChronoDuration::minutes(5);
+        let operation = self
+            .operation
+            .plan(
+                NewOperation {
+                    id: operation_id,
+                    workspace_id: pin.scope.workspace_id,
+                    account_scope: pin.scope.account_scope.storage_key().into(),
+                    connection_id: pin.connection_id,
+                    connection_revision: pin.connection_revision,
+                    terminal_session_id: None,
+                    actor: actor_for_pin(&pin, "settings-safety-monitoring".into()),
+                    kind: OperationKind::Privilege,
+                    payload_schema_version: 1,
+                    payload,
+                    schema_fingerprint: None,
+                    risk_level: OperationRiskLevel::High,
+                    preview: serde_json::json!({
+                        "action": if request.enabled { "grant" } else { "revoke" },
+                        "role": "pg_monitor",
+                        "sql": sql,
+                    }),
+                    policy_snapshot: policy.snapshot,
+                    policy_revision: policy.revision,
+                    single_use: true,
+                    idempotency_key: operation_id.to_string(),
+                    expires_at: Some(expires_at),
+                },
+                OperationPlanDisposition::ApprovalRequired,
+            )
+            .await
+            .map_err(MonitoringServiceError::Application)?;
+        let confirmation_phrase = required_confirmation(&operation).map(str::to_owned);
+        Ok(MonitoringProposalReceipt {
+            operation_id: operation.id,
+            payload_hash: operation.payload_hash,
+            state: operation.state,
+            enabled: request.enabled,
+            sql: sql.into(),
+            confirmation_phrase,
+            expires_at,
+        })
+    }
+
+    /// Execute an exactly approved fixed-role proposal by operation id only.
+    pub(crate) async fn run_postgres_role(
+        &self,
+        operation_id: Uuid,
+    ) -> Result<MonitoringStatusReceipt, MonitoringServiceError> {
+        let planned = self
+            .operation
+            .get(operation_id)
+            .await
+            .map_err(MonitoringServiceError::Application)?;
+        if planned.payload_schema_version != 1 || planned.kind != OperationKind::Privilege {
+            return Err(MonitoringServiceError::Application(AppError::Blocked {
+                reason: "operation is not a PostgreSQL monitoring-role proposal".into(),
+            }));
+        }
+        let payload: StoredMonitoringPayload = serde_json::from_value(planned.payload.clone())
+            .map_err(AppError::from)
+            .map_err(MonitoringServiceError::Application)?;
+        if payload.sql != monitoring_role_sql(payload.enabled) {
+            return Err(MonitoringServiceError::Application(AppError::Blocked {
+                reason: "stored monitoring operation does not match the fixed role action".into(),
+            }));
+        }
+
+        let operation_scope = self.connections.begin_operation_scope().await;
+        let operation_pin = match operation_scope.pin_connection(planned.connection_id).await {
+            Ok(pin) => pin,
+            Err(error) => {
+                return Err(MonitoringServiceError::Scoped(MonitoringScopedFailure {
+                    error,
+                    _scope: operation_scope,
+                }));
+            }
+        };
+        ensure_operation_scope(&planned, &operation_pin)
+            .map_err(MonitoringServiceError::Application)?;
+        if !operation_pin.profile.workspace_access.can_write() {
+            return Err(MonitoringServiceError::Scoped(MonitoringScopedFailure {
+                error: AppError::Blocked {
+                    reason: "your workspace role no longer grants monitoring changes".into(),
                 },
                 _scope: operation_scope,
             }));
@@ -212,52 +369,71 @@ impl MonitoringService {
                 _scope: operation_scope,
             }));
         }
-        let sql = if request.enabled {
-            "GRANT pg_monitor TO CURRENT_USER"
-        } else {
-            "REVOKE pg_monitor FROM CURRENT_USER"
-        };
-        if !request.approved {
-            record_monitoring_change(
-                &self.store,
-                &operation_pin,
-                MonitoringRunRecord {
-                    sql,
-                    status: "blocked",
-                    error: Some("pg_monitor role changes require explicit confirmation".into()),
-                    approved_by: None,
-                },
-            )
-            .await;
+        let settings = self
+            .store
+            .get_safety(operation_pin.connection_id)
+            .await
+            .map_err(MonitoringServiceError::Application)?;
+        if !settings.allow_writes {
             return Err(MonitoringServiceError::Scoped(MonitoringScopedFailure {
                 error: AppError::Blocked {
-                    reason: "pg_monitor role changes require explicit confirmation".into(),
+                    reason: "writes are disabled for this connection".into(),
+                },
+                _scope: operation_scope,
+            }));
+        }
+        let policy = capture_policy(&operation_pin, &settings)
+            .map_err(MonitoringServiceError::Application)?;
+        if policy.revision != planned.policy_revision {
+            return Err(MonitoringServiceError::Scoped(MonitoringScopedFailure {
+                error: AppError::Blocked {
+                    reason: "the connection or safety policy changed; create a new proposal".into(),
                 },
                 _scope: operation_scope,
             }));
         }
 
+        let claimed = match self.operation.claim(operation_id).await {
+            Ok(claimed) => claimed,
+            Err(error) => {
+                return Err(MonitoringServiceError::Scoped(MonitoringScopedFailure {
+                    error,
+                    _scope: operation_scope,
+                }));
+            }
+        };
+        let approved_by = claimed.record().actor.id.as_str();
         if let Err(error) = audit::record(
             &self.store,
             RecordArgs {
                 connection_id: operation_pin.connection_id,
                 engine: operation_pin.profile.engine,
                 agent_prompt: None,
-                sql: sql.into(),
+                sql: payload.sql.clone(),
                 kind: QueryKind::Privilege,
-                action: if request.enabled {
+                action: if payload.enabled {
                     "monitoring:grant:attempt"
                 } else {
                     "monitoring:revoke:attempt"
                 }
                 .into(),
-                approved_by: Some("local-user".into()),
+                approved_by: Some(approved_by.into()),
                 affected_estimate: None,
                 error: None,
             },
         )
         .await
         {
+            let _ = self
+                .operation
+                .fail(
+                    operation_id,
+                    &serde_json::json!({
+                        "error": error.to_string(),
+                        "reason": "audit_pre_record_failed",
+                    }),
+                )
+                .await;
             return Err(MonitoringServiceError::Scoped(MonitoringScopedFailure {
                 error: AppError::Config(format!(
                     "audit pre-record failed — refusing to change pg_monitor: {error}"
@@ -276,39 +452,77 @@ impl MonitoringService {
                     &self.store,
                     &operation_pin,
                     MonitoringRunRecord {
-                        sql,
+                        sql: &payload.sql,
                         status: "error",
                         error: Some(error.to_string()),
-                        approved_by: Some("local-user"),
+                        approved_by: Some(approved_by),
                     },
                 )
                 .await;
+                let _ = self
+                    .operation
+                    .fail(
+                        operation_id,
+                        &serde_json::json!({
+                            "error": error.to_string(),
+                            "reason": "target_connection_failed",
+                        }),
+                    )
+                    .await;
                 return Err(MonitoringServiceError::Application(error));
             }
         };
         let live = match lease.live().sql() {
             Ok(live) => live,
             Err(error) => {
+                let _ = self
+                    .operation
+                    .fail(
+                        operation_id,
+                        &serde_json::json!({
+                            "error": error.to_string(),
+                            "reason": "target_pool_unavailable",
+                        }),
+                    )
+                    .await;
                 return Err(MonitoringServiceError::Execution(Box::new(
                     MonitoringExecutionFailure {
                         error,
                         _lease: lease,
                     },
-                )))
+                )));
             }
         };
-        if let Err(error) = monitoring::set_postgres_role(live, request.enabled).await {
+        if let Err(error) = monitoring::set_postgres_role(
+            live,
+            payload.enabled,
+            claimed.grant(),
+            operation_id,
+            operation_pin.connection_id,
+        )
+        .await
+        {
             record_monitoring_change(
                 &self.store,
                 &operation_pin,
                 MonitoringRunRecord {
-                    sql,
+                    sql: &payload.sql,
                     status: "error",
                     error: Some(error.to_string()),
-                    approved_by: Some("local-user"),
+                    approved_by: Some(approved_by),
                 },
             )
             .await;
+            let _ = self
+                .operation
+                .mark_outcome_unknown(
+                    operation_id,
+                    &serde_json::json!({
+                        "error": error.to_string(),
+                        "reason": "monitoring_role_execution_failed",
+                    }),
+                )
+                .await;
             return Err(MonitoringServiceError::Execution(Box::new(
                 MonitoringExecutionFailure {
                     error,
@@ -320,13 +534,38 @@ impl MonitoringService {
             &self.store,
             &operation_pin,
             MonitoringRunRecord {
-                sql,
+                sql: &payload.sql,
                 status: "ok",
                 error: None,
-                approved_by: Some("local-user"),
+                approved_by: Some(approved_by),
             },
         )
         .await;
+        if let Err(error) = self
+            .operation
+            .succeed(
+                operation_id,
+                &serde_json::json!({
+                    "enabled": payload.enabled,
+                    "role": "pg_monitor",
+                }),
+            )
+            .await
+        {
+            let _ = self
+                .operation
+                .mark_outcome_unknown(
+                    operation_id,
+                    &serde_json::json!({"reason": "local_receipt_failed"}),
+                )
+                .await;
+            return Err(MonitoringServiceError::Execution(Box::new(
+                MonitoringExecutionFailure {
+                    error,
+                    _lease: lease,
+                },
+            )));
+        }
         match monitoring::status(live, operation_pin.profile.engine).await {
             Ok(status) => Ok(MonitoringStatusReceipt::leased(status, lease)),
             Err(error) => Err(MonitoringServiceError::Execution(Box::new(
@@ -336,6 +575,14 @@ impl MonitoringService {
                 },
             ))),
         }
+    }
+}
+
+const fn monitoring_role_sql(enabled: bool) -> &'static str {
+    if enabled {
+        "GRANT pg_monitor TO CURRENT_USER"
+    } else {
+        "REVOKE pg_monitor FROM CURRENT_USER"
     }
 }
 
@@ -420,7 +667,15 @@ mod tests {
     };
     use crate::store::TEST_SCHEMA;
 
-    async fn harness(engine: Engine) -> (MonitoringService, Store, ConnectionManager, Uuid) {
+    async fn harness(
+        engine: Engine,
+    ) -> (
+        MonitoringService,
+        Store,
+        ConnectionManager,
+        OperationRuntime,
+        Uuid,
+    ) {
         let options = SqliteConnectOptions::from_str("sqlite::memory:")
             .unwrap()
             .foreign_keys(true);
@@ -459,18 +714,25 @@ mod tests {
             })
             .await
             .unwrap();
+        let safety = crate::model::SafetySettings {
+            allow_writes: true,
+            ..crate::model::SafetySettings::default()
+        };
+        store.set_safety(connection_id, &safety).await.unwrap();
         let connections = ConnectionManager::new(store.clone());
+        let (operation, _approval) = OperationRuntime::new(&store);
         (
-            MonitoringService::new(store.clone(), connections.clone()),
+            MonitoringService::new(store.clone(), connections.clone(), operation.clone()),
             store,
             connections,
+            operation,
             connection_id,
         )
     }
 
     #[tokio::test]
     async fn document_status_preserves_basic_wire_without_target_probe() {
-        let (service, store, connections, connection_id) = harness(Engine::Mongodb).await;
+        let (service, store, connections, _, connection_id) = harness(Engine::Mongodb).await;
         let receipt = service.status(connection_id).await.unwrap();
         assert_eq!(
             serde_json::to_value(&receipt).unwrap(),
@@ -498,12 +760,11 @@ mod tests {
 
     #[tokio::test]
     async fn non_postgres_change_rejects_before_audit_or_target_touch() {
-        let (service, store, _, connection_id) = harness(Engine::Mongodb).await;
+        let (service, store, _, _, connection_id) = harness(Engine::Mongodb).await;
         let error = match service
-            .set_postgres_role(MonitoringChangeRequest {
+            .propose_postgres_role(MonitoringProposalRequest {
                 connection_id,
                 enabled: true,
-                approved: true,
             })
             .await
         {
@@ -527,36 +788,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unapproved_postgres_change_preserves_exact_ledger_contract_without_connecting() {
-        let (service, store, _, connection_id) = harness(Engine::Postgres).await;
-        let error = match service
-            .set_postgres_role(MonitoringChangeRequest {
+    async fn unapproved_postgres_change_remains_pending_without_target_or_audit_touch() {
+        let (service, store, _, operation, connection_id) = harness(Engine::Postgres).await;
+        let proposal = service
+            .propose_postgres_role(MonitoringProposalRequest {
                 connection_id,
                 enabled: true,
-                approved: false,
             })
             .await
-        {
+            .unwrap();
+        assert_eq!(proposal.state, OperationState::PendingApproval);
+        assert_eq!(proposal.sql, "GRANT pg_monitor TO CURRENT_USER");
+        assert_eq!(proposal.payload_hash.len(), 64);
+        let error = match service.run_postgres_role(proposal.operation_id).await {
             Err(error) => error.into_error(),
             Ok(_) => panic!("unapproved PostgreSQL monitoring change must be rejected"),
         };
+        assert!(matches!(error, AppError::Blocked { .. }));
         assert_eq!(
-            serde_json::to_value(&error).unwrap(),
-            serde_json::json!({
-                "kind": "blocked",
-                "message": "blocked: pg_monitor role changes require explicit confirmation"
-            })
+            operation.get(proposal.operation_id).await.unwrap().state,
+            OperationState::PendingApproval
         );
         let (audit, valid, first_bad) = audit::snapshot(&store, connection_id).await.unwrap();
         assert!(valid);
         assert_eq!(first_bad, None);
-        assert_eq!(audit.len(), 1);
-        assert_eq!(audit[0].action, "monitoring:blocked");
-        assert_eq!(audit[0].approved_by, None);
-        let history = store.list_history(connection_id).await.unwrap();
-        assert_eq!(history.len(), 1);
-        assert_eq!(history[0].status, "blocked");
-        assert_eq!(history[0].origin, "manual");
+        assert!(audit.is_empty());
+        assert!(store.list_history(connection_id).await.unwrap().is_empty());
         store.pool().close().await;
     }
 }

@@ -53,6 +53,13 @@ pub(crate) fn canonical_json(value: &Value) -> AppResult<String> {
     CanonicalJson::from_value(value).map(|canonical| canonical.json)
 }
 
+/// Return the stable lowercase SHA-256 for a canonical JSON value without exposing
+/// the stored payload encoder to adapters. Services use this for immutable policy
+/// revisions that must be recomputed immediately before approval and execution.
+pub(crate) fn canonical_hash(value: &Value) -> AppResult<String> {
+    CanonicalJson::from_value(value).map(|canonical| canonical.sha256)
+}
+
 fn canonical_value(value: &Value) -> Value {
     match value {
         Value::Array(values) => Value::Array(values.iter().map(canonical_value).collect()),

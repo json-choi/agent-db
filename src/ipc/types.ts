@@ -132,6 +132,7 @@ export interface DriverDescriptor {
 }
 
 export interface SafetySettings {
+  /** Legacy storage field; target mutations always require exact Operation approval. */
   requireApproval: boolean;
   allowWrites: boolean;
   wrapWritesInTx: boolean;
@@ -174,6 +175,67 @@ export interface PreviewReport {
   exactRows: number | null;
   plan: string | null;
   note: string | null;
+}
+
+// Mirrors exact Operation projections from src-tauri/src/services/query_service.rs
+// and operation_service.rs. SQL appears only in the proposal request, never run.
+export type OperationState =
+  | "planned"
+  | "pending_approval"
+  | "ready"
+  | "approved"
+  | "rejected"
+  | "expired"
+  | "cancelled"
+  | "executing"
+  | "succeeded"
+  | "failed"
+  | "outcome_unknown";
+
+export interface SqlOperationProposal {
+  operationId: string;
+  payloadHash: string;
+  state: OperationState;
+  approvalRequired: boolean;
+  autoRun: boolean;
+  confirmationPhrase: string | null;
+  expiresAt: string;
+  classification: Classification;
+  preview: PreviewReport;
+}
+
+export interface OperationDecision {
+  operationId: string;
+  payloadHash: string;
+  state: OperationState;
+}
+
+export interface DocumentOperationProposal {
+  operationId: string;
+  payloadHash: string;
+  state: OperationState;
+  expiresAt: string;
+}
+
+export interface ScriptOperationProposal {
+  operationId: string;
+  payloadHash: string;
+  state: OperationState;
+  approvalRequired: boolean;
+  confirmationPhrase: string | null;
+  statementCount: number;
+  expiresAt: string;
+}
+
+// Mirrors src-tauri/src/services/monitoring_service.rs.
+export interface MonitoringOperationProposal {
+  operationId: string;
+  payloadHash: string;
+  state: OperationState;
+  enabled: boolean;
+  sql: string;
+  confirmationPhrase: string | null;
+  expiresAt: string;
 }
 
 export interface QueryResult {
@@ -424,6 +486,15 @@ export function errMessage(e: unknown): string {
     return String((e as AppErrorShape).message);
   }
   return String(e);
+}
+
+/** True only when Rust confirmed a non-mutating query cancellation response. */
+export function isQueryCancellationError(e: unknown): boolean {
+  if (!e || typeof e !== "object") return false;
+  const shaped = e as Partial<AppErrorShape>;
+  return shaped.kind === "safety"
+    && typeof shaped.message === "string"
+    && shaped.message.includes("query cancelled");
 }
 
 export interface AppErrorDetails {

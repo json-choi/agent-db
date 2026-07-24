@@ -1,10 +1,10 @@
 //! Query executor. Dispatches an already-classified statement to the read path
-//! (L2 read-only pool) or the guarded write path. The L3 exec+rollback preview
-//! harness lives in `safety::l3_preview`.
+//! (L2 read-only pool) or the guarded write path. L3 EXPLAIN-only impact previews
+//! live in `safety::l3_preview`.
 //!
-//! The executor is the LAST stage: it assumes L1 classified the SQL, L4 decided
-//! whether it may run, and (for writes) approval happened. It still re-checks the
-//! two structural gates — `approved` and `allow_writes` — as defense in depth.
+//! The executor is the LAST stage: it assumes L1 classified the SQL and L4 decided
+//! whether it may run. A target mutation additionally requires the unforgeable
+//! [`ExecutionGrant`] issued by the durable Operation Runtime.
 
 pub mod cancel;
 pub mod read;
@@ -18,17 +18,18 @@ use uuid::Uuid;
 use crate::connection::LiveConnection;
 use crate::error::{AppError, AppResult};
 use crate::model::{Classification, Engine, ExecOutcome, QueryKind, SafetySettings};
+use crate::operations::ExecutionGrant;
 
 /// Single entry point the `run_sql` command calls. Reads run against the read-only
-/// pool; writes/DDL/privilege require explicit approval and route through the guarded
-/// write path (which additionally enforces `allow_writes`).
+/// pool; writes/DDL/privilege require an exact Operation grant and route through the
+/// guarded write path (which additionally enforces `allow_writes`).
 pub async fn execute(
     live: &LiveConnection,
     engine: Engine,
     classification: &Classification,
     sql: &str,
     settings: &SafetySettings,
-    approved: bool,
+    grant: Option<&ExecutionGrant>,
     query_id: Option<Uuid>,
 ) -> AppResult<ExecOutcome> {
     match classification.kind {
@@ -41,12 +42,10 @@ pub async fn execute(
             })
         }
         QueryKind::Write | QueryKind::Ddl | QueryKind::Privilege => {
-            if !approved {
-                return Err(AppError::Blocked {
-                    reason: "this statement modifies data and requires explicit approval".into(),
-                });
-            }
-            run_write(live, engine, sql, settings, query_id).await
+            let grant = grant.ok_or_else(|| AppError::Blocked {
+                reason: "this statement requires an exact approved operation grant".into(),
+            })?;
+            run_write(live, engine, sql, settings, grant, query_id).await
         }
     }
 }

@@ -167,6 +167,30 @@
   font-size: var(--ds-font-size-sm);
 }
 
+.script-approval {
+  display: grid;
+  gap: var(--ds-space-3);
+  margin: var(--ds-space-3) 0;
+  padding: var(--ds-space-3);
+}
+
+.script-approval-hash code {
+  overflow-wrap: anywhere;
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-font-size-xs);
+}
+
+.script-approval-confirmation {
+  display: grid;
+  gap: var(--ds-space-2);
+  font-size: var(--ds-font-size-sm);
+}
+
+.script-approval-confirmation input {
+  width: min(100%, 320px);
+  font-family: var(--ds-font-mono);
+}
+
 @media (max-width: 760px) {
   .sql-actions {
     align-items: flex-start;

@@ -1,9 +1,9 @@
 // Ad-hoc read-only document query console for MongoDB connections (the "documents"
 // tab's counterpart to the SQL console). find/aggregate/count are built from JSON
-// textareas, parsed client-side, then run through the same approved read-only path SQL uses.
+// textareas, parsed client-side, then run through a durable single-use read plan.
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { runDocumentQuery } from "../../ipc/commands";
+import { proposeDocumentQuery, runDocumentQuery } from "../../ipc/commands";
 import type { ConnectionProfile, DocumentPage, DocumentQuery, QueryResult } from "../../ipc/types";
 import { errMessage } from "../../ipc/types";
 import DataGrid from "../../components/DataGrid";
@@ -93,7 +93,7 @@ export default function Documents({
     }
   }, [draft]);
 
-  const { running, cancelled, execute: runQuery, cancel } = useQueryRun();
+  const { running, cancelled, execute: runQuery, cancel, track } = useQueryRun();
   const [result, setResult] = useState<{ page: DocumentPage; at: string } | null>(null);
   const [parseErr, setParseErr] = useState<string | null>(null);
   const [runErr, setRunErr] = useState<string | null>(null);
@@ -130,8 +130,10 @@ export default function Documents({
     if (!query) return;
 
     try {
-      await runQuery(async (id) => {
-        const page = await runDocumentQuery(connection.id, query, true, id);
+      await runQuery(async () => {
+        const proposal = await proposeDocumentQuery(connection.id, query, "manual");
+        track(proposal.operationId);
+        const page = await runDocumentQuery(proposal.operationId);
         setResult({ page, at: new Date().toLocaleTimeString() });
       });
     } catch (e) {

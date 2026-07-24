@@ -40,16 +40,12 @@ pub struct AppState {
     pub features: crate::features::FeatureFlags,
     /// Desktop-only approval capability. MCP/CLI/Agent adapters receive only the
     /// ApplicationServices facade and therefore cannot obtain this value.
-    #[allow(
-        dead_code,
-        reason = "consumed by exact approval Tauri commands in the next FND-04 slice"
-    )]
     pub(crate) local_operation_approval: LocalApprovalAuthority,
 }
 
 impl AppState {
     pub async fn new() -> AppResult<Self> {
-        let features = FeatureFlags::default();
+        let features = FeatureFlags::new([FeatureFlag::OperationRuntimeV1]);
         let store = Store::open().await?;
         let connections = ConnectionManager::new(store.clone());
         let (operation, local_operation_approval) = OperationRuntime::new(&store);

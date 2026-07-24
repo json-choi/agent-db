@@ -240,6 +240,8 @@ pub struct ConnectionProfile {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SafetySettings {
+    /// Legacy persisted compatibility field. Exact Operation approval is always
+    /// required for target mutations regardless of this value.
     pub require_approval: bool,
     pub allow_writes: bool,
     pub wrap_writes_in_tx: bool,

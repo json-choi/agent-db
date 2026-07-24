@@ -7,52 +7,33 @@
 //! use app_lib::operations::ExecutionGrant;
 //! ```
 
-#[allow(
-    dead_code,
-    reason = "activated by the exact-approval runtime adapter in FND-04"
-)]
 mod canonicalize;
-#[allow(
-    dead_code,
-    reason = "activated by target executor cutover in the next FND-04 slice"
-)]
 mod execute;
 #[allow(
     dead_code,
-    reason = "activated by the exact-approval runtime adapter in FND-04"
+    reason = "the durable projection includes timestamps and ledger DTOs consumed by the upcoming broker operation-status adapter"
 )]
 mod model;
 #[allow(
     dead_code,
-    reason = "activated by the exact-approval runtime adapter in FND-04"
+    reason = "ledger read/progress APIs are already migration-tested and become production entry points in CLI-01"
 )]
 mod repository;
 #[allow(
     dead_code,
-    reason = "activated by Tauri and CLI adapters in the next FND-04 slice"
+    reason = "runtime status/progress accessors are reserved for the upcoming broker and job adapters"
 )]
 mod runtime;
 pub mod state_machine;
 
+pub(crate) use canonicalize::canonical_hash;
 pub use dopedb_protocol::{
     OperationActorKind, OperationEventKind, OperationKind, OperationRiskLevel, OperationState,
 };
-#[allow(
-    unused_imports,
-    reason = "consumed by service adapters in the next FND-04 slice"
-)]
 pub(crate) use execute::ExecutionGrant;
-#[allow(
-    unused_imports,
-    reason = "consumed by service adapters in the next FND-04 slice"
-)]
 pub(crate) use model::{
     NewOperation, OperationActor, OperationActorProvenance, OperationApprover, OperationRecord,
 };
-#[allow(
-    unused_imports,
-    reason = "consumed by service adapters in the next FND-04 slice"
-)]
 pub(crate) use runtime::{
     ClaimedOperation, ExactApprovalRequest, LocalApprovalAuthority, OperationPlanDisposition,
     OperationRuntime,

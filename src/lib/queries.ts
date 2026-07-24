@@ -25,12 +25,12 @@ import {
   platformFeatureFlags,
   refreshCatalog,
   runDashboard,
-  runDocumentQuery,
-  runSql,
+  runDocumentRead,
+  runSqlRead,
   workspaceFeatureState,
 } from "../ipc/commands";
-import { errMessage } from "../ipc/types";
 import type { AgentProvider, CatalogTable, Engine, QueryResult } from "../ipc/types";
+import { errMessage } from "../ipc/types";
 import { buildCountQuery, buildPageQuery, type GridSort } from "./sqlBuild";
 import { tableKey } from "./tableRef";
 import { WORKSPACE_AUTH_RECHECK_MS } from "./workspaceAuthLifecycle";
@@ -351,10 +351,10 @@ export function documentRowsQuery(args: DocumentRowsArgs) {
     queryKey: qk.documentRows(args),
     staleTime: LOG_STALE_MS,
     queryFn: () =>
-      runDocumentQuery(
+      runDocumentRead(
         connectionId,
         { op: "find", collection, skip: page * pageSize, limit: pageSize },
-        true,
+        "data-view",
       ),
   });
 }
@@ -366,7 +366,11 @@ export function documentCountQuery(connectionId: string, collection: string) {
     queryKey: qk.documentCount(connectionId, collection),
     staleTime: LOG_STALE_MS,
     queryFn: async (): Promise<number | null> => {
-      const countOut = await runDocumentQuery(connectionId, { op: "count", collection }, true);
+      const countOut = await runDocumentRead(
+        connectionId,
+        { op: "count", collection },
+        "data-view",
+      );
       const count = (countOut.documents[0] as { count?: number } | undefined)?.count;
       return count == null ? null : Number(count);
     },
@@ -388,8 +392,12 @@ export function tableRowsQuery(args: TableRowsArgs) {
         offset: page * pageSize,
       });
       const [pageOut, countOut] = await Promise.all([
-        runSql(connectionId, pageSql, true),
-        runSql(connectionId, buildCountQuery(engine, table, filters), true),
+        runSqlRead(connectionId, pageSql, "data-view"),
+        runSqlRead(
+          connectionId,
+          buildCountQuery(engine, table, filters),
+          "data-view",
+        ),
       ]);
       const total = countOut.result?.rows?.[0]?.[0];
       return {

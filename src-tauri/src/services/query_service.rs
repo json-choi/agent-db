@@ -2,12 +2,14 @@
 //! Plans are immutable, short-lived, single-use capabilities shared by every clone
 //! of one application-service composition root; transports only map DTOs and events.
 
-use std::collections::HashMap;
 use std::fmt;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use chrono::Utc;
+#[cfg(test)]
+use std::time::Instant;
+
+use chrono::{Duration as ChronoDuration, Utc};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::audit::{self, RecordArgs};
@@ -22,16 +24,21 @@ use crate::model::{
     PreviewReport, QueryKind, QueryResult, SafetySettings,
 };
 use crate::monitoring::{self, HealthSnapshot};
+use crate::operations::{
+    canonical_hash, ClaimedOperation, NewOperation, OperationActorKind, OperationKind,
+    OperationPlanDisposition, OperationRiskLevel, OperationRuntime, OperationState,
+};
 use crate::safety::{self, PoolRef};
-use crate::store::{AccountScope, PinnedConnection, Store};
+use crate::store::{PinnedConnection, Store};
+
+use super::operation_service::{
+    actor_for_pin, agent_actor_for_pin, capture_policy, ensure_operation_scope,
+    required_confirmation,
+};
 
 /// Lifetime of an agent query plan. A plan is valid at exactly this boundary and
 /// expired only when its monotonic age is greater than this value.
 pub(crate) const QUERY_PLAN_TTL: Duration = Duration::from_secs(30);
-
-/// Process-local plan bound. Insertion first removes expired entries, then evicts
-/// exactly the oldest live entry when this capacity is already full.
-pub(crate) const MAX_QUERY_PLANS: usize = 256;
 
 /// Hard agent result cap, independent of a connection's more permissive setting.
 pub(crate) const MAX_AGENT_ROWS: u64 = 1000;
@@ -53,15 +60,35 @@ pub(crate) struct DesktopSqlPreviewRequest {
     pub(crate) sql: String,
 }
 
-/// Desktop SQL execution input. `approved` remains only for Phase 1 wire
-/// compatibility; Phase 2 replaces it with a stored exact Operation approval.
+/// Desktop SQL proposal input. SQL is accepted only at this planning boundary and
+/// is persisted as an immutable payload before any execution capability exists.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct DesktopSqlRunRequest {
+pub(crate) struct DesktopSqlProposalRequest {
     pub(crate) connection_id: Uuid,
     pub(crate) sql: String,
-    pub(crate) approved: bool,
-    pub(crate) query_id: Option<Uuid>,
     pub(crate) origin: Option<String>,
+}
+
+/// Exact immutable proposal rendered by the desktop before approval or execution.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopSqlProposalReceipt {
+    pub(crate) operation_id: Uuid,
+    pub(crate) payload_hash: String,
+    pub(crate) state: OperationState,
+    pub(crate) approval_required: bool,
+    pub(crate) auto_run: bool,
+    pub(crate) confirmation_phrase: Option<String>,
+    pub(crate) expires_at: chrono::DateTime<Utc>,
+    pub(crate) classification: Classification,
+    pub(crate) preview: PreviewReport,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoredDesktopSqlPayload {
+    sql: String,
+    history_origin: String,
 }
 
 /// Classification result retaining the active workspace/account scope through
@@ -93,6 +120,7 @@ enum DesktopSqlPreviewAuthority {
 /// Its serialized form is exactly the legacy [`PreviewReport`] payload.
 pub(crate) struct DesktopSqlPreviewReceipt {
     report: PreviewReport,
+    pin: PinnedConnection,
     _authority: DesktopSqlPreviewAuthority,
 }
 
@@ -203,7 +231,8 @@ impl DesktopSqlInspectionError {
 
 /// Trusted local adapter family that initiated a query capability. The value is
 /// frozen into the plan so a later runner cannot relabel its audit provenance.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum AgentQueryInvocationOrigin {
     Mcp,
     // Constructed by the CLI adapter in the next Phase 1 slice.
@@ -212,6 +241,13 @@ pub(crate) enum AgentQueryInvocationOrigin {
 }
 
 impl AgentQueryInvocationOrigin {
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::Mcp => "mcp",
+            Self::Cli => "cli",
+        }
+    }
+
     fn plan_audit_action(self) -> &'static str {
         match self {
             Self::Mcp => "mcp:plan_query",
@@ -225,6 +261,15 @@ impl AgentQueryInvocationOrigin {
             Self::Cli => "cli:run_query",
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoredAgentReadPayload {
+    sql: String,
+    max_rows: u64,
+    decision: String,
+    origin: AgentQueryInvocationOrigin,
 }
 
 /// Inputs whose meaning is frozen into one plan. Connection selection has already
@@ -454,6 +499,8 @@ pub(crate) struct PreparedAgentQueryRun {
     store: Store,
     context: ConnectionContext,
     operation_pin: PinnedConnection,
+    operation: OperationRuntime,
+    claimed: ClaimedOperation,
     event_context: AgentQueryRunEventContext,
     decision: String,
     max_rows: u64,
@@ -475,11 +522,14 @@ impl PreparedAgentQueryRun {
             store,
             context,
             operation_pin,
+            operation,
+            claimed,
             event_context,
             decision,
             max_rows,
             origin,
         } = self;
+        let operation_id = claimed.record().id;
         let engine = operation_pin.profile.engine;
 
         let lease = match context.connect().await {
@@ -494,6 +544,15 @@ impl PreparedAgentQueryRun {
                     &error,
                 )
                 .await;
+                let _ = operation
+                    .fail(
+                        operation_id,
+                        &serde_json::json!({
+                            "error": error.to_string(),
+                            "reason": "target_connection_failed",
+                        }),
+                    )
+                    .await;
                 return Err(AgentQueryRunError::Connection(error));
             }
         };
@@ -509,6 +568,15 @@ impl PreparedAgentQueryRun {
                     &error,
                 )
                 .await;
+                let _ = operation
+                    .fail(
+                        operation_id,
+                        &serde_json::json!({
+                            "error": error.to_string(),
+                            "reason": "target_pool_unavailable",
+                        }),
+                    )
+                    .await;
                 return Err(AgentQueryRunError::Execution(AgentQueryExecutionFailure {
                     error,
                     _lease: lease,
@@ -528,6 +596,15 @@ impl PreparedAgentQueryRun {
                         &error,
                     )
                     .await;
+                    let _ = operation
+                        .fail(
+                            operation_id,
+                            &serde_json::json!({
+                                "error": error.to_string(),
+                                "reason": "read_execution_failed",
+                            }),
+                        )
+                        .await;
                     return Err(AgentQueryRunError::Execution(AgentQueryExecutionFailure {
                         error,
                         _lease: lease,
@@ -558,14 +635,50 @@ impl PreparedAgentQueryRun {
         {
             Ok(query_run_id) => query_run_id,
             Err(error) => {
+                let _ = operation
+                    .fail(
+                        operation_id,
+                        &serde_json::json!({
+                            "error": error.to_string(),
+                            "reason": "history_receipt_failed",
+                        }),
+                    )
+                    .await;
                 return Err(AgentQueryRunError::ConsentHandlePersistence(
                     AgentQueryConsentFailure {
                         error,
                         _lease: lease,
                     },
-                ))
+                ));
             }
         };
+        if let Err(error) = operation
+            .succeed(
+                operation_id,
+                &serde_json::json!({
+                    "durationMs": result.duration_ms,
+                    "queryRunId": query_run_id,
+                    "rowCount": result.row_count,
+                }),
+            )
+            .await
+        {
+            let _ = operation
+                .fail(
+                    operation_id,
+                    &serde_json::json!({
+                        "error": error.to_string(),
+                        "reason": "operation_receipt_failed",
+                    }),
+                )
+                .await;
+            return Err(AgentQueryRunError::ConsentHandlePersistence(
+                AgentQueryConsentFailure {
+                    error,
+                    _lease: lease,
+                },
+            ));
+        }
 
         Ok(AgentQueryRunReceipt {
             run: AgentQueryRun {
@@ -582,22 +695,26 @@ impl PreparedAgentQueryRun {
     }
 }
 
-/// Scope-aware query service. Clones share one mutex-protected plan registry, so
-/// HTTP and stdio adapters wired from the same composition root see one single-use
-/// capability namespace.
+/// Scope-aware query service. Every clone shares the durable Operation Runtime, so
+/// desktop, HTTP, stdio, and future broker adapters see one single-use capability
+/// namespace that also survives long enough for explicit restart recovery.
 #[derive(Clone)]
 pub(crate) struct QueryService {
     store: Store,
     connections: ConnectionManager,
-    plans: Arc<Mutex<QueryPlanRegistry>>,
+    operation: OperationRuntime,
 }
 
 impl QueryService {
-    pub(super) fn new(store: Store, connections: ConnectionManager) -> Self {
+    pub(super) fn new(
+        store: Store,
+        connections: ConnectionManager,
+        operation: OperationRuntime,
+    ) -> Self {
         Self {
             store,
             connections,
-            plans: Arc::new(Mutex::new(QueryPlanRegistry::default())),
+            operation,
         }
     }
 
@@ -655,6 +772,7 @@ impl QueryService {
                 report: skipped_preview_report(
                     "workspace role is read-only — write preview skipped",
                 ),
+                pin,
                 _authority: DesktopSqlPreviewAuthority::Scope {
                     _scope: operation_scope,
                 },
@@ -665,6 +783,18 @@ impl QueryService {
                 report: skipped_preview_report(
                     "writes are disabled for this connection — impact preview skipped (no rows locked)",
                 ),
+                pin,
+                _authority: DesktopSqlPreviewAuthority::Scope {
+                    _scope: operation_scope,
+                },
+            });
+        }
+        if matches!(classification.kind, QueryKind::Ddl | QueryKind::Privilege) {
+            return Ok(DesktopSqlPreviewReceipt {
+                report: skipped_preview_report(
+                    "DDL / privilege change — no row-count preview; review the statement directly.",
+                ),
+                pin,
                 _authority: DesktopSqlPreviewAuthority::Scope {
                     _scope: operation_scope,
                 },
@@ -673,7 +803,7 @@ impl QueryService {
 
         let access = desktop_preview_connection_access(&classification, &settings);
         let lease = operation_scope
-            .connect(pin, access)
+            .connect(pin.clone(), access)
             .await
             .map_err(DesktopSqlInspectionError::Application)?;
         let live = lease
@@ -681,82 +811,202 @@ impl QueryService {
             .sql()
             .map_err(DesktopSqlInspectionError::Application)?;
 
-        // explain_preview off means plan-only for a write. Reclassifying only this
-        // L3 invocation to Read keeps safety::preview on its EXPLAIN branch.
-        let report = if matches!(classification.kind, QueryKind::Write) && !settings.explain_preview
-        {
-            let explain_only = Classification {
-                kind: QueryKind::Read,
-                ..classification
-            };
-            safety::preview(pool_ref(live.ro()), &request.sql, &explain_only, &settings)
-                .await
-                .map_err(DesktopSqlInspectionError::Application)?
-        } else {
-            let db = if access == ConnectionAccess::Write {
-                &live.write_pool
-            } else {
-                live.ro()
-            };
-            safety::preview(pool_ref(db), &request.sql, &classification, &settings)
-                .await
-                .map_err(DesktopSqlInspectionError::Application)?
-        };
+        let report = safety::preview(
+            pool_ref(live.ro()),
+            &request.sql,
+            &classification,
+            &settings,
+        )
+        .await
+        .map_err(DesktopSqlInspectionError::Application)?;
 
         Ok(DesktopSqlPreviewReceipt {
             report,
+            pin,
             _authority: DesktopSqlPreviewAuthority::Lease {
                 _lease: Box::new(lease),
             },
         })
     }
 
-    /// Execute one desktop SQL statement while preserving the Phase 1 Tauri wire,
-    /// gate, cancellation, audit, history, and schema-cache behavior.
-    ///
-    /// The caller-provided approval boolean is intentionally quarantined here only
-    /// until Operation Runtime replaces it with an exact stored approval.
+    /// Persist one exact SQL proposal. Reads become single-use `ready` plans;
+    /// every target-mutating statement becomes `pending_approval` even when the
+    /// legacy connection setting disabled prompts.
+    pub(crate) async fn propose_desktop_sql(
+        &self,
+        request: DesktopSqlProposalRequest,
+    ) -> Result<DesktopSqlProposalReceipt, DesktopSqlInspectionError> {
+        let preview_receipt = self
+            .preview_desktop_sql(DesktopSqlPreviewRequest {
+                connection_id: request.connection_id,
+                sql: request.sql.clone(),
+            })
+            .await?;
+        let pin = &preview_receipt.pin;
+        let settings = self
+            .store
+            .get_safety(pin.connection_id)
+            .await
+            .map_err(DesktopSqlInspectionError::Application)?;
+        let classification = safety::classify(&request.sql, pin.profile.engine)
+            .map_err(DesktopSqlInspectionError::Application)?;
+        let is_write = !matches!(classification.kind, QueryKind::Read);
+
+        if is_write && !pin.profile.workspace_access.can_write() {
+            return Err(DesktopSqlInspectionError::Application(AppError::Blocked {
+                reason: "your workspace role grants read-only database access".into(),
+            }));
+        }
+        if let safety::GateDecision::Block { reason } = safety::decide(&settings, &classification) {
+            return Err(DesktopSqlInspectionError::Application(AppError::Blocked {
+                reason,
+            }));
+        }
+
+        let policy =
+            capture_policy(pin, &settings).map_err(DesktopSqlInspectionError::Application)?;
+        let history_origin = request.origin.unwrap_or_else(|| "manual".into());
+        let payload = serde_json::to_value(StoredDesktopSqlPayload {
+            sql: request.sql,
+            history_origin: history_origin.clone(),
+        })
+        .map_err(AppError::from)
+        .map_err(DesktopSqlInspectionError::Application)?;
+        let operation_id = Uuid::new_v4();
+        let expires_at = Utc::now()
+            + if is_write {
+                ChronoDuration::minutes(5)
+            } else {
+                ChronoDuration::from_std(QUERY_PLAN_TTL)
+                    .expect("query plan TTL is representable by chrono")
+            };
+        let disposition = if is_write {
+            OperationPlanDisposition::ApprovalRequired
+        } else {
+            OperationPlanDisposition::Ready
+        };
+        let operation = self
+            .operation
+            .plan(
+                NewOperation {
+                    id: operation_id,
+                    workspace_id: pin.scope.workspace_id,
+                    account_scope: pin.scope.account_scope.storage_key().into(),
+                    connection_id: pin.connection_id,
+                    connection_revision: pin.connection_revision,
+                    terminal_session_id: None,
+                    actor: actor_for_pin(pin, history_origin),
+                    kind: operation_kind(classification.kind),
+                    payload_schema_version: 1,
+                    payload,
+                    schema_fingerprint: None,
+                    risk_level: operation_risk(&classification),
+                    preview: serde_json::to_value(&preview_receipt.report)
+                        .map_err(AppError::from)
+                        .map_err(DesktopSqlInspectionError::Application)?,
+                    policy_snapshot: policy.snapshot,
+                    policy_revision: policy.revision,
+                    single_use: true,
+                    idempotency_key: operation_id.to_string(),
+                    expires_at: Some(expires_at),
+                },
+                disposition,
+            )
+            .await
+            .map_err(DesktopSqlInspectionError::Application)?;
+        let confirmation_phrase = required_confirmation(&operation).map(str::to_owned);
+
+        Ok(DesktopSqlProposalReceipt {
+            operation_id: operation.id,
+            payload_hash: operation.payload_hash,
+            state: operation.state,
+            approval_required: is_write,
+            auto_run: !is_write && settings.auto_run_reads,
+            confirmation_phrase,
+            expires_at,
+            classification,
+            preview: preview_receipt.report.clone(),
+        })
+    }
+
+    /// Execute one immutable SQL operation by id only. The SQL, connection, policy,
+    /// and approval are reloaded from the durable record before an opaque grant is
+    /// issued; no transport can resend or alter them at execution time.
     pub(crate) async fn run_desktop_sql(
         &self,
-        request: DesktopSqlRunRequest,
+        operation_id: Uuid,
     ) -> Result<DesktopSqlRunReceipt, DesktopSqlRunError> {
+        let planned = self
+            .operation
+            .get(operation_id)
+            .await
+            .map_err(DesktopSqlRunError::Application)?;
+        if planned.payload_schema_version != 1
+            || !matches!(
+                planned.kind,
+                OperationKind::ReadQuery
+                    | OperationKind::WriteSql
+                    | OperationKind::Ddl
+                    | OperationKind::Privilege
+            )
+        {
+            return Err(DesktopSqlRunError::Application(AppError::Blocked {
+                reason: "operation is not a supported desktop SQL proposal".into(),
+            }));
+        }
+        let payload: StoredDesktopSqlPayload = serde_json::from_value(planned.payload.clone())
+            .map_err(AppError::from)
+            .map_err(DesktopSqlRunError::Application)?;
         let operation_scope = self.connections.begin_operation_scope().await;
         let operation_pin = operation_scope
-            .pin_connection(request.connection_id)
+            .pin_connection(planned.connection_id)
             .await
+            .map_err(DesktopSqlRunError::Application)?;
+        ensure_operation_scope(&planned, &operation_pin)
             .map_err(DesktopSqlRunError::Application)?;
         let settings = self
             .store
             .get_safety(operation_pin.connection_id)
             .await
             .map_err(DesktopSqlRunError::Application)?;
-        let classification = safety::classify(&request.sql, operation_pin.profile.engine)
+        let policy =
+            capture_policy(&operation_pin, &settings).map_err(DesktopSqlRunError::Application)?;
+        if policy.revision != planned.policy_revision {
+            return Err(DesktopSqlRunError::Blocked(DesktopSqlRunBlocked {
+                reason: "the connection or safety policy changed; create a new proposal".into(),
+                _scope: operation_scope,
+            }));
+        }
+        let classification = safety::classify(&payload.sql, operation_pin.profile.engine)
             .map_err(DesktopSqlRunError::Application)?;
+        if operation_kind(classification.kind) != planned.kind {
+            return Err(DesktopSqlRunError::Blocked(DesktopSqlRunBlocked {
+                reason: "stored SQL classification no longer matches its immutable proposal".into(),
+                _scope: operation_scope,
+            }));
+        }
         let engine = operation_pin.profile.engine;
-        let history_origin = request.origin.unwrap_or_else(|| "manual".into());
+        let history_origin = payload.history_origin;
         let is_write = !matches!(classification.kind, QueryKind::Read);
 
-        if is_write && !operation_pin.profile.workspace_access.can_write() {
+        let access_allowed = if is_write {
+            operation_pin.profile.workspace_access.can_write()
+        } else {
+            operation_pin.profile.workspace_access.can_read()
+        };
+        if !access_allowed {
             return Err(DesktopSqlRunError::Blocked(DesktopSqlRunBlocked {
-                reason: "your workspace role grants read-only database access".into(),
+                reason: "your workspace role no longer grants this database access".into(),
                 _scope: operation_scope,
             }));
         }
 
-        let decision = safety::decide(&settings, &classification);
-        let blocked_reason = match &decision {
-            safety::GateDecision::Block { reason } => Some(reason.clone()),
-            safety::GateDecision::RequireApproval if !request.approved => {
-                Some("this statement modifies data and requires explicit approval".into())
-            }
-            _ => None,
-        };
-        if let Some(reason) = blocked_reason {
+        if let safety::GateDecision::Block { reason } = safety::decide(&settings, &classification) {
             record_desktop_run(
                 &self.store,
                 &operation_pin,
                 DesktopRunRecord {
-                    sql: &request.sql,
+                    sql: &payload.sql,
                     kind: classification.kind,
                     action: "blocked",
                     status: "blocked",
@@ -773,33 +1023,41 @@ impl QueryService {
             }));
         }
 
-        // Legacy compatibility: an auto-run gate decision clears the executor's
-        // defense-in-depth approval check even when the caller supplied false.
-        let authorized = request.approved || matches!(decision, safety::GateDecision::AutoRun);
+        let claimed = self
+            .operation
+            .claim(operation_id)
+            .await
+            .map_err(DesktopSqlRunError::Application)?;
 
-        // A committed mutation must have a durable attempt row before target touch.
-        // This remains fail-closed until Operation Runtime owns the event ledger.
         if is_write {
-            audit::record(
+            if let Err(error) = audit::record(
                 &self.store,
                 RecordArgs {
                     connection_id: operation_pin.connection_id,
                     engine,
                     agent_prompt: None,
-                    sql: request.sql.clone(),
+                    sql: payload.sql.clone(),
                     kind: classification.kind,
                     action: "execute:attempt".into(),
-                    approved_by: None,
+                    approved_by: Some(planned.actor.id.clone()),
                     affected_estimate: None,
                     error: None,
                 },
             )
             .await
-            .map_err(|error| {
-                DesktopSqlRunError::Application(AppError::Config(format!(
+            {
+                let refusal = AppError::Config(format!(
                     "audit pre-record failed — refusing to run write: {error}"
-                )))
-            })?;
+                ));
+                let _ = self
+                    .operation
+                    .fail(
+                        operation_id,
+                        &serde_json::json!({"reason": "audit_pre_record_failed"}),
+                    )
+                    .await;
+                return Err(DesktopSqlRunError::Application(refusal));
+            }
         }
 
         let lease = match operation_scope
@@ -819,7 +1077,7 @@ impl QueryService {
                     &self.store,
                     &operation_pin,
                     DesktopRunRecord {
-                        sql: &request.sql,
+                        sql: &payload.sql,
                         kind: classification.kind,
                         action: "error",
                         status: "error",
@@ -830,6 +1088,13 @@ impl QueryService {
                     },
                 )
                 .await;
+                let _ = self
+                    .operation
+                    .fail(
+                        operation_id,
+                        &serde_json::json!({"reason": "connection_failed"}),
+                    )
+                    .await;
                 return Err(DesktopSqlRunError::Application(error));
             }
         };
@@ -840,7 +1105,7 @@ impl QueryService {
                     &self.store,
                     &operation_pin,
                     DesktopRunRecord {
-                        sql: &request.sql,
+                        sql: &payload.sql,
                         kind: classification.kind,
                         action: "error",
                         status: "error",
@@ -851,6 +1116,13 @@ impl QueryService {
                     },
                 )
                 .await;
+                let _ = self
+                    .operation
+                    .fail(
+                        operation_id,
+                        &serde_json::json!({"reason": "sql_backend_unavailable"}),
+                    )
+                    .await;
                 return Err(DesktopSqlRunError::Execution(Box::new(
                     DesktopSqlExecutionFailure {
                         error,
@@ -864,20 +1136,18 @@ impl QueryService {
             live,
             engine,
             &classification,
-            &request.sql,
+            &payload.sql,
             &settings,
-            authorized,
-            request.query_id,
+            if is_write {
+                Some(claimed.grant())
+            } else {
+                None
+            },
+            Some(operation_id),
         )
         .await
         {
             Ok(outcome) => {
-                if matches!(classification.kind, QueryKind::Ddl) && outcome.committed {
-                    let _ = self
-                        .store
-                        .clear_schema_cache(operation_pin.connection_id)
-                        .await;
-                }
                 let row_count = outcome
                     .result
                     .as_ref()
@@ -887,11 +1157,51 @@ impl QueryService {
                     .result
                     .as_ref()
                     .map(|result| result.duration_ms as i64);
+                if let Err(error) = self
+                    .operation
+                    .succeed(
+                        operation_id,
+                        &serde_json::json!({
+                            "committed": outcome.committed,
+                            "durationMs": duration_ms,
+                            "rowCount": row_count,
+                        }),
+                    )
+                    .await
+                {
+                    let _ = if is_write {
+                        self.operation
+                            .mark_outcome_unknown(
+                                operation_id,
+                                &serde_json::json!({"reason": "local_receipt_failed"}),
+                            )
+                            .await
+                    } else {
+                        self.operation
+                            .fail(
+                                operation_id,
+                                &serde_json::json!({"reason": "local_receipt_failed"}),
+                            )
+                            .await
+                    };
+                    return Err(DesktopSqlRunError::Execution(Box::new(
+                        DesktopSqlExecutionFailure {
+                            error,
+                            _lease: lease,
+                        },
+                    )));
+                }
+                if matches!(classification.kind, QueryKind::Ddl) && outcome.committed {
+                    let _ = self
+                        .store
+                        .clear_schema_cache(operation_pin.connection_id)
+                        .await;
+                }
                 record_desktop_run(
                     &self.store,
                     &operation_pin,
                     DesktopRunRecord {
-                        sql: &request.sql,
+                        sql: &payload.sql,
                         kind: classification.kind,
                         action: if outcome.committed { "execute" } else { "read" },
                         status: "ok",
@@ -908,11 +1218,50 @@ impl QueryService {
                 })
             }
             Err(error) => {
+                let cancelled = matches!(
+                    &error,
+                    AppError::Safety(reason) if reason == "query cancelled"
+                );
+                let timed_out = matches!(
+                    &error,
+                    AppError::Safety(reason) if reason.starts_with("query timed out after ")
+                );
+                let error = if is_write
+                    && (cancelled || timed_out || matches!(&error, AppError::OutcomeUnknown(_)))
+                {
+                    match error {
+                        unknown @ AppError::OutcomeUnknown(_) => unknown,
+                        other => AppError::OutcomeUnknown(format!(
+                            "write execution was interrupted before rollback or commit could be confirmed: {other}"
+                        )),
+                    }
+                } else {
+                    error
+                };
+                let _ = if matches!(&error, AppError::OutcomeUnknown(_)) {
+                    self.operation
+                        .mark_outcome_unknown(
+                            operation_id,
+                            &serde_json::json!({"reason": "target_outcome_unconfirmed"}),
+                        )
+                        .await
+                } else if cancelled {
+                    self.operation
+                        .confirm_cancelled(
+                            operation_id,
+                            &serde_json::json!({"reason": "user_cancelled"}),
+                        )
+                        .await
+                } else {
+                    self.operation
+                        .fail(operation_id, &serde_json::json!({"reason": error.kind()}))
+                        .await
+                };
                 record_desktop_run(
                     &self.store,
                     &operation_pin,
                     DesktopRunRecord {
-                        sql: &request.sql,
+                        sql: &payload.sql,
                         kind: classification.kind,
                         action: "error",
                         status: "error",
@@ -972,7 +1321,9 @@ impl QueryService {
             .await
             .map_err(AgentQueryPlanError::Application)?;
         let max_rows = bounded_max_rows(request.max_rows, settings.max_rows);
-        let identity = PlannedConnectionIdentity::from(context.pin());
+        let operation_pin = context.pin().clone();
+        let policy =
+            capture_agent_read_policy(&operation_pin).map_err(AgentQueryPlanError::Application)?;
         let lease = context
             .connect()
             .await
@@ -1007,29 +1358,53 @@ impl QueryService {
             None,
         )
         .await;
-        // Start the TTL only after best-effort audit work. A contended local audit
-        // must not hand the caller an already-aged or immediately expired plan.
-        {
-            let mut plans = self
-                .plans
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let published_at = Instant::now();
-            plans.insert_at(
-                plan_id,
-                StoredReadPlan {
-                    connection_id: profile.id,
-                    identity,
-                    sql: request.sql.clone(),
-                    max_rows,
-                    decision: decision.clone(),
-                    origin: request.origin,
-                    created_at: published_at,
-                    insertion_order: 0,
+        let payload = serde_json::to_value(StoredAgentReadPayload {
+            sql: request.sql.clone(),
+            max_rows,
+            decision: decision.clone(),
+            origin: request.origin,
+        })
+        .map_err(AppError::from)
+        .map_err(AgentQueryPlanError::Application)?;
+        let expires_at = Utc::now()
+            + ChronoDuration::from_std(QUERY_PLAN_TTL)
+                .expect("agent query plan TTL is representable by chrono");
+        self.operation
+            .plan(
+                NewOperation {
+                    id: plan_id,
+                    workspace_id: operation_pin.scope.workspace_id,
+                    account_scope: operation_pin.scope.account_scope.storage_key().into(),
+                    connection_id: operation_pin.connection_id,
+                    connection_revision: operation_pin.connection_revision,
+                    terminal_session_id: None,
+                    actor: agent_actor_for_pin(
+                        &operation_pin,
+                        request.origin.as_str().into(),
+                        request.origin.as_str().into(),
+                    ),
+                    kind: OperationKind::ReadQuery,
+                    payload_schema_version: 1,
+                    payload,
+                    schema_fingerprint: None,
+                    risk_level: operation_risk(&classification),
+                    preview: serde_json::json!({
+                        "decision": decision,
+                        "estimatedRows": preview.estimated_rows,
+                        "health": health,
+                        "notices": notices,
+                        "suggestions": suggestions,
+                    }),
+                    policy_snapshot: policy.0,
+                    policy_revision: policy.1,
+                    single_use: true,
+                    idempotency_key: plan_id.to_string(),
+                    expires_at: Some(expires_at),
                 },
-                published_at,
-            );
-        }
+                OperationPlanDisposition::Ready,
+            )
+            .await
+            .map_err(AgentQueryPlanError::Application)?;
 
         Ok(AgentQueryPlanReceipt {
             plan: AgentQueryPlan {
@@ -1048,67 +1423,171 @@ impl QueryService {
         })
     }
 
-    /// Consume a plan synchronously before the first await, then re-pin and compare
-    /// every scope/material identity field. The returned capability retains that
-    /// scope through the adapter's tool-call event and the eventual connection.
+    /// Atomically claim a durable plan, then re-pin and compare every authority and
+    /// policy field. The returned capability retains both the claim and connection
+    /// scope through the adapter event and the eventual read-only execution.
     pub(crate) async fn prepare_agent_run(
         &self,
         plan_id: Uuid,
     ) -> Result<PreparedAgentQueryRun, AgentQueryRunPrepareError> {
-        // Deliberately do not move this lock operation below an await. Removal is
-        // the linearization point that guarantees single-use across transports.
-        let claimed = {
-            let mut plans = self
-                .plans
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let claimed_at = Instant::now();
-            plans.claim_at(plan_id, claimed_at)
-        };
-        let plan = match claimed {
-            Ok(plan) => plan,
-            Err(PlanClaimError::Missing) => {
-                return Err(AgentQueryRunPrepareError::UnknownOrAlreadyUsed)
+        let planned = match self.operation.get(plan_id).await {
+            Ok(planned) => planned,
+            Err(AppError::NotFound(_)) => {
+                return Err(AgentQueryRunPrepareError::UnknownOrAlreadyUsed);
             }
-            Err(PlanClaimError::Expired) => return Err(AgentQueryRunPrepareError::Expired),
+            Err(error) => return Err(AgentQueryRunPrepareError::Application(error)),
+        };
+        if planned.payload_schema_version != 1
+            || planned.kind != OperationKind::ReadQuery
+            || planned.actor.kind != OperationActorKind::Agent
+        {
+            return Err(AgentQueryRunPrepareError::StoredPlanInvalid);
+        }
+        let payload: StoredAgentReadPayload = serde_json::from_value(planned.payload.clone())
+            .map_err(|_| AgentQueryRunPrepareError::StoredPlanInvalid)?;
+        if planned.actor.id != payload.origin.as_str() {
+            return Err(AgentQueryRunPrepareError::StoredPlanInvalid);
+        }
+        if planned.state == OperationState::Expired {
+            return Err(AgentQueryRunPrepareError::UnknownOrAlreadyUsed);
+        }
+        let expired = planned
+            .expires_at
+            .is_some_and(|expires_at| expires_at <= Utc::now());
+        let claimed = match self.operation.claim(plan_id).await {
+            Ok(claimed) => claimed,
+            Err(_) if expired => {
+                return Err(AgentQueryRunPrepareError::Expired);
+            }
+            Err(_) if planned.state != OperationState::Ready => {
+                return Err(AgentQueryRunPrepareError::UnknownOrAlreadyUsed);
+            }
+            Err(error) => return Err(AgentQueryRunPrepareError::Application(error)),
         };
 
-        let context = self
+        let context = match self
             .connections
-            .pin(plan.connection_id, ConnectionAccess::Read)
+            .pin(planned.connection_id, ConnectionAccess::Read)
             .await
-            .map_err(AgentQueryRunPrepareError::Application)?;
-        if PlannedConnectionIdentity::from(context.pin()) != plan.identity {
+        {
+            Ok(context) => context,
+            Err(error) => {
+                let _ = self
+                    .operation
+                    .fail(
+                        plan_id,
+                        &serde_json::json!({
+                            "error": error.to_string(),
+                            "reason": "connection_scope_unavailable",
+                        }),
+                    )
+                    .await;
+                return Err(AgentQueryRunPrepareError::Application(error));
+            }
+        };
+        let pin = context.pin().clone();
+        if ensure_operation_scope(&planned, &pin).is_err() {
+            let _ = self
+                .operation
+                .fail(
+                    plan_id,
+                    &serde_json::json!({"reason": "operation_authority_changed"}),
+                )
+                .await;
             return Err(AgentQueryRunPrepareError::AuthorityChanged);
         }
-        let classification = safety::classify(&plan.sql, context.pin().profile.engine)
-            .map_err(AgentQueryRunPrepareError::Application)?;
+        let settings = match self.store.get_safety(pin.connection_id).await {
+            Ok(settings) => settings,
+            Err(error) => {
+                let _ = self
+                    .operation
+                    .fail(
+                        plan_id,
+                        &serde_json::json!({
+                            "error": error.to_string(),
+                            "reason": "safety_policy_unavailable",
+                        }),
+                    )
+                    .await;
+                return Err(AgentQueryRunPrepareError::Application(error));
+            }
+        };
+        let policy = match capture_agent_read_policy(&pin) {
+            Ok(policy) => policy,
+            Err(error) => {
+                let _ = self
+                    .operation
+                    .fail(
+                        plan_id,
+                        &serde_json::json!({
+                            "error": error.to_string(),
+                            "reason": "policy_snapshot_failed",
+                        }),
+                    )
+                    .await;
+                return Err(AgentQueryRunPrepareError::Application(error));
+            }
+        };
+        if policy.1 != planned.policy_revision {
+            let _ = self
+                .operation
+                .fail(
+                    plan_id,
+                    &serde_json::json!({"reason": "operation_policy_changed"}),
+                )
+                .await;
+            return Err(AgentQueryRunPrepareError::AuthorityChanged);
+        }
+        let classification = match safety::classify(&payload.sql, pin.profile.engine) {
+            Ok(classification) => classification,
+            Err(error) => {
+                let _ = self
+                    .operation
+                    .fail(
+                        plan_id,
+                        &serde_json::json!({
+                            "error": error.to_string(),
+                            "reason": "stored_plan_reclassification_failed",
+                        }),
+                    )
+                    .await;
+                return Err(AgentQueryRunPrepareError::Application(error));
+            }
+        };
         if !matches!(classification.kind, QueryKind::Read) || classification.statement_count != 1 {
+            let _ = self
+                .operation
+                .fail(
+                    plan_id,
+                    &serde_json::json!({"reason": "stored_plan_classification_changed"}),
+                )
+                .await;
             return Err(AgentQueryRunPrepareError::StoredPlanInvalid);
         }
 
-        let operation_pin = context.pin().clone();
         let event_context = AgentQueryRunEventContext {
-            connection_id: operation_pin.connection_id,
-            connection_name: operation_pin.profile.name.clone(),
+            connection_id: pin.connection_id,
+            connection_name: pin.profile.name.clone(),
             plan_id,
-            sql: plan.sql,
+            sql: payload.sql,
         };
         Ok(PreparedAgentQueryRun {
             store: self.store.clone(),
             context,
-            operation_pin,
+            operation_pin: pin,
+            operation: self.operation.clone(),
+            claimed,
             event_context,
-            decision: plan.decision,
-            max_rows: plan.max_rows,
-            origin: plan.origin,
+            decision: payload.decision,
+            max_rows: payload.max_rows.min(settings.max_rows).min(MAX_AGENT_ROWS),
+            origin: payload.origin,
         })
     }
 
-    /// Seed a plan only in crate tests so compatibility adapters can preserve their
-    /// deterministic expired-plan case without a production registry mutation API.
+    /// Seed a durable plan only in crate tests so compatibility fixtures can cover
+    /// deterministic expiry without exposing a production mutation API.
     #[cfg(test)]
-    pub(crate) fn seed_plan_for_test(
+    pub(crate) async fn seed_plan_for_test(
         &self,
         plan_id: Uuid,
         pin: &PinnedConnection,
@@ -1117,112 +1596,45 @@ impl QueryService {
         decision: String,
         created_at: Instant,
     ) {
-        self.plans
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .seed(
-                plan_id,
-                StoredReadPlan {
+        let policy = capture_agent_read_policy(pin).unwrap();
+        let elapsed = Instant::now().saturating_duration_since(created_at);
+        let remaining = QUERY_PLAN_TTL.saturating_sub(elapsed);
+        let expires_at = Utc::now()
+            + ChronoDuration::from_std(remaining)
+                .expect("seeded query plan TTL is representable by chrono");
+        let origin = AgentQueryInvocationOrigin::Mcp;
+        self.operation
+            .plan(
+                NewOperation {
+                    id: plan_id,
+                    workspace_id: pin.scope.workspace_id,
+                    account_scope: pin.scope.account_scope.storage_key().into(),
                     connection_id: pin.connection_id,
-                    identity: PlannedConnectionIdentity::from(pin),
-                    sql,
-                    max_rows: max_rows.min(MAX_AGENT_ROWS),
-                    decision,
-                    origin: AgentQueryInvocationOrigin::Mcp,
-                    created_at,
-                    insertion_order: 0,
+                    connection_revision: pin.connection_revision,
+                    terminal_session_id: None,
+                    actor: agent_actor_for_pin(pin, origin.as_str().into(), origin.as_str().into()),
+                    kind: OperationKind::ReadQuery,
+                    payload_schema_version: 1,
+                    payload: serde_json::to_value(StoredAgentReadPayload {
+                        sql,
+                        max_rows: max_rows.min(MAX_AGENT_ROWS),
+                        decision,
+                        origin,
+                    })
+                    .unwrap(),
+                    schema_fingerprint: None,
+                    risk_level: OperationRiskLevel::Low,
+                    preview: serde_json::json!({"seededForTest": true}),
+                    policy_snapshot: policy.0,
+                    policy_revision: policy.1,
+                    single_use: true,
+                    idempotency_key: plan_id.to_string(),
+                    expires_at: Some(expires_at),
                 },
-            );
-    }
-}
-
-/// Non-secret authority snapshot frozen into a plan. The account scope plus
-/// generation rejects both cross-account reuse and A → B → A re-selection.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct PlannedConnectionIdentity {
-    workspace_id: Uuid,
-    account_scope: AccountScope,
-    scope_generation: i64,
-    connection_revision: i64,
-    binding_revision: i64,
-    binding_updated_at: String,
-}
-
-impl From<&PinnedConnection> for PlannedConnectionIdentity {
-    fn from(pin: &PinnedConnection) -> Self {
-        Self {
-            workspace_id: pin.scope.workspace_id,
-            account_scope: pin.scope.account_scope.clone(),
-            scope_generation: pin.scope.generation,
-            connection_revision: pin.connection_revision,
-            binding_revision: pin.binding_revision,
-            binding_updated_at: pin.binding_updated_at.clone(),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct StoredReadPlan {
-    connection_id: Uuid,
-    identity: PlannedConnectionIdentity,
-    sql: String,
-    max_rows: u64,
-    decision: String,
-    origin: AgentQueryInvocationOrigin,
-    created_at: Instant,
-    insertion_order: u64,
-}
-
-impl StoredReadPlan {
-    fn is_expired_at(&self, now: Instant) -> bool {
-        now.saturating_duration_since(self.created_at) > QUERY_PLAN_TTL
-    }
-}
-
-#[derive(Default)]
-struct QueryPlanRegistry {
-    plans: HashMap<Uuid, StoredReadPlan>,
-    next_insertion_order: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PlanClaimError {
-    Missing,
-    Expired,
-}
-
-impl QueryPlanRegistry {
-    fn insert_at(&mut self, id: Uuid, mut plan: StoredReadPlan, now: Instant) {
-        self.plans.retain(|_, plan| !plan.is_expired_at(now));
-        if !self.plans.contains_key(&id) && self.plans.len() >= MAX_QUERY_PLANS {
-            if let Some(oldest) = self
-                .plans
-                .iter()
-                .min_by_key(|(_, plan)| (plan.created_at, plan.insertion_order))
-                .map(|(id, _)| *id)
-            {
-                self.plans.remove(&oldest);
-            }
-        }
-        plan.insertion_order = self.next_insertion_order;
-        self.next_insertion_order = self.next_insertion_order.wrapping_add(1);
-        self.plans.insert(id, plan);
-    }
-
-    fn claim_at(&mut self, id: Uuid, now: Instant) -> Result<StoredReadPlan, PlanClaimError> {
-        let plan = self.plans.remove(&id).ok_or(PlanClaimError::Missing)?;
-        if plan.is_expired_at(now) {
-            Err(PlanClaimError::Expired)
-        } else {
-            Ok(plan)
-        }
-    }
-
-    #[cfg(test)]
-    fn seed(&mut self, id: Uuid, mut plan: StoredReadPlan) {
-        plan.insertion_order = self.next_insertion_order;
-        self.next_insertion_order = self.next_insertion_order.wrapping_add(1);
-        self.plans.insert(id, plan);
+                OperationPlanDisposition::Ready,
+            )
+            .await
+            .unwrap();
     }
 }
 
@@ -1230,15 +1642,52 @@ fn bounded_max_rows(requested: Option<u64>, configured: u64) -> u64 {
     requested.unwrap_or(configured).min(MAX_AGENT_ROWS)
 }
 
-fn desktop_preview_connection_access(
-    classification: &Classification,
-    settings: &SafetySettings,
-) -> ConnectionAccess {
-    if matches!(classification.kind, QueryKind::Write) && settings.explain_preview {
-        ConnectionAccess::Write
-    } else {
-        ConnectionAccess::Read
+/// Agent read plans freeze their own row cap, so later UI tuning can only narrow
+/// execution and must not invalidate an otherwise identical plan. Authority,
+/// credential, connection, binding, and workspace switches remain hash-bound.
+fn capture_agent_read_policy(
+    pin: &PinnedConnection,
+) -> Result<(serde_json::Value, String), AppError> {
+    let snapshot = serde_json::json!({
+        "accountScope": pin.scope.account_scope.storage_key(),
+        "bindingRevision": pin.binding_revision,
+        "bindingUpdatedAt": pin.binding_updated_at,
+        "connectionRevision": pin.connection_revision,
+        "credentialMode": pin.profile.credential_mode,
+        "environment": pin.profile.env,
+        "scopeGeneration": pin.scope.generation,
+        "workspaceAccess": pin.profile.workspace_access,
+        "workspaceId": pin.scope.workspace_id,
+    });
+    let revision = canonical_hash(&snapshot)?;
+    Ok((snapshot, revision))
+}
+
+fn operation_kind(kind: QueryKind) -> OperationKind {
+    match kind {
+        QueryKind::Read => OperationKind::ReadQuery,
+        QueryKind::Write => OperationKind::WriteSql,
+        QueryKind::Ddl => OperationKind::Ddl,
+        QueryKind::Privilege => OperationKind::Privilege,
     }
+}
+
+fn operation_risk(classification: &Classification) -> OperationRiskLevel {
+    if classification.no_where && !matches!(classification.kind, QueryKind::Read) {
+        return OperationRiskLevel::Critical;
+    }
+    match classification.risk {
+        crate::model::RiskLevel::Low => OperationRiskLevel::Low,
+        crate::model::RiskLevel::Medium => OperationRiskLevel::Medium,
+        crate::model::RiskLevel::High => OperationRiskLevel::High,
+    }
+}
+
+fn desktop_preview_connection_access(
+    _classification: &Classification,
+    _settings: &SafetySettings,
+) -> ConnectionAccess {
+    ConnectionAccess::Read
 }
 
 fn skipped_preview_report(note: &str) -> PreviewReport {
@@ -1472,17 +1921,13 @@ async fn record_run_failure(
 mod tests {
     use std::collections::HashMap;
     use std::str::FromStr;
-    use std::sync::{Arc, Barrier};
-    use std::thread;
 
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use tempfile::TempDir;
 
     use super::*;
-    use crate::model::{
-        Provider, RiskLevel, WorkspaceConnectionAccess, WorkspaceCredentialMode, WorkspaceKind,
-    };
-    use crate::store::{ActiveResourceScope, CatalogCachePolicy, TEST_SCHEMA};
+    use crate::model::{Provider, RiskLevel, WorkspaceConnectionAccess, WorkspaceCredentialMode};
+    use crate::store::TEST_SCHEMA;
 
     fn profile(id: Uuid, database: String) -> ConnectionProfile {
         ConnectionProfile {
@@ -1507,26 +1952,6 @@ mod tests {
         }
     }
 
-    fn pin() -> PinnedConnection {
-        let connection_id = Uuid::from_u128(2);
-        PinnedConnection {
-            scope: ActiveResourceScope {
-                workspace_id: Uuid::from_u128(1),
-                workspace_kind: WorkspaceKind::Team,
-                selected_account_id: Some("account-a".into()),
-                account_scope: AccountScope::WorkspaceUser("account-a".into()),
-                generation: 7,
-            },
-            connection_id,
-            connection_revision: 3,
-            binding_revision: 2,
-            binding_updated_at: "2026-07-24T00:00:00Z".into(),
-            profile: profile(connection_id, "test.db".into()),
-            requires_remote_rbac: true,
-            catalog_cache_policy: CatalogCachePolicy::Persistent,
-        }
-    }
-
     fn classification(kind: QueryKind, rollback_safe: bool) -> Classification {
         Classification {
             kind,
@@ -1539,56 +1964,26 @@ mod tests {
         }
     }
 
-    fn stored_plan(created_at: Instant, identity: PlannedConnectionIdentity) -> StoredReadPlan {
-        StoredReadPlan {
-            connection_id: Uuid::from_u128(2),
-            identity,
-            sql: "SELECT 1".into(),
-            max_rows: 1,
-            decision: "ready".into(),
-            origin: AgentQueryInvocationOrigin::Mcp,
-            created_at,
-            insertion_order: 0,
-        }
-    }
-
     #[test]
-    fn desktop_preview_access_preserves_legacy_access_matrix() {
-        let mut settings = SafetySettings {
+    fn desktop_preview_access_is_always_read_only_before_exact_approval() {
+        let settings = SafetySettings {
             allow_writes: true,
             explain_preview: true,
             ..SafetySettings::default()
         };
 
-        assert_eq!(
-            desktop_preview_connection_access(&classification(QueryKind::Read, false), &settings),
-            ConnectionAccess::Read
-        );
-        assert_eq!(
-            desktop_preview_connection_access(&classification(QueryKind::Write, true), &settings),
-            ConnectionAccess::Write
-        );
-        assert_eq!(
-            desktop_preview_connection_access(&classification(QueryKind::Write, false), &settings),
-            ConnectionAccess::Write
-        );
-        assert_eq!(
-            desktop_preview_connection_access(&classification(QueryKind::Ddl, false), &settings),
-            ConnectionAccess::Read
-        );
-        assert_eq!(
-            desktop_preview_connection_access(
-                &classification(QueryKind::Privilege, false),
-                &settings
-            ),
-            ConnectionAccess::Read
-        );
-
-        settings.explain_preview = false;
-        assert_eq!(
-            desktop_preview_connection_access(&classification(QueryKind::Write, true), &settings),
-            ConnectionAccess::Read
-        );
+        for classification in [
+            classification(QueryKind::Read, false),
+            classification(QueryKind::Write, true),
+            classification(QueryKind::Write, false),
+            classification(QueryKind::Ddl, false),
+            classification(QueryKind::Privilege, false),
+        ] {
+            assert_eq!(
+                desktop_preview_connection_access(&classification, &settings),
+                ConnectionAccess::Read
+            );
+        }
     }
 
     #[test]
@@ -1616,128 +2011,10 @@ mod tests {
     }
 
     #[test]
-    fn ttl_is_valid_at_exact_boundary_and_expired_immediately_after() {
-        let created_at = Instant::now();
-        let identity = PlannedConnectionIdentity::from(&pin());
-        let exact_id = Uuid::new_v4();
-        let expired_id = Uuid::new_v4();
-        let mut registry = QueryPlanRegistry::default();
-        registry.insert_at(
-            exact_id,
-            stored_plan(created_at, identity.clone()),
-            created_at,
-        );
-        registry.insert_at(expired_id, stored_plan(created_at, identity), created_at);
-
-        assert!(registry
-            .claim_at(exact_id, created_at + QUERY_PLAN_TTL)
-            .is_ok());
-        assert!(matches!(
-            registry.claim_at(
-                expired_id,
-                created_at + QUERY_PLAN_TTL + Duration::from_nanos(1)
-            ),
-            Err(PlanClaimError::Expired)
-        ));
-    }
-
-    #[test]
-    fn insert_prunes_expired_then_evicts_only_the_oldest_live_plan() {
-        let base = Instant::now();
-        let identity = PlannedConnectionIdentity::from(&pin());
-        let expired_id = Uuid::new_v4();
-        let oldest_live_id = Uuid::new_v4();
-        let mut registry = QueryPlanRegistry::default();
-        registry.seed(expired_id, stored_plan(base, identity.clone()));
-        let now = base + QUERY_PLAN_TTL + Duration::from_nanos(1);
-        registry.insert_at(oldest_live_id, stored_plan(now, identity.clone()), now);
-        assert!(!registry.plans.contains_key(&expired_id));
-
-        for offset in 1..MAX_QUERY_PLANS {
-            let at = now + Duration::from_nanos(offset as u64);
-            registry.insert_at(Uuid::new_v4(), stored_plan(at, identity.clone()), at);
-        }
-        assert_eq!(registry.plans.len(), MAX_QUERY_PLANS);
-
-        let newest_id = Uuid::new_v4();
-        let newest_at = now + Duration::from_secs(1);
-        registry.insert_at(newest_id, stored_plan(newest_at, identity), newest_at);
-        assert_eq!(registry.plans.len(), MAX_QUERY_PLANS);
-        assert!(!registry.plans.contains_key(&oldest_live_id));
-        assert!(registry.plans.contains_key(&newest_id));
-    }
-
-    #[test]
-    fn concurrent_claim_has_exactly_one_winner() {
-        const CLAIMANTS: usize = 16;
-        let now = Instant::now();
-        let id = Uuid::new_v4();
-        let registry = Arc::new(Mutex::new(QueryPlanRegistry::default()));
-        registry.lock().unwrap().seed(
-            id,
-            stored_plan(now, PlannedConnectionIdentity::from(&pin())),
-        );
-        let barrier = Arc::new(Barrier::new(CLAIMANTS + 1));
-        let mut threads = Vec::new();
-        for _ in 0..CLAIMANTS {
-            let registry = Arc::clone(&registry);
-            let barrier = Arc::clone(&barrier);
-            threads.push(thread::spawn(move || {
-                barrier.wait();
-                registry.lock().unwrap().claim_at(id, now).is_ok()
-            }));
-        }
-        barrier.wait();
-        let winners = threads
-            .into_iter()
-            .map(|handle| handle.join().unwrap())
-            .filter(|won| *won)
-            .count();
-        assert_eq!(winners, 1);
-    }
-
-    #[test]
-    fn identity_covers_every_scope_and_material_revision_field() {
-        let original = PlannedConnectionIdentity::from(&pin());
-
-        let mut workspace = original.clone();
-        workspace.workspace_id = Uuid::new_v4();
-        assert_ne!(original, workspace);
-
-        let mut account = original.clone();
-        account.account_scope = AccountScope::WorkspaceUser("account-b".into());
-        assert_ne!(original, account);
-
-        let mut generation = original.clone();
-        generation.scope_generation += 1;
-        assert_ne!(original, generation);
-
-        let mut connection = original.clone();
-        connection.connection_revision += 1;
-        assert_ne!(original, connection);
-
-        let mut binding_revision = original.clone();
-        binding_revision.binding_revision += 1;
-        assert_ne!(original, binding_revision);
-
-        let mut binding_time = original.clone();
-        binding_time.binding_updated_at = "2026-07-24T00:00:01Z".into();
-        assert_ne!(original, binding_time);
-    }
-
-    #[test]
     fn row_cap_is_frozen_in_the_stored_plan() {
         assert_eq!(bounded_max_rows(Some(5_000), 25), MAX_AGENT_ROWS);
         assert_eq!(bounded_max_rows(None, 5_000), MAX_AGENT_ROWS);
         assert_eq!(bounded_max_rows(Some(7), 500), 7);
-
-        let now = Instant::now();
-        let id = Uuid::new_v4();
-        let mut registry = QueryPlanRegistry::default();
-        let mut plan = stored_plan(now, PlannedConnectionIdentity::from(&pin()));
-        plan.max_rows = bounded_max_rows(Some(7), 500);
-        registry.insert_at(id, plan, now);
-        assert_eq!(registry.claim_at(id, now).unwrap().max_rows, 7);
     }
 
     #[test]
@@ -1775,6 +2052,8 @@ mod tests {
 
     struct SqliteHarness {
         service: QueryService,
+        operation_service: crate::services::OperationService,
+        approval: crate::operations::LocalApprovalAuthority,
         store: Store,
         connections: ConnectionManager,
         connection_id: Uuid,
@@ -1819,9 +2098,17 @@ mod tests {
             let profile = profile(connection_id, target_path.to_string_lossy().into_owned());
             store.upsert_connection(&profile).await.unwrap();
             let connections = ConnectionManager::new(store.clone());
-            let service = QueryService::new(store.clone(), connections.clone());
+            let (operation, approval) = OperationRuntime::new(&store);
+            let operation_service = crate::services::OperationService::new(
+                store.clone(),
+                connections.clone(),
+                operation.clone(),
+            );
+            let service = QueryService::new(store.clone(), connections.clone(), operation);
             Self {
                 service,
+                operation_service,
+                approval,
                 store,
                 connections,
                 connection_id,
@@ -1839,18 +2126,48 @@ mod tests {
             mutation.retire_connection(self.connection_id).await;
             let Self {
                 service,
+                operation_service,
                 store,
                 connections,
                 directory,
                 ..
             } = self;
             drop(service);
+            drop(operation_service);
             drop(connections);
             store.pool().close().await;
             drop(store);
             directory
                 .close()
                 .expect("temporary SQLite directory must be removable after pool shutdown");
+        }
+
+        async fn propose(
+            &self,
+            sql: &str,
+            origin: Option<&str>,
+        ) -> Result<DesktopSqlProposalReceipt, DesktopSqlInspectionError> {
+            self.service
+                .propose_desktop_sql(DesktopSqlProposalRequest {
+                    connection_id: self.connection_id,
+                    sql: sql.into(),
+                    origin: origin.map(str::to_string),
+                })
+                .await
+        }
+
+        async fn approve(&self, proposal: &DesktopSqlProposalReceipt) {
+            self.operation_service
+                .approve_local(
+                    &self.approval,
+                    crate::services::OperationDecisionRequest {
+                        operation_id: proposal.operation_id,
+                        expected_payload_hash: proposal.payload_hash.clone(),
+                        reason: None,
+                    },
+                )
+                .await
+                .unwrap();
         }
 
         async fn user_name(&self, id: i64) -> String {
@@ -2260,11 +2577,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn desktop_rollback_preview_requires_write_and_rolls_back_exactly() {
+    async fn desktop_write_preview_never_executes_before_exact_approval() {
         let harness = SqliteHarness::new().await;
-        let mut writable = harness.profile.clone();
-        writable.allow_writes = true;
-        harness.store.upsert_connection(&writable).await.unwrap();
         let mut settings = harness
             .store
             .get_safety(harness.connection_id)
@@ -2286,15 +2600,20 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(receipt.report.mode, PreviewMode::ExecRollback);
-        assert_eq!(receipt.report.exact_rows, Some(1));
+        assert_eq!(receipt.report.mode, PreviewMode::Explain);
+        assert_eq!(receipt.report.exact_rows, None);
+        assert!(receipt
+            .report
+            .note
+            .as_deref()
+            .is_some_and(|note| note.contains("no target-mutating statement was executed")));
         drop(receipt);
         assert_eq!(harness.user_name(1).await, "Ada");
         harness.close().await;
     }
 
     #[tokio::test]
-    async fn desktop_nonrollback_write_keeps_legacy_write_authorization() {
+    async fn desktop_nonrollback_write_preview_uses_read_authority_only() {
         let harness = SqliteHarness::new().await;
         let mut settings = harness
             .store
@@ -2309,28 +2628,34 @@ mod tests {
             .await
             .unwrap();
 
-        let error = match harness
+        let receipt = harness
             .service
             .preview_desktop_sql(DesktopSqlPreviewRequest {
                 connection_id: harness.connection_id,
                 sql: "this is not sql".into(),
             })
             .await
-        {
-            Err(error) => error.into_error(),
-            Ok(_) => panic!("legacy non-rollback-safe write preview must request Write access"),
-        };
-        assert!(matches!(
-            error,
-            AppError::Blocked { reason }
-                if reason == "your workspace role does not permit this database action"
-        ));
+            .unwrap();
+        assert_eq!(receipt.report.mode, PreviewMode::Explain);
+        assert_eq!(receipt.report.exact_rows, None);
+        drop(receipt);
+        assert_eq!(harness.user_name(1).await, "Ada");
         harness.close().await;
     }
 
     #[tokio::test]
-    async fn desktop_ddl_preview_connects_then_returns_exact_l3_skip() {
+    async fn desktop_ddl_preview_skips_before_opening_the_target() {
         let harness = SqliteHarness::new().await;
+        let mut invalid = harness.profile.clone();
+        invalid.database = harness
+            .directory
+            .path()
+            .join("missing-parent")
+            .join("target.db")
+            .to_string_lossy()
+            .into_owned();
+        harness.store.upsert_connection(&invalid).await.unwrap();
+
         let mut settings = harness
             .store
             .get_safety(harness.connection_id)
@@ -2361,60 +2686,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn desktop_ddl_preview_preserves_legacy_target_touch_order() {
-        let harness = SqliteHarness::new().await;
-        let mut invalid = harness.profile.clone();
-        invalid.database = harness
-            .directory
-            .path()
-            .join("missing-parent")
-            .join("target.db")
-            .to_string_lossy()
-            .into_owned();
-        harness.store.upsert_connection(&invalid).await.unwrap();
-
-        let mut settings = harness
-            .store
-            .get_safety(harness.connection_id)
-            .await
-            .unwrap();
-        settings.allow_writes = true;
-        harness
-            .store
-            .set_safety(harness.connection_id, &settings)
-            .await
-            .unwrap();
-
-        let error = match harness
-            .service
-            .preview_desktop_sql(DesktopSqlPreviewRequest {
-                connection_id: harness.connection_id,
-                sql: "CREATE TABLE preview_only (id INTEGER PRIMARY KEY)".into(),
-            })
-            .await
-        {
-            Err(error) => error.into_error(),
-            Ok(_) => panic!("legacy DDL preview must touch the target before the L3 skip"),
-        };
-        assert!(
-            matches!(error, AppError::Db(_)),
-            "missing target must surface the legacy database-open error, got {error}"
-        );
-        harness.close().await;
-    }
-
-    #[tokio::test]
     async fn desktop_sql_read_preserves_wire_provenance_and_lease_guard() {
         let harness = SqliteHarness::new().await;
+        let proposal = harness
+            .propose("SELECT id, name FROM users ORDER BY id", Some("data-view"))
+            .await
+            .unwrap();
+        assert!(!proposal.approval_required);
+        assert_eq!(proposal.state, OperationState::Ready);
         let receipt = harness
             .service
-            .run_desktop_sql(DesktopSqlRunRequest {
-                connection_id: harness.connection_id,
-                sql: "SELECT id, name FROM users ORDER BY id".into(),
-                approved: false,
-                query_id: None,
-                origin: Some("data-view".into()),
-            })
+            .run_desktop_sql(proposal.operation_id)
             .await
             .unwrap();
         let result = receipt
@@ -2479,32 +2761,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn desktop_sql_write_gate_preserves_exact_error_audit_and_scope() {
+    async fn desktop_sql_write_gate_rejects_before_persist_or_target_touch() {
         let harness = SqliteHarness::new().await;
-        let blocked = match harness
-            .service
-            .run_desktop_sql(DesktopSqlRunRequest {
-                connection_id: harness.connection_id,
-                sql: "UPDATE users SET name = 'Grace' WHERE id = 1".into(),
-                approved: true,
-                query_id: None,
-                origin: None,
-            })
+        let error = match harness
+            .propose("UPDATE users SET name = 'Grace' WHERE id = 1", None)
             .await
         {
-            Err(DesktopSqlRunError::Blocked(blocked)) => blocked,
+            Err(error) => error.into_error(),
             _ => panic!("writes-disabled policy must reject before target touch"),
         };
-        assert!(
-            tokio::time::timeout(
-                Duration::from_millis(100),
-                harness.connections.begin_scope_mutation(),
-            )
-            .await
-            .is_err(),
-            "blocked desktop SQL error must retain its scope through adapter mapping"
-        );
-        let error = blocked.into_error();
         assert_eq!(
             serde_json::to_value(&error).unwrap(),
             serde_json::json!({
@@ -2513,24 +2778,32 @@ mod tests {
             })
         );
         assert_eq!(harness.user_name(1).await, "Ada");
-        assert_eq!(
-            harness.audit_actions_in_order().await,
-            ["blocked".to_string()]
-        );
-        let history = harness
+        assert!(harness.audit_actions_in_order().await.is_empty());
+        assert!(harness
             .store
             .list_history(harness.connection_id)
             .await
-            .unwrap();
-        assert_eq!(history.len(), 1);
-        assert_eq!(history[0].status, "blocked");
-        assert_eq!(history[0].origin, "manual");
-        assert_eq!(
-            history[0].error.as_deref(),
-            Some(
-                "writing is disabled for this connection (writes are off by default). Enable writes in the connection's safety settings to propose it."
-            )
-        );
+            .unwrap()
+            .is_empty());
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn desktop_arbitrary_privilege_sql_is_blocked_before_persistence() {
+        let harness = SqliteHarness::new().await;
+        harness.enable_writes(false).await;
+        let error = match harness
+            .propose("GRANT SELECT ON users TO analyst", None)
+            .await
+        {
+            Err(error) => error.into_error(),
+            Ok(_) => panic!("arbitrary privilege SQL must not become an operation"),
+        };
+        assert!(matches!(
+            error,
+            AppError::Blocked { ref reason } if reason.contains("arbitrary privilege SQL")
+        ));
+        assert!(harness.audit_actions_in_order().await.is_empty());
         harness.close().await;
     }
 
@@ -2541,14 +2814,7 @@ mod tests {
         harness.set_connection_access_for_test("view").await;
 
         let error = match harness
-            .service
-            .run_desktop_sql(DesktopSqlRunRequest {
-                connection_id: harness.connection_id,
-                sql: "UPDATE users SET name = 'Grace' WHERE id = 1".into(),
-                approved: true,
-                query_id: None,
-                origin: None,
-            })
+            .propose("UPDATE users SET name = 'Grace' WHERE id = 1", None)
             .await
         {
             Err(error) => error.into_error(),
@@ -2558,7 +2824,7 @@ mod tests {
             serde_json::to_value(&error).unwrap(),
             serde_json::json!({
                 "kind": "blocked",
-                "message": "blocked: workspace role cannot execute this connection"
+                "message": "blocked: your workspace role grants read-only database access"
             })
         );
         harness.set_connection_access_for_test("local").await;
@@ -2575,40 +2841,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn desktop_sql_exact_approval_compatibility_commits_and_records_both_ledgers() {
+    async fn desktop_sql_exact_approval_commits_and_records_both_ledgers() {
         let harness = SqliteHarness::new().await;
         harness.enable_writes(true).await;
         let sql = "UPDATE users SET name = 'Grace' WHERE id = 1";
+        let proposal = harness.propose(sql, Some("sql")).await.unwrap();
+        assert!(proposal.approval_required);
+        assert_eq!(proposal.state, OperationState::PendingApproval);
 
-        let rejected = match harness
-            .service
-            .run_desktop_sql(DesktopSqlRunRequest {
-                connection_id: harness.connection_id,
-                sql: sql.into(),
-                approved: false,
-                query_id: None,
-                origin: Some("sql".into()),
-            })
-            .await
-        {
+        let rejected = match harness.service.run_desktop_sql(proposal.operation_id).await {
             Err(error) => error.into_error(),
-            Ok(_) => panic!("legacy approval-required write must remain blocked"),
+            Ok(_) => panic!("a write without its exact approval must remain blocked"),
         };
-        assert!(matches!(
-            rejected,
-            AppError::Blocked { reason }
-                if reason == "this statement modifies data and requires explicit approval"
-        ));
+        assert!(matches!(rejected, AppError::Blocked { .. }));
 
+        harness.approve(&proposal).await;
         let receipt = harness
             .service
-            .run_desktop_sql(DesktopSqlRunRequest {
-                connection_id: harness.connection_id,
-                sql: sql.into(),
-                approved: true,
-                query_id: None,
-                origin: Some("sql".into()),
-            })
+            .run_desktop_sql(proposal.operation_id)
             .await
             .unwrap();
         assert_eq!(
@@ -2623,17 +2873,14 @@ mod tests {
         assert_eq!(harness.user_name(1).await, "Grace");
         assert_eq!(
             harness.audit_actions_in_order().await,
-            ["blocked", "execute:attempt", "execute"]
+            ["execute:attempt", "execute"]
         );
         let history = harness
             .store
             .list_history(harness.connection_id)
             .await
             .unwrap();
-        assert_eq!(history.len(), 2);
-        assert!(history
-            .iter()
-            .any(|entry| entry.status == "blocked" && entry.origin == "sql"));
+        assert_eq!(history.len(), 1);
         assert!(history.iter().any(|entry| {
             entry.status == "ok"
                 && entry.origin == "sql"
@@ -2644,18 +2891,187 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn desktop_sql_legacy_auto_run_write_still_authorizes_the_executor() {
+    async fn unacknowledged_target_commit_becomes_outcome_unknown_without_retry() {
         let harness = SqliteHarness::new().await;
-        harness.enable_writes(false).await;
+        harness.enable_writes(true).await;
+        let lease = harness
+            .connections
+            .acquire(harness.connection_id, ConnectionAccess::Write)
+            .await
+            .unwrap();
+        let DbPool::Sqlite(pool) = &lease.live().sql().unwrap().write_pool else {
+            panic!("query-service harness must use SQLite");
+        };
+        sqlx::raw_sql(
+            "CREATE TABLE parents (id INTEGER PRIMARY KEY);
+             CREATE TABLE deferred_children (
+               id INTEGER PRIMARY KEY,
+               parent_id INTEGER NOT NULL,
+               FOREIGN KEY(parent_id) REFERENCES parents(id)
+                 DEFERRABLE INITIALLY DEFERRED
+             );",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        drop(lease);
+
+        let proposal = harness
+            .propose(
+                "INSERT INTO deferred_children (id, parent_id) VALUES (1, 999)",
+                None,
+            )
+            .await
+            .unwrap();
+        harness.approve(&proposal).await;
+        let error = match harness.service.run_desktop_sql(proposal.operation_id).await {
+            Err(error) => error.into_error(),
+            Ok(_) => panic!("deferred foreign-key commit must not report success"),
+        };
+        assert!(
+            matches!(error, AppError::OutcomeUnknown(_)),
+            "commit acknowledgement failure must be explicit, got {error}"
+        );
+        assert_eq!(
+            harness
+                .service
+                .operation
+                .get(proposal.operation_id)
+                .await
+                .unwrap()
+                .state,
+            OperationState::OutcomeUnknown
+        );
+        assert!(harness
+            .service
+            .operation
+            .claim(proposal.operation_id)
+            .await
+            .is_err());
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn critical_write_requires_the_exact_typed_confirmation() {
+        let harness = SqliteHarness::new().await;
+        harness.enable_writes(true).await;
+        let proposal = harness.propose("DELETE FROM users", None).await.unwrap();
+        assert_eq!(
+            proposal.confirmation_phrase.as_deref(),
+            Some(super::super::operation_service::CRITICAL_CONFIRMATION)
+        );
+        let missing = harness
+            .operation_service
+            .approve_local(
+                &harness.approval,
+                crate::services::OperationDecisionRequest {
+                    operation_id: proposal.operation_id,
+                    expected_payload_hash: proposal.payload_hash.clone(),
+                    reason: None,
+                },
+            )
+            .await;
+        assert!(matches!(missing, Err(AppError::Blocked { .. })));
+        harness
+            .operation_service
+            .approve_local(
+                &harness.approval,
+                crate::services::OperationDecisionRequest {
+                    operation_id: proposal.operation_id,
+                    expected_payload_hash: proposal.payload_hash.clone(),
+                    reason: proposal.confirmation_phrase.clone(),
+                },
+            )
+            .await
+            .unwrap();
         let receipt = harness
             .service
-            .run_desktop_sql(DesktopSqlRunRequest {
-                connection_id: harness.connection_id,
-                sql: "UPDATE users SET name = 'Grace' WHERE id = 1".into(),
-                approved: false,
-                query_id: None,
-                origin: None,
-            })
+            .run_desktop_sql(proposal.operation_id)
+            .await
+            .unwrap();
+        drop(receipt);
+        assert_eq!(
+            harness
+                .service
+                .operation
+                .get(proposal.operation_id)
+                .await
+                .unwrap()
+                .state,
+            OperationState::Succeeded
+        );
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn production_write_requires_production_confirmation() {
+        let harness = SqliteHarness::new().await;
+        harness.enable_writes(true).await;
+        let mut production = harness.profile.clone();
+        production.allow_writes = true;
+        production.env = Some("prod".into());
+        harness.store.upsert_connection(&production).await.unwrap();
+
+        let proposal = harness
+            .propose("UPDATE users SET name = 'Grace' WHERE id = 1", None)
+            .await
+            .unwrap();
+        assert_eq!(
+            proposal.confirmation_phrase.as_deref(),
+            Some(super::super::operation_service::PRODUCTION_CONFIRMATION)
+        );
+        let wrong = harness
+            .operation_service
+            .approve_local(
+                &harness.approval,
+                crate::services::OperationDecisionRequest {
+                    operation_id: proposal.operation_id,
+                    expected_payload_hash: proposal.payload_hash.clone(),
+                    reason: Some("prod".into()),
+                },
+            )
+            .await;
+        assert!(matches!(wrong, Err(AppError::Blocked { .. })));
+        harness
+            .operation_service
+            .approve_local(
+                &harness.approval,
+                crate::services::OperationDecisionRequest {
+                    operation_id: proposal.operation_id,
+                    expected_payload_hash: proposal.payload_hash.clone(),
+                    reason: proposal.confirmation_phrase.clone(),
+                },
+            )
+            .await
+            .unwrap();
+        let receipt = harness
+            .service
+            .run_desktop_sql(proposal.operation_id)
+            .await
+            .unwrap();
+        drop(receipt);
+        assert_eq!(harness.user_name(1).await, "Grace");
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn desktop_sql_write_always_requires_exact_approval_when_legacy_prompt_is_off() {
+        let harness = SqliteHarness::new().await;
+        harness.enable_writes(false).await;
+        let proposal = harness
+            .propose("UPDATE users SET name = 'Grace' WHERE id = 1", None)
+            .await
+            .unwrap();
+        assert!(proposal.approval_required);
+        assert!(harness
+            .service
+            .run_desktop_sql(proposal.operation_id)
+            .await
+            .is_err());
+        harness.approve(&proposal).await;
+        let receipt = harness
+            .service
+            .run_desktop_sql(proposal.operation_id)
             .await
             .unwrap();
         assert!(receipt.outcome.committed);
@@ -2683,17 +3099,12 @@ mod tests {
         .await
         .unwrap();
 
-        let error = match harness
-            .service
-            .run_desktop_sql(DesktopSqlRunRequest {
-                connection_id: harness.connection_id,
-                sql: "UPDATE users SET name = 'Grace' WHERE id = 1".into(),
-                approved: true,
-                query_id: None,
-                origin: None,
-            })
+        let proposal = harness
+            .propose("UPDATE users SET name = 'Grace' WHERE id = 1", None)
             .await
-        {
+            .unwrap();
+        harness.approve(&proposal).await;
+        let error = match harness.service.run_desktop_sql(proposal.operation_id).await {
             Err(error) => error.into_error(),
             Ok(_) => panic!("write must fail closed before target touch"),
         };
@@ -2722,22 +3133,31 @@ mod tests {
     async fn desktop_sql_execution_failure_closes_the_attempt_and_keeps_original_error() {
         let harness = SqliteHarness::new().await;
         harness.enable_writes(true).await;
-        let failure = match harness
-            .service
-            .run_desktop_sql(DesktopSqlRunRequest {
-                connection_id: harness.connection_id,
-                sql: "UPDATE missing_users SET name = 'Grace' WHERE id = 1".into(),
-                approved: true,
-                query_id: None,
-                origin: None,
-            })
+        let proposal = harness
+            .propose("UPDATE users SET name = 'Grace' WHERE id = 1", None)
             .await
-        {
+            .unwrap();
+        harness.approve(&proposal).await;
+        let target = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(&harness.profile.database)
+                    .foreign_keys(true),
+            )
+            .await
+            .unwrap();
+        sqlx::raw_sql("DROP TABLE users")
+            .execute(&target)
+            .await
+            .unwrap();
+        target.close().await;
+        let failure = match harness.service.run_desktop_sql(proposal.operation_id).await {
             Err(DesktopSqlRunError::Execution(failure)) => failure,
             _ => panic!("missing target table must fail during desktop execution"),
         };
         let original = failure.error.to_string();
-        assert!(original.contains("missing_users"));
+        assert!(original.contains("users"));
         assert!(!original.contains("audit"));
         let mapped = failure.into_error();
         assert_eq!(mapped.to_string(), original);
@@ -2755,8 +3175,7 @@ mod tests {
         assert!(history[0]
             .error
             .as_deref()
-            .is_some_and(|message| message.contains("missing_users")));
-        assert_eq!(harness.user_name(1).await, "Ada");
+            .is_some_and(|message| message.contains("users")));
         harness.close().await;
     }
 
@@ -2776,15 +3195,14 @@ mod tests {
             .unwrap()
             .is_some());
 
+        let proposal = harness
+            .propose("CREATE TABLE widgets (id INTEGER PRIMARY KEY)", None)
+            .await
+            .unwrap();
+        harness.approve(&proposal).await;
         let receipt = harness
             .service
-            .run_desktop_sql(DesktopSqlRunRequest {
-                connection_id: harness.connection_id,
-                sql: "CREATE TABLE widgets (id INTEGER PRIMARY KEY)".into(),
-                approved: true,
-                query_id: None,
-                origin: None,
-            })
+            .run_desktop_sql(proposal.operation_id)
             .await
             .unwrap();
         assert!(receipt.outcome.committed);
@@ -2941,7 +3359,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn service_clones_claim_one_shared_registry() {
+    async fn service_clones_claim_one_durable_operation() {
         let harness = SqliteHarness::new().await;
         let other_transport = harness.service.clone();
         let receipt = harness
@@ -2975,14 +3393,17 @@ mod tests {
             .await
             .unwrap();
         let plan_id = Uuid::new_v4();
-        harness.service.seed_plan_for_test(
-            plan_id,
-            &pin,
-            "SELECT no_such_function()".into(),
-            1,
-            "ready".into(),
-            Instant::now(),
-        );
+        harness
+            .service
+            .seed_plan_for_test(
+                plan_id,
+                &pin,
+                "SELECT no_such_function()".into(),
+                1,
+                "ready".into(),
+                Instant::now(),
+            )
+            .await;
         let prepared = harness.service.prepare_agent_run(plan_id).await.unwrap();
         let failure = match prepared.execute().await {
             Err(AgentQueryRunError::Execution(failure)) => failure,
@@ -3084,14 +3505,17 @@ mod tests {
             .await
             .unwrap();
         let plan_id = Uuid::new_v4();
-        harness.service.seed_plan_for_test(
-            plan_id,
-            &pin,
-            "SELECT no_such_function()".into(),
-            1,
-            "ready".into(),
-            Instant::now(),
-        );
+        harness
+            .service
+            .seed_plan_for_test(
+                plan_id,
+                &pin,
+                "SELECT no_such_function()".into(),
+                1,
+                "ready".into(),
+                Instant::now(),
+            )
+            .await;
         let prepared = harness.service.prepare_agent_run(plan_id).await.unwrap();
         let failure = match prepared.execute().await {
             Err(AgentQueryRunError::Execution(failure)) => failure,
@@ -3221,14 +3645,17 @@ mod tests {
             .await
             .unwrap();
         let plan_id = Uuid::new_v4();
-        harness.service.seed_plan_for_test(
-            plan_id,
-            &current_pin,
-            "SELECT 1".into(),
-            1,
-            "ready".into(),
-            Instant::now(),
-        );
+        harness
+            .service
+            .seed_plan_for_test(
+                plan_id,
+                &current_pin,
+                "SELECT 1".into(),
+                1,
+                "ready".into(),
+                Instant::now(),
+            )
+            .await;
 
         let mut revised_profile = harness.profile.clone();
         revised_profile.name = "query-service-revised".into();
@@ -3257,14 +3684,17 @@ mod tests {
             .await
             .unwrap();
         let plan_id = Uuid::new_v4();
-        harness.service.seed_plan_for_test(
-            plan_id,
-            &current_pin,
-            "SELECT 1".into(),
-            1,
-            "ready".into(),
-            Instant::now() - QUERY_PLAN_TTL - Duration::from_secs(1),
-        );
+        harness
+            .service
+            .seed_plan_for_test(
+                plan_id,
+                &current_pin,
+                "SELECT 1".into(),
+                1,
+                "ready".into(),
+                Instant::now() - QUERY_PLAN_TTL - Duration::from_secs(1),
+            )
+            .await;
 
         assert!(matches!(
             harness.service.prepare_agent_run(plan_id).await,

@@ -20,17 +20,33 @@ describe("runTracked / cancelTracked", () => {
     await expect(runTracked(tracker, async () => Promise.reject(boom))).rejects.toBe(boom);
   });
 
-  it("swallows the rejection and calls cancelQuery when the run was cancelled first", async () => {
+  it("swallows only a backend-confirmed cancellation after the local cancel request", async () => {
     cancelQuery.mockClear();
     const tracker = { queryId: null, cancelled: false };
     const outcome = await runTracked(tracker, async (queryId) => {
       // Simulate the backend rejecting an in-flight query once it's been cancelled.
       cancelTracked(tracker);
       expect(tracker.queryId).toBe(queryId);
-      throw new Error("cancelled by user");
+      throw { kind: "safety", message: "safety violation: query cancelled" };
     });
 
     expect(outcome).toEqual({ cancelled: true });
+    expect(cancelQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an uncertain write outcome visible after a local cancel request", async () => {
+    cancelQuery.mockClear();
+    const tracker = { queryId: null, cancelled: false };
+    const unknown = {
+      kind: "outcomeUnknown",
+      message: "operation outcome is unknown: commit acknowledgement failed",
+    };
+    await expect(
+      runTracked(tracker, async () => {
+        cancelTracked(tracker);
+        throw unknown;
+      }),
+    ).rejects.toBe(unknown);
     expect(cancelQuery).toHaveBeenCalledTimes(1);
   });
 

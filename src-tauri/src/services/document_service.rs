@@ -7,7 +7,8 @@
 use std::fmt;
 use std::time::Duration;
 
-use chrono::Utc;
+use chrono::{Duration as ChronoDuration, Utc};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::audit::{self, RecordArgs};
@@ -20,10 +21,17 @@ use crate::executor;
 #[cfg(test)]
 use crate::model::Engine;
 use crate::model::{DocumentPage, DocumentQuery, HistoryEntry, QueryKind, SafetySettings};
+use crate::operations::{
+    NewOperation, OperationKind, OperationPlanDisposition, OperationRiskLevel, OperationRuntime,
+    OperationState,
+};
 use crate::safety::{self, GateDecision};
 use crate::store::{PinnedConnection, Store};
 
-use super::query_service::{AgentQueryInvocationOrigin, MAX_AGENT_ROWS};
+use super::operation_service::{
+    actor_for_pin, agent_actor_for_pin, capture_policy, ensure_operation_scope,
+};
+use super::query_service::{AgentQueryInvocationOrigin, MAX_AGENT_ROWS, QUERY_PLAN_TTL};
 
 const MAX_DESKTOP_ROWS: u64 = 100_000;
 
@@ -64,15 +72,38 @@ impl AgentDocumentReadRequest {
     }
 }
 
-/// Desktop-facing input preserving the current approval, cancellation, and history
-/// attribution contract.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoredAgentDocumentPayload {
+    query: DocumentQuery,
+    query_text: String,
+    max_rows: u64,
+    origin: AgentQueryInvocationOrigin,
+}
+
+/// Desktop typed-document proposal input. The query crosses the transport only at
+/// this boundary and is persisted before a single-use run can be claimed.
 #[derive(Debug, Clone)]
-pub(crate) struct DesktopDocumentReadRequest {
+pub(crate) struct DesktopDocumentProposalRequest {
     pub(crate) connection_id: Uuid,
     pub(crate) query: DocumentQuery,
-    pub(crate) approved: bool,
-    pub(crate) query_id: Option<Uuid>,
     pub(crate) origin: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopDocumentProposalReceipt {
+    pub(crate) operation_id: Uuid,
+    pub(crate) payload_hash: String,
+    pub(crate) state: OperationState,
+    pub(crate) expires_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoredDesktopDocumentPayload {
+    query: DocumentQuery,
+    history_origin: String,
 }
 
 /// Explicitly allowlisted fields needed to render a document tool event.
@@ -273,11 +304,20 @@ impl DesktopDocumentExecutionFailure {
 pub(crate) struct DocumentService {
     store: Store,
     connections: ConnectionManager,
+    operation: OperationRuntime,
 }
 
 impl DocumentService {
-    pub(super) fn new(store: Store, connections: ConnectionManager) -> Self {
-        Self { store, connections }
+    pub(super) fn new(
+        store: Store,
+        connections: ConnectionManager,
+        operation: OperationRuntime,
+    ) -> Self {
+        Self {
+            store,
+            connections,
+            operation,
+        }
     }
 
     /// Execute one typed read for a local agent adapter.
@@ -338,18 +378,136 @@ impl DocumentService {
             .await
             .map_err(AgentDocumentReadError::Application)?;
         let max_rows = bounded_agent_rows(request.max_rows, settings.max_rows);
-        let lease = authority
-            .connect()
+        let policy =
+            capture_policy(&pin, &settings).map_err(AgentDocumentReadError::Application)?;
+        let operation_id = Uuid::new_v4();
+        let expires_at = Utc::now()
+            + ChronoDuration::from_std(QUERY_PLAN_TTL)
+                .expect("document query plan TTL is representable by chrono");
+        let operation = self
+            .operation
+            .plan(
+                NewOperation {
+                    id: operation_id,
+                    workspace_id: pin.scope.workspace_id,
+                    account_scope: pin.scope.account_scope.storage_key().into(),
+                    connection_id: pin.connection_id,
+                    connection_revision: pin.connection_revision,
+                    terminal_session_id: None,
+                    actor: agent_actor_for_pin(
+                        &pin,
+                        request.origin.as_str().into(),
+                        request.origin.as_str().into(),
+                    ),
+                    kind: OperationKind::DocumentRead,
+                    payload_schema_version: 1,
+                    payload: serde_json::to_value(StoredAgentDocumentPayload {
+                        query: request.query,
+                        query_text: request.query_text,
+                        max_rows,
+                        origin: request.origin,
+                    })
+                    .map_err(AppError::from)
+                    .map_err(AgentDocumentReadError::Application)?,
+                    schema_fingerprint: None,
+                    risk_level: document_operation_risk(&classification),
+                    preview: serde_json::to_value(&classification)
+                        .map_err(AppError::from)
+                        .map_err(AgentDocumentReadError::Application)?,
+                    policy_snapshot: policy.snapshot,
+                    policy_revision: policy.revision,
+                    single_use: true,
+                    idempotency_key: operation_id.to_string(),
+                    expires_at: Some(expires_at),
+                },
+                OperationPlanDisposition::Ready,
+            )
             .await
             .map_err(AgentDocumentReadError::Application)?;
+        self.operation
+            .claim(operation_id)
+            .await
+            .map_err(AgentDocumentReadError::Application)?;
+        let payload: StoredAgentDocumentPayload =
+            match serde_json::from_value(operation.payload.clone()) {
+                Ok(payload) => payload,
+                Err(error) => {
+                    let error = AppError::from(error);
+                    let _ = self
+                        .operation
+                        .fail(
+                            operation_id,
+                            &serde_json::json!({
+                                "error": error.to_string(),
+                                "reason": "stored_document_payload_invalid",
+                            }),
+                        )
+                        .await;
+                    return Err(AgentDocumentReadError::Application(error));
+                }
+            };
+        let canonical_query = match serde_json::to_string(&payload.query) {
+            Ok(query) => query,
+            Err(error) => {
+                let error = AppError::from(error);
+                let _ = self
+                    .operation
+                    .fail(
+                        operation_id,
+                        &serde_json::json!({
+                            "error": error.to_string(),
+                            "reason": "stored_document_payload_invalid",
+                        }),
+                    )
+                    .await;
+                return Err(AgentDocumentReadError::Application(error));
+            }
+        };
+        if canonical_query != payload.query_text {
+            let _ = self
+                .operation
+                .fail(
+                    operation_id,
+                    &serde_json::json!({"reason": "stored_document_event_mismatch"}),
+                )
+                .await;
+            return Err(AgentDocumentReadError::Application(AppError::Blocked {
+                reason: "stored document query does not match its canonical event payload".into(),
+            }));
+        }
+        let lease = match authority.connect().await {
+            Ok(lease) => lease,
+            Err(error) => {
+                let _ = self
+                    .operation
+                    .fail(
+                        operation_id,
+                        &serde_json::json!({
+                            "error": error.to_string(),
+                            "reason": "target_connection_failed",
+                        }),
+                    )
+                    .await;
+                return Err(AgentDocumentReadError::Application(error));
+            }
+        };
         let mongo = match lease.live().mongo() {
             Ok(mongo) => mongo,
-            Err(error) => return Err(AgentDocumentReadError::Application(error)),
+            Err(error) => {
+                let _ = self
+                    .operation
+                    .fail(
+                        operation_id,
+                        &serde_json::json!({"reason": "document_backend_unavailable"}),
+                    )
+                    .await;
+                return Err(AgentDocumentReadError::Application(error));
+            }
         };
         let page = match crate::mongo::query::run(
             mongo,
-            &request.query,
-            max_rows,
+            &payload.query,
+            payload.max_rows.min(MAX_AGENT_ROWS),
             Duration::from_millis(safety::STATEMENT_TIMEOUT_MS),
         )
         .await
@@ -360,12 +518,22 @@ impl DocumentService {
                     &self.store,
                     &pin,
                     &event_context.query_text,
-                    request.origin,
+                    payload.origin,
                     None,
                     None,
                     Some(error.to_string()),
                 )
                 .await;
+                let _ = self
+                    .operation
+                    .fail(
+                        operation_id,
+                        &serde_json::json!({
+                            "error": error.to_string(),
+                            "reason": "document_read_failed",
+                        }),
+                    )
+                    .await;
                 return Err(AgentDocumentReadError::Execution(Box::new(
                     AgentDocumentExecutionFailure {
                         context: event_context,
@@ -380,33 +548,157 @@ impl DocumentService {
             &self.store,
             &pin,
             &event_context.query_text,
-            request.origin,
+            payload.origin,
             Some(page.doc_count as i64),
             Some(page.duration_ms as i64),
             None,
         )
         .await;
+        if let Err(error) = self
+            .operation
+            .succeed(
+                operation_id,
+                &serde_json::json!({
+                    "durationMs": page.duration_ms,
+                    "rowCount": page.doc_count,
+                }),
+            )
+            .await
+        {
+            let _ = self
+                .operation
+                .fail(
+                    operation_id,
+                    &serde_json::json!({
+                        "error": error.to_string(),
+                        "reason": "operation_receipt_failed",
+                    }),
+                )
+                .await;
+            return Err(AgentDocumentReadError::Execution(Box::new(
+                AgentDocumentExecutionFailure {
+                    context: event_context,
+                    error,
+                    _lease: lease,
+                },
+            )));
+        }
         Ok(DocumentReadReceipt {
             result: DocumentReadResult {
                 context: event_context,
-                query: request.query,
+                query: payload.query,
                 page,
             },
             _lease: lease,
         })
     }
 
-    /// Execute one typed read for the desktop command while preserving its L4
-    /// approval, cancellation, row-limit, audit, and caller-supplied history origin.
-    pub(crate) async fn run_desktop_read(
+    /// Persist one immutable, typed document-read plan. Unsafe aggregate stages are
+    /// rejected before an operation exists and there is never a document write grant.
+    pub(crate) async fn propose_desktop_read(
         &self,
-        request: DesktopDocumentReadRequest,
-    ) -> Result<DocumentReadReceipt, DesktopDocumentReadError> {
+        request: DesktopDocumentProposalRequest,
+    ) -> Result<DesktopDocumentProposalReceipt, DesktopDocumentReadError> {
         let operation_scope = self.connections.begin_operation_scope().await;
         let pin = operation_scope
-            .pin_connection(request.connection_id)
+            .pin_connection_for_view(request.connection_id)
             .await
             .map_err(DesktopDocumentReadError::Application)?;
+        if !pin.profile.engine.is_document() {
+            return Err(DesktopDocumentReadError::NonDocumentConnection);
+        }
+        if !pin.profile.workspace_access.can_read() {
+            return Err(DesktopDocumentReadError::Blocked(DesktopDocumentBlocked {
+                reason: "your workspace role cannot read this document connection".into(),
+                _scope: operation_scope,
+            }));
+        }
+        let settings = self
+            .store
+            .get_safety(pin.connection_id)
+            .await
+            .map_err(DesktopDocumentReadError::Application)?;
+        let classification = crate::mongo::query::classify(&request.query);
+        if let Some(reason) = desktop_blocked_reason(&settings, &classification) {
+            return Err(DesktopDocumentReadError::Blocked(DesktopDocumentBlocked {
+                reason,
+                _scope: operation_scope,
+            }));
+        }
+        let policy =
+            capture_policy(&pin, &settings).map_err(DesktopDocumentReadError::Application)?;
+        let history_origin = request.origin.unwrap_or_else(|| "manual".into());
+        let payload = serde_json::to_value(StoredDesktopDocumentPayload {
+            query: request.query,
+            history_origin: history_origin.clone(),
+        })
+        .map_err(AppError::from)
+        .map_err(DesktopDocumentReadError::Application)?;
+        let operation_id = Uuid::new_v4();
+        let expires_at = Utc::now()
+            + ChronoDuration::from_std(QUERY_PLAN_TTL)
+                .expect("query plan TTL is representable by chrono");
+        let operation = self
+            .operation
+            .plan(
+                NewOperation {
+                    id: operation_id,
+                    workspace_id: pin.scope.workspace_id,
+                    account_scope: pin.scope.account_scope.storage_key().into(),
+                    connection_id: pin.connection_id,
+                    connection_revision: pin.connection_revision,
+                    terminal_session_id: None,
+                    actor: actor_for_pin(&pin, history_origin),
+                    kind: OperationKind::DocumentRead,
+                    payload_schema_version: 1,
+                    payload,
+                    schema_fingerprint: None,
+                    risk_level: document_operation_risk(&classification),
+                    preview: serde_json::to_value(&classification)
+                        .map_err(AppError::from)
+                        .map_err(DesktopDocumentReadError::Application)?,
+                    policy_snapshot: policy.snapshot,
+                    policy_revision: policy.revision,
+                    single_use: true,
+                    idempotency_key: operation_id.to_string(),
+                    expires_at: Some(expires_at),
+                },
+                OperationPlanDisposition::Ready,
+            )
+            .await
+            .map_err(DesktopDocumentReadError::Application)?;
+        Ok(DesktopDocumentProposalReceipt {
+            operation_id: operation.id,
+            payload_hash: operation.payload_hash,
+            state: operation.state,
+            expires_at,
+        })
+    }
+
+    /// Execute one typed document read by immutable operation id only.
+    pub(crate) async fn run_desktop_read(
+        &self,
+        operation_id: Uuid,
+    ) -> Result<DocumentReadReceipt, DesktopDocumentReadError> {
+        let planned = self
+            .operation
+            .get(operation_id)
+            .await
+            .map_err(DesktopDocumentReadError::Application)?;
+        if planned.kind != OperationKind::DocumentRead || planned.payload_schema_version != 1 {
+            return Err(DesktopDocumentReadError::Application(AppError::Blocked {
+                reason: "operation is not a supported document-read plan".into(),
+            }));
+        }
+        let payload: StoredDesktopDocumentPayload = serde_json::from_value(planned.payload.clone())
+            .map_err(AppError::from)
+            .map_err(DesktopDocumentReadError::Application)?;
+        let operation_scope = self.connections.begin_operation_scope().await;
+        let pin = operation_scope
+            .pin_connection(planned.connection_id)
+            .await
+            .map_err(DesktopDocumentReadError::Application)?;
+        ensure_operation_scope(&planned, &pin).map_err(DesktopDocumentReadError::Application)?;
         let engine = pin.profile.engine;
         if !engine.is_document() {
             return Err(DesktopDocumentReadError::NonDocumentConnection);
@@ -416,13 +708,21 @@ impl DocumentService {
             .get_safety(pin.connection_id)
             .await
             .map_err(DesktopDocumentReadError::Application)?;
-        let classification = crate::mongo::query::classify(&request.query);
-        let history_origin = request.origin.unwrap_or_else(|| "manual".into());
-        let query_text = serde_json::to_string(&request.query)
+        let policy =
+            capture_policy(&pin, &settings).map_err(DesktopDocumentReadError::Application)?;
+        if policy.revision != planned.policy_revision {
+            return Err(DesktopDocumentReadError::Blocked(DesktopDocumentBlocked {
+                reason: "the connection or safety policy changed; create a new plan".into(),
+                _scope: operation_scope,
+            }));
+        }
+        let classification = crate::mongo::query::classify(&payload.query);
+        let history_origin = payload.history_origin;
+        let query_text = serde_json::to_string(&payload.query)
             .map_err(AppError::from)
             .map_err(DesktopDocumentReadError::Application)?;
 
-        if let Some(reason) = desktop_blocked_reason(&settings, &classification, request.approved) {
+        if let Some(reason) = desktop_blocked_reason(&settings, &classification) {
             record_desktop_outcome(
                 &self.store,
                 &pin,
@@ -441,6 +741,10 @@ impl DocumentService {
                 _scope: operation_scope,
             }));
         }
+        self.operation
+            .claim(operation_id)
+            .await
+            .map_err(DesktopDocumentReadError::Application)?;
 
         let lease = match operation_scope
             .connect(pin.clone(), ConnectionAccess::Read)
@@ -461,23 +765,50 @@ impl DocumentService {
                     &history_origin,
                 )
                 .await;
+                let _ = self
+                    .operation
+                    .fail(
+                        operation_id,
+                        &serde_json::json!({"reason": "connection_failed"}),
+                    )
+                    .await;
                 return Err(DesktopDocumentReadError::Application(error));
             }
         };
         let mongo = match lease.live().mongo() {
             Ok(mongo) => mongo,
-            Err(error) => return Err(DesktopDocumentReadError::Application(error)),
+            Err(error) => {
+                let _ = self
+                    .operation
+                    .fail(
+                        operation_id,
+                        &serde_json::json!({"reason": "document_backend_unavailable"}),
+                    )
+                    .await;
+                return Err(DesktopDocumentReadError::Application(error));
+            }
         };
         let max_rows = bounded_desktop_rows(settings.max_rows);
         let run = crate::mongo::query::run(
             mongo,
-            &request.query,
+            &payload.query,
             max_rows,
             executor::cancel::QUERY_TIMEOUT,
         );
-        match executor::cancel::guard(request.query_id, executor::cancel::QUERY_TIMEOUT, run).await
+        match executor::cancel::guard(Some(operation_id), executor::cancel::QUERY_TIMEOUT, run)
+            .await
         {
             Ok(page) => {
+                self.operation
+                    .succeed(
+                        operation_id,
+                        &serde_json::json!({
+                            "durationMs": page.duration_ms,
+                            "rowCount": page.doc_count,
+                        }),
+                    )
+                    .await
+                    .map_err(DesktopDocumentReadError::Application)?;
                 record_desktop_outcome(
                     &self.store,
                     &pin,
@@ -498,13 +829,29 @@ impl DocumentService {
                             connection_name: pin.profile.name.clone(),
                             query_text,
                         },
-                        query: request.query,
+                        query: payload.query,
                         page,
                     },
                     _lease: lease,
                 })
             }
             Err(error) => {
+                let cancelled = matches!(
+                    &error,
+                    AppError::Safety(reason) if reason == "query cancelled"
+                );
+                let _ = if cancelled {
+                    self.operation
+                        .confirm_cancelled(
+                            operation_id,
+                            &serde_json::json!({"reason": "user_cancelled"}),
+                        )
+                        .await
+                } else {
+                    self.operation
+                        .fail(operation_id, &serde_json::json!({"reason": error.kind()}))
+                        .await
+                };
                 record_desktop_outcome(
                     &self.store,
                     &pin,
@@ -560,7 +907,6 @@ fn agent_history_origin(_origin: AgentQueryInvocationOrigin) -> &'static str {
 fn desktop_blocked_reason(
     settings: &SafetySettings,
     classification: &crate::model::Classification,
-    approved: bool,
 ) -> Option<String> {
     if !matches!(classification.kind, QueryKind::Read) {
         return Some(
@@ -573,10 +919,15 @@ fn desktop_blocked_reason(
     }
     match safety::decide(settings, classification) {
         GateDecision::Block { reason } => Some(reason),
-        GateDecision::RequireApproval if !approved => {
-            Some("this query requires explicit approval".into())
-        }
         GateDecision::AutoRun | GateDecision::RequireApproval => None,
+    }
+}
+
+fn document_operation_risk(classification: &crate::model::Classification) -> OperationRiskLevel {
+    match classification.risk {
+        crate::model::RiskLevel::Low => OperationRiskLevel::Low,
+        crate::model::RiskLevel::Medium => OperationRiskLevel::Medium,
+        crate::model::RiskLevel::High => OperationRiskLevel::High,
     }
 }
 
@@ -800,7 +1151,8 @@ mod tests {
                 .await
                 .unwrap();
             let connections = ConnectionManager::new(store.clone());
-            let service = DocumentService::new(store.clone(), connections.clone());
+            let (operation, _) = OperationRuntime::new(&store);
+            let service = DocumentService::new(store.clone(), connections.clone(), operation);
             Self {
                 service,
                 store,
@@ -833,20 +1185,16 @@ mod tests {
     }
 
     #[test]
-    fn desktop_gate_requires_approval_without_weakening_typed_read_only() {
+    fn desktop_plan_never_weakens_typed_read_only() {
         let classification = crate::mongo::query::classify(&safe_find());
         let settings = SafetySettings {
             auto_run_reads: false,
             ..SafetySettings::default()
         };
-        assert_eq!(
-            desktop_blocked_reason(&settings, &classification, false).as_deref(),
-            Some("this query requires explicit approval")
-        );
-        assert!(desktop_blocked_reason(&settings, &classification, true).is_none());
+        assert!(desktop_blocked_reason(&settings, &classification).is_none());
 
         let rejected = crate::mongo::query::classify(&blocked_aggregate());
-        assert!(desktop_blocked_reason(&settings, &rejected, true)
+        assert!(desktop_blocked_reason(&settings, &rejected)
             .is_some_and(|reason| reason.contains("$out")));
     }
 
@@ -1005,15 +1353,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn desktop_block_keeps_legacy_audit_history_and_manual_origin() {
+    async fn desktop_unsafe_document_shape_is_rejected_before_plan_persistence() {
         let harness = Harness::new(Engine::Mongodb).await;
         let error = match harness
             .service
-            .run_desktop_read(DesktopDocumentReadRequest {
+            .propose_desktop_read(DesktopDocumentProposalRequest {
                 connection_id: harness.connection_id,
                 query: blocked_aggregate(),
-                approved: true,
-                query_id: None,
                 origin: None,
             })
             .await
@@ -1023,24 +1369,19 @@ mod tests {
         };
         assert!(matches!(error, AppError::Blocked { .. }));
 
-        let history = harness
+        assert!(harness
             .store
             .list_history(harness.connection_id)
             .await
-            .unwrap();
-        assert_eq!(history.len(), 1);
-        assert_eq!(history[0].origin, "manual");
-        assert_eq!(history[0].status, "blocked");
-        assert_eq!(history[0].kind, QueryKind::Write);
+            .unwrap()
+            .is_empty());
 
         let (audit, chain_ok, first_bad) = audit::snapshot(&harness.store, harness.connection_id)
             .await
             .unwrap();
         assert!(chain_ok);
         assert_eq!(first_bad, None);
-        assert_eq!(audit.len(), 1);
-        assert_eq!(audit[0].action, "blocked");
-        assert_eq!(audit[0].kind, QueryKind::Write);
+        assert!(audit.is_empty());
         harness.close().await;
     }
 

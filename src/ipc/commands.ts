@@ -16,15 +16,20 @@ import type {
   Dashboard,
   DashboardDraft,
   DocumentPage,
+  DocumentOperationProposal,
   DocumentQuery,
   DriverDescriptor,
   ExecOutcome,
   HistoryEntry,
+  MonitoringOperationProposal,
   MonitoringStatus,
+  OperationDecision,
   PlatformFeatureFlags,
   PreviewReport,
   ScriptOutcome,
   SafetySettings,
+  ScriptOperationProposal,
+  SqlOperationProposal,
   PlatformInfo,
   QueryResult,
   Workspace,
@@ -186,60 +191,110 @@ export function previewSql(id: string, sql: string): Promise<PreviewReport> {
   return invoke("preview_sql", { id, sql });
 }
 
-export function runSql(
+export function proposeSql(
   id: string,
   sql: string,
-  approved: boolean,
-  queryId?: string,
   origin?: string,
-): Promise<ExecOutcome> {
-  return invoke("run_sql", {
+): Promise<SqlOperationProposal> {
+  return invoke("propose_sql", {
     id,
     sql,
-    approved,
-    queryId: queryId ?? null,
     origin: origin ?? null,
   });
+}
+
+export function approveOperation(
+  operationId: string,
+  payloadHash: string,
+  reason?: string,
+): Promise<OperationDecision> {
+  return invoke("approve_operation", {
+    operationId,
+    payloadHash,
+    reason: reason ?? null,
+  });
+}
+
+export function rejectOperation(
+  operationId: string,
+  payloadHash: string,
+  reason?: string,
+): Promise<OperationDecision> {
+  return invoke("reject_operation", {
+    operationId,
+    payloadHash,
+    reason: reason ?? null,
+  });
+}
+
+export function runSql(operationId: string): Promise<ExecOutcome> {
+  return invoke("run_sql", { operationId });
+}
+
+// Plan and consume a SQL read without exposing an approval shortcut. Callers that
+// may generate mutations must use the explicit proposal/approval/run sequence.
+export async function runSqlRead(
+  id: string,
+  sql: string,
+  origin?: string,
+): Promise<ExecOutcome> {
+  const proposal = await proposeSql(id, sql, origin);
+  if (proposal.approvalRequired || proposal.classification.kind !== "read") {
+    throw new Error("read execution helper rejected a target-mutating proposal");
+  }
+  return runSql(proposal.operationId);
 }
 
 // Run one typed, read-only document query on a MongoDB connection. Aggregate
 // write stages are rejected backend-side; there is no document write path.
 export function runDocumentQuery(
+  operationId: string,
+): Promise<DocumentPage> {
+  return invoke("run_document_query", { operationId });
+}
+
+export function proposeDocumentQuery(
   id: string,
   query: DocumentQuery,
-  approved: boolean,
-  queryId?: string,
   origin?: string,
-): Promise<DocumentPage> {
-  return invoke("run_document_query", {
+): Promise<DocumentOperationProposal> {
+  return invoke("propose_document_query", {
     id,
     query,
-    approved,
-    queryId: queryId ?? null,
     origin: origin ?? null,
   });
 }
 
-// Cancel an in-flight run_sql/run_script by its query id. Returns true if a running
-// query was found and signalled.
+export async function runDocumentRead(
+  id: string,
+  query: DocumentQuery,
+  origin?: string,
+): Promise<DocumentPage> {
+  const proposal = await proposeDocumentQuery(id, query, origin);
+  return runDocumentQuery(proposal.operationId);
+}
+
+// Cancel an in-flight operation by its operation id.
 export function cancelQuery(queryId: string): Promise<boolean> {
   return invoke("cancel_query", { queryId });
 }
 
-// Run a multi-statement script. All-reads run sequentially on the read-only pool;
-// any write/DDL requires approved + allow_writes and runs in ONE transaction.
+// Consume a persisted script operation. Mutating proposals must already carry their
+// exact approval and execute in one backend transaction.
 export function runScript(
+  operationId: string,
+): Promise<ScriptOutcome> {
+  return invoke("run_script", { operationId });
+}
+
+export function proposeScript(
   id: string,
   sql: string,
-  approved: boolean,
-  queryId?: string,
   origin?: string,
-): Promise<ScriptOutcome> {
-  return invoke("run_script", {
+): Promise<ScriptOperationProposal> {
+  return invoke("propose_script", {
     id,
     sql,
-    approved,
-    queryId: queryId ?? null,
     origin: origin ?? null,
   });
 }
@@ -256,12 +311,17 @@ export function getMonitoringStatus(id: string): Promise<MonitoringStatus> {
   return invoke("get_monitoring_status", { id });
 }
 
-export function setPostgresMonitoring(
+export function proposePostgresMonitoring(
   id: string,
   enabled: boolean,
-  approved: boolean,
+): Promise<MonitoringOperationProposal> {
+  return invoke("propose_postgres_monitoring", { id, enabled });
+}
+
+export function setPostgresMonitoring(
+  operationId: string,
 ): Promise<MonitoringStatus> {
-  return invoke("set_postgres_monitoring", { id, enabled, approved });
+  return invoke("set_postgres_monitoring", { operationId });
 }
 
 // Backend hash-chain verification (rowid order + real SHA-256 recompute). Authoritative —
