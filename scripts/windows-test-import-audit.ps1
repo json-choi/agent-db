@@ -48,8 +48,9 @@ if ($null -eq $dumpbin -or -not (Test-Path -LiteralPath $dumpbin -PathType Leaf)
 
 Write-Output "::group::Windows test executable imports"
 Write-Output "Binary: $($binary.FullName)"
-& $dumpbin /nologo /imports $binary.FullName
+$dumpbinOutput = @(& $dumpbin /nologo /imports $binary.FullName)
 $dumpbinExit = $LASTEXITCODE
+$dumpbinOutput | Write-Output
 Write-Output "::endgroup::"
 
 if ($dumpbinExit -ne 0) {
@@ -82,6 +83,68 @@ foreach ($expected in $expectedSystemExports) {
     } finally {
         [System.Runtime.InteropServices.NativeLibrary]::Free($handle)
     }
+}
+Write-Output "::endgroup::"
+
+$importsByDll = @{}
+$currentDll = $null
+foreach ($line in $dumpbinOutput) {
+    if ($line -match '^\s+Summary\s*$') {
+        $currentDll = $null
+        continue
+    }
+
+    if ($line -match '^\s{4}(\S+\.dll)\s*$') {
+        $currentDll = $Matches[1]
+        if (-not $importsByDll.ContainsKey($currentDll)) {
+            $importsByDll[$currentDll] = [System.Collections.Generic.HashSet[string]]::new(
+                [System.StringComparer]::Ordinal
+            )
+        }
+        continue
+    }
+
+    if (
+        $null -ne $currentDll -and
+        $line -match '^\s+[0-9A-Fa-f]+\s+(\S+)\s*$'
+    ) {
+        [void]$importsByDll[$currentDll].Add($Matches[1])
+    }
+}
+
+Write-Output "::group::All named PE import availability"
+$missingImports = [System.Collections.Generic.List[string]]::new()
+foreach ($dll in ($importsByDll.Keys | Sort-Object)) {
+    try {
+        $handle = [System.Runtime.InteropServices.NativeLibrary]::Load($dll)
+    } catch {
+        $missingImports.Add("$dll (DLL load failed: $($_.Exception.Message))")
+        continue
+    }
+
+    try {
+        foreach ($symbol in ($importsByDll[$dll] | Sort-Object)) {
+            $address = [IntPtr]::Zero
+            if (
+                -not [System.Runtime.InteropServices.NativeLibrary]::TryGetExport(
+                    $handle,
+                    $symbol,
+                    [ref]$address
+                )
+            ) {
+                $missingImports.Add("$dll!$symbol")
+            }
+        }
+    } finally {
+        [System.Runtime.InteropServices.NativeLibrary]::Free($handle)
+    }
+}
+
+if ($missingImports.Count -eq 0) {
+    Write-Output "Every named import resolved through the Windows loader."
+} else {
+    Write-Output "Unresolved named imports:"
+    $missingImports | ForEach-Object { Write-Output "  $_" }
 }
 Write-Output "::endgroup::"
 
