@@ -8,49 +8,32 @@
 //! re-checks its gates as defense in depth, while the database's read-only session
 //! remains the authoritative stop.
 
-use chrono::Utc;
 use tauri::State;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-use crate::audit::{self, RecordArgs};
-use crate::connection::{self, ConnectionAccess, ConnectionLease};
+use crate::connection::{self, ConnectionAccess};
 use crate::error::{AppError, AppResult};
 use crate::model::{
-    ConnectionProfile, Dashboard, DashboardDraft, DocumentQuery, Engine, HistoryEntry,
-    MonitoringStatus, PlatformFeatureFlags, QueryKind, SafetySettings, Workspace,
-    WorkspaceAuthState, WorkspaceAuthUser, WorkspaceConnectionAccess, WorkspaceCredentialMode,
-    WorkspaceDeviceAuthorization, WorkspaceFeatureState, WorkspaceKind, WorkspaceLoginPoll,
+    ConnectionProfile, Dashboard, DashboardDraft, DocumentQuery, HistoryEntry,
+    PlatformFeatureFlags, SafetySettings, Workspace, WorkspaceAuthState, WorkspaceAuthUser,
+    WorkspaceConnectionAccess, WorkspaceCredentialMode, WorkspaceDeviceAuthorization,
+    WorkspaceFeatureState, WorkspaceKind, WorkspaceLoginPoll,
 };
-use crate::monitoring;
 use crate::services::{
-    CatalogReadPolicy, DashboardRunError, DashboardRunReceipt, DashboardRunRequest,
-    DesktopDocumentReadError, DesktopDocumentReadRequest, DesktopScriptRunError,
-    DesktopScriptRunReceipt, DesktopScriptRunRequest, DesktopSqlClassificationReceipt,
-    DesktopSqlClassificationRequest, DesktopSqlInspectionError, DesktopSqlPreviewReceipt,
-    DesktopSqlPreviewRequest, DesktopSqlRunError, DesktopSqlRunReceipt, DesktopSqlRunRequest,
-    DocumentReadReceipt,
+    AuditSnapshotReceipt, AuditVerdict, CatalogReadPolicy, DashboardRunError, DashboardRunReceipt,
+    DashboardRunRequest, DesktopDocumentReadError, DesktopDocumentReadRequest,
+    DesktopScriptRunError, DesktopScriptRunReceipt, DesktopScriptRunRequest,
+    DesktopSqlClassificationReceipt, DesktopSqlClassificationRequest, DesktopSqlInspectionError,
+    DesktopSqlPreviewReceipt, DesktopSqlPreviewRequest, DesktopSqlRunError, DesktopSqlRunReceipt,
+    DesktopSqlRunRequest, DocumentReadReceipt, MonitoringChangeRequest, MonitoringServiceError,
+    MonitoringStatusReceipt,
 };
 use crate::state::AppState;
-use crate::store::PinnedConnection;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 const MAX_CONNECTION_CREDENTIAL_BYTES: usize = 1 << 16;
-
-/// Acquire a manager-owned read lease pinned to the active account/workspace scope.
-/// The manager performs online RBAC checks and single-flight cache opening.
-async fn get_live(state: &AppState, id: Uuid) -> AppResult<ConnectionLease> {
-    get_live_with_access(state, id, ConnectionAccess::Read).await
-}
-
-async fn get_live_with_access(
-    state: &AppState,
-    id: Uuid,
-    access: ConnectionAccess,
-) -> AppResult<ConnectionLease> {
-    state.connections.acquire(id, access).await
-}
 
 fn delete_secret_best_effort(id: Uuid, action: &'static str) {
     if let Err(error) = connection::delete_secret(&id) {
@@ -1088,7 +1071,7 @@ pub async fn run_script(
 
 #[tauri::command]
 pub async fn get_safety(state: State<'_, AppState>, id: Uuid) -> AppResult<SafetySettings> {
-    state.store.get_safety(id).await
+    state.services.safety.get(id).await
 }
 
 #[tauri::command]
@@ -1097,30 +1080,7 @@ pub async fn set_safety(
     id: Uuid,
     settings: SafetySettings,
 ) -> AppResult<()> {
-    // Clamp the row caps before persisting (defense-in-depth alongside the frontend
-    // clamp). max_rows is u64 so a negative UI value already wraps astronomically
-    // large; exec_preview_row_limit is i64 and a negative wraps to an infinite read
-    // cap once cast to usize downstream. Bound both to sane ranges. Mirrors the
-    // .min(...) the MCP read path applies.
-    let mut settings = settings;
-    let profile = state.store.get_connection(id).await?;
-    if !profile.workspace_access.can_write() {
-        settings.allow_writes = false;
-    }
-    let _mutation = state
-        .connections
-        .begin_connection_mutation(
-            id,
-            if settings.allow_writes {
-                ConnectionAccess::Write
-            } else {
-                ConnectionAccess::Read
-            },
-        )
-        .await?;
-    settings.max_rows = settings.max_rows.clamp(1, 100_000);
-    settings.exec_preview_row_limit = settings.exec_preview_row_limit.clamp(0, 1_000_000);
-    state.store.set_safety(id, &settings).await
+    state.services.safety.update(id, settings).await
 }
 
 // ── lightweight monitoring access ───────────────────────────────────────────
@@ -1129,22 +1089,13 @@ pub async fn set_safety(
 pub async fn get_monitoring_status(
     state: State<'_, AppState>,
     id: Uuid,
-) -> AppResult<MonitoringStatus> {
-    let profile = state.store.get_connection(id).await?;
-    if profile.engine.is_document() {
-        // No PostgreSQL-style predefined roles — the basic collector, no probe needed.
-        return Ok(MonitoringStatus {
-            engine: profile.engine,
-            coverage: "basic".into(),
-            role_available: false,
-            role_granted: false,
-            current_user: None,
-            can_manage: false,
-            note: "MongoDB connections use the basic, role-free collector.".into(),
-        });
-    }
-    let live = get_live(&state, id).await?;
-    monitoring::status(live.live().sql()?, profile.engine).await
+) -> AppResult<MonitoringStatusReceipt> {
+    state
+        .services
+        .monitoring
+        .status(id)
+        .await
+        .map_err(MonitoringServiceError::into_error)
 }
 
 /// Grant/revoke one fixed PostgreSQL predefined role for CURRENT_USER. This narrow
@@ -1156,156 +1107,17 @@ pub async fn set_postgres_monitoring(
     id: Uuid,
     enabled: bool,
     approved: bool,
-) -> AppResult<MonitoringStatus> {
-    let operation_scope = state.connections.begin_operation_scope().await;
-    let operation_pin = operation_scope.pin_connection(id).await?;
-    let profile = operation_pin.profile.clone();
-    if !profile.workspace_access.can_write() {
-        return Err(AppError::Blocked {
-            reason: "your workspace role cannot change database monitoring grants".into(),
-        });
-    }
-    if !matches!(profile.engine, Engine::Postgres) {
-        return Err(AppError::Config(
-            "pg_monitor is only available for PostgreSQL connections".into(),
-        ));
-    }
-    let sql = if enabled {
-        "GRANT pg_monitor TO CURRENT_USER"
-    } else {
-        "REVOKE pg_monitor FROM CURRENT_USER"
-    };
-    if !approved {
-        record_monitoring_change(
-            &state,
-            &operation_pin,
-            sql,
-            "blocked",
-            Some("pg_monitor role changes require explicit confirmation".into()),
-            None,
-        )
-        .await;
-        return Err(AppError::Blocked {
-            reason: "pg_monitor role changes require explicit confirmation".into(),
-        });
-    }
-
-    // A target-database privilege change must never happen without a durable local
-    // attempt record. The result is recorded below after the server responds.
-    audit::record(
-        &state.store,
-        RecordArgs {
-            connection_id: profile.id,
-            engine: profile.engine,
-            agent_prompt: None,
-            sql: sql.into(),
-            kind: QueryKind::Privilege,
-            action: if enabled {
-                "monitoring:grant:attempt"
-            } else {
-                "monitoring:revoke:attempt"
-            }
-            .into(),
-            approved_by: Some("local-user".into()),
-            affected_estimate: None,
-            error: None,
-        },
-    )
-    .await
-    .map_err(|e| {
-        AppError::Config(format!(
-            "audit pre-record failed — refusing to change pg_monitor: {e}"
-        ))
-    })?;
-
-    let live = match operation_scope
-        .connect(operation_pin.clone(), ConnectionAccess::Write)
+) -> AppResult<MonitoringStatusReceipt> {
+    state
+        .services
+        .monitoring
+        .set_postgres_role(MonitoringChangeRequest {
+            connection_id: id,
+            enabled,
+            approved,
+        })
         .await
-    {
-        Ok(live) => live,
-        Err(e) => {
-            record_monitoring_change(
-                &state,
-                &operation_pin,
-                sql,
-                "error",
-                Some(e.to_string()),
-                Some("local-user"),
-            )
-            .await;
-            return Err(e);
-        }
-    };
-    if let Err(e) = monitoring::set_postgres_role(live.live().sql()?, enabled).await {
-        record_monitoring_change(
-            &state,
-            &operation_pin,
-            sql,
-            "error",
-            Some(e.to_string()),
-            Some("local-user"),
-        )
-        .await;
-        return Err(e);
-    }
-    record_monitoring_change(&state, &operation_pin, sql, "ok", None, Some("local-user")).await;
-    monitoring::status(live.live().sql()?, profile.engine).await
-}
-
-async fn record_monitoring_change(
-    state: &AppState,
-    pin: &PinnedConnection,
-    sql: &str,
-    status: &str,
-    error: Option<String>,
-    approved_by: Option<&str>,
-) {
-    let action = if status == "blocked" {
-        "monitoring:blocked"
-    } else if sql.starts_with("GRANT") {
-        "monitoring:grant"
-    } else {
-        "monitoring:revoke"
-    };
-    if let Err(e) = audit::record(
-        &state.store,
-        RecordArgs {
-            connection_id: pin.connection_id,
-            engine: pin.profile.engine,
-            agent_prompt: None,
-            sql: sql.into(),
-            kind: QueryKind::Privilege,
-            action: action.into(),
-            approved_by: approved_by.map(str::to_string),
-            affected_estimate: None,
-            error: error.clone(),
-        },
-    )
-    .await
-    {
-        tracing::error!("monitoring audit record failed: {e}");
-    }
-    if let Err(e) = state
-        .store
-        .insert_history_if_current(
-            pin,
-            &HistoryEntry {
-                id: Uuid::new_v4(),
-                connection_id: pin.connection_id,
-                sql: sql.into(),
-                kind: QueryKind::Privilege,
-                status: status.into(),
-                row_count: None,
-                duration_ms: None,
-                error,
-                executed_at: Utc::now(),
-                origin: "manual".into(),
-            },
-        )
-        .await
-    {
-        tracing::error!("monitoring history insert failed: {e}");
-    }
+        .map_err(MonitoringServiceError::into_error)
 }
 
 // ── logs ─────────────────────────────────────────────────────────────────────
@@ -1316,10 +1128,8 @@ async fn record_monitoring_change(
 pub async fn audit_verify(
     state: State<'_, AppState>,
     connection_id: Uuid,
-) -> AppResult<serde_json::Value> {
-    state.store.get_connection(connection_id).await?;
-    let (ok, first_bad_index) = audit::verify_chain(&state.store, connection_id).await?;
-    Ok(serde_json::json!({ "ok": ok, "firstBadIndex": first_bad_index }))
+) -> AppResult<AuditVerdict> {
+    state.services.activity.verify_audit(connection_id).await
 }
 
 /// Fetch the displayed audit rows and verify that exact ordered snapshot in one read.
@@ -1327,18 +1137,13 @@ pub async fn audit_verify(
 pub async fn audit_snapshot(
     state: State<'_, AppState>,
     connection_id: Uuid,
-) -> AppResult<serde_json::Value> {
-    state.store.get_connection(connection_id).await?;
-    let (entries, ok, first_bad_index) = audit::snapshot(&state.store, connection_id).await?;
-    Ok(serde_json::json!({
-        "entries": entries,
-        "verdict": { "ok": ok, "firstBadIndex": first_bad_index }
-    }))
+) -> AppResult<AuditSnapshotReceipt> {
+    state.services.activity.audit_snapshot(connection_id).await
 }
 
 #[tauri::command]
 pub async fn list_history(state: State<'_, AppState>, id: Uuid) -> AppResult<Vec<HistoryEntry>> {
-    state.store.list_history(id).await
+    state.services.activity.history(id).await
 }
 
 // ── MCP server status ─────────────────────────────────────────────────────────
